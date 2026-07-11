@@ -9,6 +9,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import dev.glade.client.script.ScriptEngine;
+import dev.glade.client.blockeditor.screen.BlockEditorScreen;
 import net.minecraft.text.Text;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -85,6 +86,13 @@ public final class GladeCommands {
                         .then(coordinates((context, pos) -> ActionCommand.place(context, pos))))
                 .then(ClientCommandManager.literal("ui")
                         .executes(UiCommand::execute))
+                .then(ClientCommandManager.literal("editor")
+                        .executes(context -> {
+                            var client = context.getSource().getClient();
+                            // Chat closes after command dispatch, so defer opening by one client task.
+                            client.send(() -> client.setScreen(new BlockEditorScreen()));
+                            return 1;
+                        }))
                 .then(ClientCommandManager.literal("script")
                         .then(ClientCommandManager.literal("run")
                                 .then(ClientCommandManager.argument("name", StringArgumentType.word())
