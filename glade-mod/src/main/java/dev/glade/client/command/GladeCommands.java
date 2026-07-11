@@ -5,6 +5,7 @@ import dev.glade.client.pathing.GoalBlock;
 import dev.glade.client.pathing.GoalNear;
 import dev.glade.client.pathing.GoalXZ;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.DoubleArgumentType;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.minecraft.command.CommandRegistryAccess;
@@ -61,7 +62,33 @@ public final class GladeCommands {
                                                         new GoalBlock(
                                                                 value(context, "x"),
                                                                 value(context, "y"),
-                                                                value(context, "z")))))))));
+                                                                value(context, "z"))))))))
+                .then(ClientCommandManager.literal("mine")
+                        .then(coordinates((context, pos) -> ActionCommand.mine(context, pos))))
+                .then(ClientCommandManager.literal("place")
+                        .then(coordinates((context, pos) -> ActionCommand.place(context, pos))))
+                .then(ClientCommandManager.literal("kill")
+                        .then(ClientCommandManager.literal("nearest")
+                                .executes(context -> ActionCommand.killNearest(context, 6.0))
+                                .then(ClientCommandManager.argument(
+                                                "radius", DoubleArgumentType.doubleArg(1.0, 64.0))
+                                        .executes(context -> ActionCommand.killNearest(context,
+                                                DoubleArgumentType.getDouble(context, "radius")))))));
+    }
+
+    private static com.mojang.brigadier.builder.RequiredArgumentBuilder<
+            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource, Integer> coordinates(
+                    CoordinateExecutor executor) {
+        return integer("x").then(integer("y").then(integer("z").executes(context ->
+                executor.execute(context, new net.minecraft.util.math.BlockPos(
+                        value(context, "x"), value(context, "y"), value(context, "z"))))));
+    }
+
+    @FunctionalInterface
+    private interface CoordinateExecutor {
+        int execute(com.mojang.brigadier.context.CommandContext<
+                            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context,
+                    net.minecraft.util.math.BlockPos pos);
     }
 
     private static com.mojang.brigadier.builder.RequiredArgumentBuilder<

@@ -1,0 +1,130 @@
+package dev.glade.client.action;
+
+import dev.glade.client.GladeClient;
+import dev.glade.client.humanize.HumanizationProfile;
+import dev.glade.client.humanize.SeededRng;
+import dev.glade.client.scan.ScanTask;
+import dev.glade.client.task.SimpleTask;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import net.minecraft.block.BlockState;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.item.ItemStack;
+import net.minecraft.util.Hand;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import org.jetbrains.annotations.Nullable;
+
+/** Humanized, verified block-breaking state machine. */
+public final class BreakBlockAction extends SimpleTask {
+    private enum State { PREPARE, ACQUIRE, EXECUTE, OBSERVE, BACKOFF, RELEASE }
+    private static final int TIMEOUT_TICKS = 20 * 30;
+    private static final Set<Object> MUTEX = Set.of(ScanTask.INTENSIVE_MUTEX);
+
+    private final BlockPos target;
+    private final HumanizationProfile profile;
+    private final CompletableFuture<ActionResult> result = new CompletableFuture<>();
+    private final SeededRng rng = new SeededRng(System.nanoTime());
+    private State state = State.PREPARE;
+    private AimController aim;
+    private BlockState original;
+    private ItemStack selectedTool;
+    private Direction side = Direction.UP;
+    private int ticks;
+    private long waitUntil;
+    private int attempts;
+
+    public BreakBlockAction(BlockPos target) { this(target, null); }
+    public BreakBlockAction(BlockPos target, @Nullable HumanizationProfile profile) {
+        this.target = target.toImmutable();
+        this.profile = profile == null ? GladeClient.humanizer().defaultProfile() : profile;
+    }
+    public CompletableFuture<ActionResult> future() { return result; }
+    @Override public boolean condition() { return state != State.RELEASE; }
+    @Override public Set<Object> getMutexKeys() { return MUTEX; }
+
+    @Override protected void onTick() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (!client.isOnThread()) { finish(false, "Action left the client thread"); return; }
+        if (client.player == null || client.world == null || client.interactionManager == null) {
+            finish(false, "No active world/player"); return;
+        }
+        if (++ticks > TIMEOUT_TICKS) { finish(false, "Timed out breaking " + target.toShortString()); return; }
+        switch (state) {
+            case PREPARE -> prepare(client);
+            case ACQUIRE -> { aim.aimAt(target); aim.tick(); if (aim.isAimed()) state = State.EXECUTE; }
+            case EXECUTE -> execute(client);
+            case OBSERVE -> observe(client);
+            case BACKOFF -> { if (ticks >= waitUntil) state = State.ACQUIRE; }
+            case RELEASE -> { }
+        }
+    }
+
+    private void prepare(MinecraftClient client) {
+        original = client.world.getBlockState(target);
+        if (original.isAir()) { finish(false, "Target block is already air"); return; }
+        if (!withinReach(client)) { finish(false, "Block is out of reach"); return; }
+        int slot = bestToolSlot(client, original);
+        WeaponSelector.select(client, slot);
+        selectedTool = client.player.getMainHandStack();
+        aim = new AimController(client, GladeClient.humanizer().rotation(), profile, rng.nextInt(Integer.MAX_VALUE));
+        state = State.ACQUIRE;
+    }
+
+    private void execute(MinecraftClient client) {
+        if (client.player.getMainHandStack() != selectedTool) {
+            finish(false, "Held tool changed during break"); return;
+        }
+        boolean accepted = client.interactionManager.attackBlock(target, side);
+        client.player.swingHand(Hand.MAIN_HAND);
+        if (!accepted) { retry("Server rejected break start"); return; }
+        state = State.OBSERVE;
+    }
+
+    private void observe(MinecraftClient client) {
+        BlockState current = client.world.getBlockState(target);
+        if (current.isAir()) { finish(true, "Broke " + target.toShortString()); return; }
+        if (current != original && !current.equals(original)) {
+            finish(false, "Target block changed unexpectedly"); return;
+        }
+        if (client.player.getMainHandStack() != selectedTool) {
+            finish(false, "Held tool changed during break"); return;
+        }
+        if (!withinReach(client)) { finish(false, "Block moved out of reach"); return; }
+        if (GladeClient.tickBudget().hasBudgetRemaining()) {
+            client.interactionManager.updateBlockBreakingProgress(target, side);
+            client.player.swingHand(Hand.MAIN_HAND);
+        }
+    }
+
+    private void retry(String message) {
+        if (++attempts >= 3) { finish(false, message); return; }
+        waitUntil = ticks + GladeClient.humanizer().timing().sampleDelayTicks(profile, 0.6, rng);
+        state = State.BACKOFF;
+    }
+
+    private boolean withinReach(MinecraftClient client) {
+        return client.player.getEyePos().squaredDistanceTo(net.minecraft.util.math.Vec3d.ofCenter(target))
+                <= Math.pow(client.player.getBlockInteractionRange(), 2);
+    }
+
+    private static int bestToolSlot(MinecraftClient client, BlockState state) {
+        int best = client.player.getInventory().getSelectedSlot();
+        float speed = client.player.getInventory().getStack(best).getMiningSpeedMultiplier(state);
+        for (int slot = 0; slot < 9; slot++) {
+            float candidate = client.player.getInventory().getStack(slot).getMiningSpeedMultiplier(state);
+            if (candidate > speed) { speed = candidate; best = slot; }
+        }
+        return best;
+    }
+
+    private void finish(boolean success, String message) {
+        if (state == State.RELEASE) return;
+        state = State.RELEASE;
+        result.complete(new ActionResult(success, message));
+        _break();
+    }
+    @Override public void onCompleted() {
+        if (!result.isDone()) result.complete(new ActionResult(false, "Break action cancelled"));
+    }
+}
