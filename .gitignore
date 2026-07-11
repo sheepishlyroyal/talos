@@ -1,0 +1,12 @@
+.gradle/
+build/
+run/
+*.class
+.idea/
+node_modules/
+out/
+*.log
+.gradle-user-home/
+.gradle/
+build/
+**/build/
