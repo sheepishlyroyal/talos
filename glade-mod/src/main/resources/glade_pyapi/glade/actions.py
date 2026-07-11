@@ -24,9 +24,23 @@ def find_item(item, radius=64.0):
     """Return the nearest dropped-item snapshot, or None."""
     return _glade_host.findItem(str(item), float(radius))
 
-def place_block(x, y, z):
-    """Place a hotbar block at a position and wait for verification."""
+def place_block(x=None, y=None, z=None):
+    """Place a hotbar block and wait for verification.
+
+    With no coordinates, places against the block you are currently looking at
+    (the crosshair target), mimicking a normal right-click. With x/y/z, places at
+    that exact position.
+    """
+    if x is None and y is None and z is None:
+        return _glade_host.placeLook()
+    if x is None or y is None or z is None:
+        raise ValueError("place_block requires all of x, y, z, or none of them")
     return _glade_host.placeBlock(int(x), int(y), int(z))
+
+
+def place_look():
+    """Place a hotbar block at the block you are currently looking at (crosshair target)."""
+    return _glade_host.placeLook()
 
 def break_block(x, y, z):
     """Break a block and wait for verification."""
