@@ -79,6 +79,8 @@ public final class GladeCommands {
                         .then(coordinates((context, pos) -> ActionCommand.mine(context, pos))))
                 .then(ClientCommandManager.literal("place")
                         .then(coordinates((context, pos) -> ActionCommand.place(context, pos))))
+                .then(ClientCommandManager.literal("ui")
+                        .executes(UiCommand::execute))
                 .then(ClientCommandManager.literal("kill")
                         .then(ClientCommandManager.literal("nearest")
                                 .executes(context -> ActionCommand.killNearest(context, 6.0))

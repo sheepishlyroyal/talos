@@ -1,0 +1,6 @@
+accessWidener v2 named
+
+# P4a UI spike: GuiRenderState.addSimpleElement() is public, but the DrawContext
+# field holding the frame's state is package-private and vanilla exposes no other
+# entry point for custom SimpleGuiElementRenderState implementations.
+accessible field net/minecraft/client/gui/DrawContext state Lnet/minecraft/client/gui/render/state/GuiRenderState;

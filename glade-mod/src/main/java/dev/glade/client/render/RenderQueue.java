@@ -1,5 +1,6 @@
 package dev.glade.client.render;
 
+import dev.glade.client.ui.pipeline.GladeRenderPipelines;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;

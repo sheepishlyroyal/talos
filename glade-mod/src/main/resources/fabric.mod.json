@@ -6,6 +6,7 @@
   "environment": "client",
   "entrypoints": { "client": ["dev.glade.client.GladeClientMod"] },
   "mixins": ["glade.mixins.json"],
+  "accessWidener": "glade.accesswidener",
   "depends": {
     "fabricloader": ">=0.19.3",
     "minecraft": "~1.21.11",

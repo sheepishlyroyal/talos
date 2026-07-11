@@ -4,6 +4,10 @@ plugins {
 
 java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
 
+loom {
+    accessWidenerPath = file("src/main/resources/glade.accesswidener")
+}
+
 dependencies {
     minecraft("com.mojang:minecraft:${property("minecraft_version")}")
     mappings("net.fabricmc:yarn:${property("yarn_mappings")}:v2")
