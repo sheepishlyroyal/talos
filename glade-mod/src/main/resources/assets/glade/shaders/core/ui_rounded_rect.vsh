@@ -19,12 +19,13 @@ in vec3 Position;
 in vec4 Color;
 in vec2 UV0;  // offset of this corner from the rect center, GUI px
 in ivec2 UV1; // full rect extent (w, h), GUI px
-in ivec2 UV2; // (corner radius, reserved), GUI px
+in ivec2 UV2; // (corner radius, border width — 0 means filled), GUI px
 
 out vec4 vertexColor;
 out vec2 localPos;
 out vec2 halfSize;
 out float cornerRadius;
+out float borderWidth;
 
 void main() {
     gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);
@@ -33,4 +34,5 @@ void main() {
     localPos = UV0;
     halfSize = vec2(UV1) * 0.5;
     cornerRadius = float(UV2.x);
+    borderWidth = float(UV2.y);
 }
