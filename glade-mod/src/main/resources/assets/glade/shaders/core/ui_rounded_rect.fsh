@@ -11,6 +11,7 @@ in vec4 vertexColor;
 in vec2 localPos;     // fragment offset from rect center, GUI px (interpolated)
 in vec2 halfSize;     // rect half extents, GUI px (constant across the quad)
 in float cornerRadius;
+in float borderWidth; // 0 = filled shape; >0 = ring inset this many px from the edge
 
 out vec4 fragColor;
 
@@ -28,7 +29,16 @@ void main() {
     // fwidth(dist) = GUI units per fragment: one-fragment antialiased edge at
     // any GUI scale or resolution.
     float aa = max(fwidth(dist), 1.0e-4);
-    float coverage = clamp(0.5 - dist / aa, 0.0, 1.0);
+    float outerCoverage = clamp(0.5 - dist / aa, 0.0, 1.0);
+
+    float coverage = outerCoverage;
+    if (borderWidth > 0.0) {
+        // Second SDF eval, inset by borderWidth: subtracting its coverage from the
+        // outer shape's leaves only the ring. Both edges get the same one-fragment AA.
+        float innerDist = dist + borderWidth;
+        float innerCoverage = clamp(0.5 - innerDist / aa, 0.0, 1.0);
+        coverage = outerCoverage - innerCoverage;
+    }
 
     vec4 color = vertexColor;
     color.a *= coverage;
