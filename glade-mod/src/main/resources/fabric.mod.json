@@ -4,7 +4,10 @@
   "version": "${version}",
   "name": "Glade",
   "environment": "client",
-  "entrypoints": { "client": ["dev.glade.client.GladeClientMod"] },
+  "entrypoints": {
+    "client": ["dev.glade.client.GladeClientMod"],
+    "glade:pathing_engine": ["dev.glade.client.pathing.glade.GladePathingEngineProvider"]
+  },
   "mixins": ["glade.mixins.json"],
   "accessWidener": "glade.accesswidener",
   "depends": {

@@ -1,10 +1,11 @@
 package dev.glade.client.pathing;
 
 import net.fabricmc.loader.api.FabricLoader;
+import java.util.Comparator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Selects the first available optional pathing adapter. */
+/** Selects the highest-priority available pathing adapter. */
 public final class PathingEngineRegistry {
     public static final String ENTRYPOINT_KEY = "glade:pathing_engine";
     private static final Logger LOGGER = LoggerFactory.getLogger(PathingEngineRegistry.class);
@@ -13,8 +14,13 @@ public final class PathingEngineRegistry {
     }
 
     public static PathingEngine discover() {
-        for (var container : FabricLoader.getInstance()
-                .getEntrypointContainers(ENTRYPOINT_KEY, PathingEngineProvider.class)) {
+        var containers = FabricLoader.getInstance()
+                .getEntrypointContainers(ENTRYPOINT_KEY, PathingEngineProvider.class).stream()
+                .sorted(Comparator.comparingInt(
+                        (net.fabricmc.loader.api.entrypoint.EntrypointContainer<PathingEngineProvider> entry) ->
+                                effectivePriority(entry)).reversed())
+                .toList();
+        for (var container : containers) {
             try {
                 PathingEngine engine = container.getEntrypoint().create();
                 if (engine.isAvailable()) {
@@ -27,5 +33,14 @@ public final class PathingEngineRegistry {
             }
         }
         return new NoOpPathingEngine();
+    }
+
+    private static int effectivePriority(
+            net.fabricmc.loader.api.entrypoint.EntrypointContainer<PathingEngineProvider> entry) {
+        // The separately distributed Baritone adapter is the preferred optional upgrade.
+        if ("glade-pathing-baritone".equals(entry.getProvider().getMetadata().getId())) {
+            return Math.max(200, entry.getEntrypoint().priority());
+        }
+        return entry.getEntrypoint().priority();
     }
 }
