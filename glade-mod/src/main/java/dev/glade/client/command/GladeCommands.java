@@ -6,6 +6,9 @@ import dev.glade.client.pathing.GoalNear;
 import dev.glade.client.pathing.GoalXZ;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import dev.glade.client.script.ScriptEngine;
+import net.minecraft.text.Text;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.minecraft.command.CommandRegistryAccess;
@@ -81,6 +84,26 @@ public final class GladeCommands {
                         .then(coordinates((context, pos) -> ActionCommand.place(context, pos))))
                 .then(ClientCommandManager.literal("ui")
                         .executes(UiCommand::execute))
+                .then(ClientCommandManager.literal("script")
+                        .then(ClientCommandManager.literal("run")
+                                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                                        .executes(context -> {
+                                            var source = context.getSource();
+                                            String name = StringArgumentType.getString(context, "name");
+                                            ScriptEngine.instance().run(name).whenComplete((ignored, error) ->
+                                                    source.getClient().execute(() -> {
+                                                        if (error == null) source.sendFeedback(Text.literal("Script finished: " + name));
+                                                        else source.sendError(Text.literal("Script failed: " + error.getMessage()));
+                                                    }));
+                                            source.sendFeedback(Text.literal("Started script: " + name));
+                                            return 1;
+                                        })))
+                        .then(ClientCommandManager.literal("stop")
+                                .executes(context -> {
+                                    ScriptEngine.instance().stop();
+                                    context.getSource().sendFeedback(Text.literal("Stopped script engine"));
+                                    return 1;
+                                })))
                 .then(ClientCommandManager.literal("kill")
                         .then(ClientCommandManager.literal("nearest")
                                 .executes(context -> ActionCommand.killNearest(context, 6.0))
