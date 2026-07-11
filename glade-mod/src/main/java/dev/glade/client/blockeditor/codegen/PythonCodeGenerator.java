@@ -94,8 +94,16 @@ public final class PythonCodeGenerator {
             try { Double.parseDouble(value); return value; } catch (NumberFormatException ignored) { return "0"; }
         }
         if (type == ValueType.POSITION) return "None";
+        if (type == ValueType.IDENTIFIER) return sanitizeIdentifier(value);
         if (value.equals("True") || value.equals("False") || value.equals("None")) return value;
         try { Double.parseDouble(value); return value; } catch (NumberFormatException ignored) { return literal(value, ValueType.TEXT); }
+    }
+
+    /** Emits a safe, unquoted Python identifier for variable name fields (never a string literal). */
+    private static String sanitizeIdentifier(String value) {
+        String cleaned = value == null ? "" : value.replaceAll("[^A-Za-z0-9_]", "_");
+        if (cleaned.isEmpty() || Character.isDigit(cleaned.charAt(0))) cleaned = "_" + cleaned;
+        return cleaned.isEmpty() || cleaned.equals("_") ? "var" : cleaned;
     }
 
     private static String line(int indent, String text) { return "    ".repeat(indent) + text; }

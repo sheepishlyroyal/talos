@@ -24,18 +24,21 @@ def find_item(item, radius=64.0):
     """Return the nearest dropped-item snapshot, or None."""
     return _glade_host.findItem(str(item), float(radius))
 
-def place_block(x=None, y=None, z=None):
-    """Place a hotbar block and wait for verification.
+def place_block(x=None, y=None, z=None, block_id=None):
+    """Place a block.
 
     With no coordinates, places against the block you are currently looking at
-    (the crosshair target), mimicking a normal right-click. With x/y/z, places at
-    that exact position.
+    (the crosshair target), like a right-click. With x/y/z, places at that position;
+    if block_id (e.g. "minecraft:diamond_ore") is given, a matching hotbar item is
+    selected first.
     """
     if x is None and y is None and z is None:
         return _glade_host.placeLook()
     if x is None or y is None or z is None:
-        raise ValueError("place_block requires all of x, y, z, or none of them")
-    return _glade_host.placeBlock(int(x), int(y), int(z))
+        raise ValueError("place_block needs all of x, y, z (or none, to place where looking)")
+    if block_id is None:
+        return _glade_host.placeBlock(int(x), int(y), int(z))
+    return _glade_host.placeBlockAs(int(x), int(y), int(z), str(block_id))
 
 
 def place_look():

@@ -22,22 +22,29 @@ public final class BlockCanvas {
     public static final int PALETTE_WIDTH = 184;
     private static final int ROW_HEIGHT = 25;
     private static final float BLOCK_HEIGHT = 30;
-    private static final float BLOCK_WIDTH = 176;
-    private static final float REPORTER_WIDTH = 150;
-    private static final double SNAP_RADIUS = 25.0;
+    private static final float BLOCK_WIDTH = 200;
+    private static final float REPORTER_WIDTH = 160;
+    private static final double SNAP_RADIUS = 28.0;
+    private static final float FIELD_CHIP_HEIGHT = 18;
 
     private Workspace workspace;
     private int x, y, width, height;
     private double panX = 40, panY = 35, zoom = 1.0;
     private String dragging;
+    private boolean spawnDrag;
     private String editingLiteral;
+    private String editingSocket;
     private boolean replaceLiteral;
     private boolean panning;
     private double lastMouseX, lastMouseY;
+    private Candidate previewSnap;
 
     public BlockCanvas(Workspace workspace) { this.workspace = workspace; }
     public Workspace workspace() { return workspace; }
-    public void workspace(Workspace value) { workspace = value; dragging = null; }
+    public void workspace(Workspace value) {
+        workspace = value; dragging = null; spawnDrag = false;
+        editingLiteral = null; editingSocket = null; previewSnap = null;
+    }
     public void bounds(int x, int y, int width, int height) { this.x = x; this.y = y; this.width = width; this.height = height; }
 
     public void render(DrawContext context, int mouseX, int mouseY, float deltaTicks) {
@@ -52,6 +59,7 @@ public final class BlockCanvas {
         Set<String> drawn = new HashSet<>();
         for (String id : workspace.topLevel()) drawTree(context, workspace.get(id), drawn);
         for (BlockNode node : workspace.nodes()) drawTree(context, node, drawn);
+        if (previewSnap != null) drawSnapHighlight(context, previewSnap);
         context.getMatrices().popMatrix();
         context.disableScissor();
         drawPalette(context, mouseX, mouseY);
@@ -96,12 +104,16 @@ public final class BlockCanvas {
                 node.definition().shape() == Shape.REPORTER ? 14 : 7, 1, (dragging != null && dragging.equals(node.id()))
                         || node.id().equals(editingLiteral)
                         ? 0xFFFFFFFF : 0x55FFFFFF);
-        context.drawText(MinecraftClient.getInstance().textRenderer, displayLabel(node),
+        FieldChip chip = fieldChip(node);
+        String label = displayLabel(node);
+        if (chip != null) label = clipToWidth(label, (int) (chip.x() - node.x()) - 12);
+        context.drawText(MinecraftClient.getInstance().textRenderer, label,
                 (int) node.x() + 9, (int) node.y() + 10, 0xFFFFFFFF, false);
         if (node.definition().shape() == Shape.C_BLOCK) {
             context.drawText(MinecraftClient.getInstance().textRenderer, "do", (int) node.x() + 10,
                     (int) node.y() + 34, 0xCCFFFFFF, false);
         }
+        if (chip != null) drawFieldChip(context, node, chip);
         for (String child : node.valueInputs().values()) drawTree(context, workspace.get(child), drawn);
         for (List<String> roots : node.statementInputs().values()) for (String child : roots) drawTree(context, workspace.get(child), drawn);
         drawTree(context, workspace.get(node.next()), drawn);
@@ -110,7 +122,7 @@ public final class BlockCanvas {
     private String displayLabel(BlockNode node) {
         StringBuilder label = new StringBuilder(node.definition().label());
         for (Socket socket : node.definition().sockets()) {
-            if (socket.kind() == SocketKind.STATEMENT) continue;
+            if (socket.kind() == SocketKind.STATEMENT || socket.kind() == SocketKind.FIELD) continue;
             String child = node.valueInputs().get(socket.name());
             String value = child == null ? node.fields().getOrDefault(socket.name(), socket.defaultValue()) : "◆";
             label.append(' ').append(socket.name()).append('=').append(value);
@@ -128,20 +140,28 @@ public final class BlockCanvas {
             if (index >= 0 && index < BlockRegistry.all().size()) {
                 workspace.checkpoint();
                 BlockDef definition = BlockRegistry.all().get(index);
-                Point world = toWorld(x + PALETTE_WIDTH + 36, mouseY);
-                BlockNode node = new BlockNode(definition, world.x, world.y);
-                workspace.add(node, true); dragging = node.id();
+                // Spawn under the cursor immediately: clamp the sample point onto the canvas so the
+                // world-space math stays sane even while the pointer is still over the palette.
+                Point world = toWorld(Math.max(mouseX, x + PALETTE_WIDTH + 4), mouseY);
+                BlockNode node = new BlockNode(definition, world.x - 8, world.y - 10);
+                workspace.add(node, true);
+                dragging = node.id();
+                spawnDrag = true;
+                editingLiteral = null;
+                editingSocket = null;
                 return true;
             }
         }
         Point world = toWorld(mouseX, mouseY);
         BlockNode hit = hitNode(world.x, world.y);
         if (hit != null) {
-            if (doubled && (hit.definition().id().equals("number_literal") || hit.definition().id().equals("text_literal"))) {
-                editingLiteral = hit.id(); replaceLiteral = true; return true;
+            FieldChip chip = fieldChip(hit);
+            if (chip != null && chip.contains(world.x, world.y)) {
+                editingLiteral = hit.id(); editingSocket = chip.socket(); replaceLiteral = true; return true;
             }
-            editingLiteral = null;
-            workspace.checkpoint(); workspace.makeTopLevel(hit.id()); dragging = hit.id(); return true;
+            editingLiteral = null; editingSocket = null;
+            workspace.checkpoint(); workspace.makeTopLevel(hit.id()); dragging = hit.id(); spawnDrag = false;
+            return true;
         }
         panning = true;
         return true;
@@ -150,7 +170,15 @@ public final class BlockCanvas {
     public boolean mouseDragged(double mouseX, double mouseY, double deltaX, double deltaY) {
         if (dragging != null) {
             BlockNode node = workspace.get(dragging);
-            if (node != null) node.position(node.x() + deltaX / zoom, node.y() + deltaY / zoom);
+            if (node != null) {
+                if (spawnDrag) {
+                    Point world = toWorld(mouseX, mouseY);
+                    node.position(world.x - 8, world.y - 10);
+                } else {
+                    node.position(node.x() + deltaX / zoom, node.y() + deltaY / zoom);
+                }
+                previewSnap = bestCandidate(node);
+            }
             return true;
         }
         if (panning) { panX += deltaX; panY += deltaY; return true; }
@@ -158,7 +186,11 @@ public final class BlockCanvas {
     }
 
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (dragging != null) { snap(workspace.get(dragging)); dragging = null; return true; }
+        if (dragging != null) {
+            snap(workspace.get(dragging));
+            dragging = null; spawnDrag = false; previewSnap = null;
+            return true;
+        }
         if (panning) { panning = false; return true; }
         return false;
     }
@@ -172,39 +204,65 @@ public final class BlockCanvas {
         return true;
     }
 
-    /** Double-click a number/text literal, then type. Backspace is forwarded separately by the screen. */
+    /** Click a field chip (number/text/identifier), then type. Backspace is forwarded by the screen. */
     public boolean charTyped(String text) {
         BlockNode node = workspace.get(editingLiteral);
-        if (node == null || text == null || text.isEmpty()) return false;
-        String old = node.fields().getOrDefault("value", "");
+        if (node == null || editingSocket == null || text == null || text.isEmpty()) return false;
+        Socket socket = fieldSocket(node, editingSocket);
+        if (socket == null) return false;
+        String old = node.fields().getOrDefault(editingSocket, "");
         if (replaceLiteral) { workspace.checkpoint(); old = ""; replaceLiteral = false; }
         String next = old + text;
-        if (node.definition().id().equals("number_literal") && !next.matches("-?[0-9]*([.][0-9]*)?")) return true;
-        node.fields().put("value", next); return true;
+        if (socket.type() == ValueType.NUMBER && !next.matches("-?[0-9]*([.][0-9]*)?")) return true;
+        node.fields().put(editingSocket, next); return true;
     }
 
     public boolean backspace() {
         BlockNode node = workspace.get(editingLiteral);
-        if (node == null) return false;
-        String value = node.fields().getOrDefault("value", "");
-        if (!value.isEmpty()) node.fields().put("value", value.substring(0, value.length() - 1));
+        if (node == null || editingSocket == null) return false;
+        String value = node.fields().getOrDefault(editingSocket, "");
+        if (!value.isEmpty()) node.fields().put(editingSocket, value.substring(0, value.length() - 1));
         replaceLiteral = false; return true;
+    }
+
+    private static Socket fieldSocket(BlockNode node, String name) {
+        for (Socket socket : node.definition().sockets())
+            if (socket.kind() == SocketKind.FIELD && socket.name().equals(name)) return socket;
+        return null;
     }
 
     private void snap(BlockNode dragged) {
         if (dragged == null) return;
+        Candidate best = bestCandidate(dragged);
+        if (best == null) { workspace.makeTopLevel(dragged.id()); return; }
+        workspace.detach(dragged.id());
+        switch (best.kind) {
+            case NEXT -> best.target.next(dragged.id());
+            case BODY -> best.target.statementInputs().get(best.socket.name()).add(dragged.id());
+            case VALUE -> best.target.valueInputs().put(best.socket.name(), dragged.id());
+        }
+        layoutConnections();
+    }
+
+    /** Ranks every legal connection point against the dragged block and returns the nearest one in range. */
+    private Candidate bestCandidate(BlockNode dragged) {
+        if (dragged == null) return null;
         Candidate best = null;
         for (BlockNode target : workspace.nodes()) {
             if (target == dragged) continue;
             if (dragged.definition().acceptsPrevious() && target.definition().acceptsNext() && target.next() == null)
                 best = nearer(best, new Candidate(target, null, Kind.NEXT,
                         distance(dragged.x(), dragged.y(), target.x(), target.y() + blockHeight(target))));
-            if (dragged.definition().acceptsPrevious() && target.definition().shape() == Shape.C_BLOCK) {
-                if (dragged.definition().shape() == Shape.C_BLOCK) continue; // v1: no C-block inside another C-block.
-                for (Socket socket : target.definition().sockets()) if (socket.kind() == SocketKind.STATEMENT
-                        && target.statementInputs().getOrDefault(socket.name(), List.of()).isEmpty())
-                    best = nearer(best, new Candidate(target, socket, Kind.BODY,
-                            distance(dragged.x(), dragged.y(), target.x() + 22, target.y() + BLOCK_HEIGHT)));
+            if (dragged.definition().acceptsPrevious()) {
+                boolean draggedIsCBlock = dragged.definition().shape() == Shape.C_BLOCK;
+                boolean targetIsCBlock = target.definition().shape() == Shape.C_BLOCK;
+                if (!(draggedIsCBlock && targetIsCBlock)) { // v1: no C-block inside another C-block.
+                    for (Socket socket : target.definition().sockets())
+                        if (socket.kind() == SocketKind.STATEMENT
+                                && target.statementInputs().getOrDefault(socket.name(), List.of()).isEmpty())
+                            best = nearer(best, new Candidate(target, socket, Kind.BODY,
+                                    distance(dragged.x(), dragged.y(), target.x() + 22, target.y() + BLOCK_HEIGHT)));
+                }
             }
             if (dragged.definition().shape() == Shape.REPORTER) {
                 int index = 0;
@@ -216,14 +274,58 @@ public final class BlockCanvas {
                 }
             }
         }
-        if (best == null || best.distance > SNAP_RADIUS) { workspace.makeTopLevel(dragged.id()); return; }
-        workspace.detach(dragged.id());
-        switch (best.kind) {
-            case NEXT -> best.target.next(dragged.id());
-            case BODY -> best.target.statementInputs().get(best.socket.name()).add(dragged.id());
-            case VALUE -> best.target.valueInputs().put(best.socket.name(), dragged.id());
+        return best != null && best.distance <= SNAP_RADIUS ? best : null;
+    }
+
+    private void drawSnapHighlight(DrawContext context, Candidate candidate) {
+        BlockNode target = candidate.target;
+        float w = target.definition().shape() == Shape.REPORTER ? REPORTER_WIDTH : BLOCK_WIDTH;
+        float h = blockHeight(target);
+        float radius = target.definition().shape() == Shape.REPORTER ? 14 : 7;
+        GladeUi.roundedRectBorder(context, (float) target.x() - 2, (float) target.y() - 2, w + 4, h + 4,
+                radius, 2, 0xFFFFD34D);
+    }
+
+    private FieldChip fieldChip(BlockNode node) {
+        Socket only = null;
+        for (Socket socket : node.definition().sockets()) {
+            if (socket.kind() != SocketKind.FIELD) continue;
+            if (only != null) return null; // more than one field: v1 keeps chip editing to single-field blocks.
+            only = socket;
         }
-        layoutConnections();
+        if (only == null) return null;
+        float w = node.definition().shape() == Shape.REPORTER ? REPORTER_WIDTH : BLOCK_WIDTH;
+        double chipW = Math.min(96, w - 40);
+        double chipX = node.x() + w - chipW - 6;
+        double chipY = node.y() + 6;
+        return new FieldChip(chipX, chipY, chipW, FIELD_CHIP_HEIGHT, only.name());
+    }
+
+    private void drawFieldChip(DrawContext context, BlockNode node, FieldChip chip) {
+        boolean editingThis = node.id().equals(editingLiteral) && chip.socket().equals(editingSocket);
+        GladeUi.roundedRect(context, (float) chip.x(), (float) chip.y(), (float) chip.w(), (float) chip.h(), 4,
+                editingThis ? 0xFF2C2C2C : 0x99101010);
+        GladeUi.roundedRectBorder(context, (float) chip.x(), (float) chip.y(), (float) chip.w(), (float) chip.h(), 4, 1,
+                editingThis ? 0xFFFFD34D : 0xAAFFFFFF);
+        String value = node.fields().getOrDefault(chip.socket(), "");
+        String shown = editingThis ? value + "_" : (value.isEmpty() ? "(empty)" : value);
+        String clipped = clipToWidth(shown, (int) chip.w() - 6);
+        context.drawText(MinecraftClient.getInstance().textRenderer, clipped,
+                (int) chip.x() + 3, (int) chip.y() + 5, 0xFFFFFFFF, false);
+    }
+
+    private static String clipToWidth(String text, int maxWidth) {
+        if (maxWidth <= 0) return "";
+        var renderer = MinecraftClient.getInstance().textRenderer;
+        if (renderer.getWidth(text) <= maxWidth) return text;
+        String ellipsis = "...";
+        int ellipsisWidth = renderer.getWidth(ellipsis);
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            if (renderer.getWidth(result.toString() + text.charAt(i)) + ellipsisWidth > maxWidth) break;
+            result.append(text.charAt(i));
+        }
+        return result + ellipsis;
     }
 
     private void layoutConnections() {
@@ -270,9 +372,15 @@ public final class BlockCanvas {
         return (color & 0xFF000000) | r << 16 | g << 8 | b;
     }
     private static int categoryColor(Category category) {
-        return switch (category) { case EVENT -> 0xE09B51E0; case ACTION -> 0xE0367BD9; case CONTROL -> 0xE0D08A24; case VALUE -> 0xE02C9B70; };
+        return switch (category) {
+            case EVENT -> 0xE09B51E0; case ACTION -> 0xE0367BD9; case CONTROL -> 0xE0D08A24;
+            case VALUE -> 0xE02C9B70; case VARIABLE -> 0xE0A23B72;
+        };
     }
     private enum Kind { NEXT, BODY, VALUE }
     private record Candidate(BlockNode target, Socket socket, Kind kind, double distance) {}
     private record Point(double x, double y) {}
+    private record FieldChip(double x, double y, double w, double h, String socket) {
+        boolean contains(double px, double py) { return px >= x && px < x + w && py >= y && py < y + h; }
+    }
 }

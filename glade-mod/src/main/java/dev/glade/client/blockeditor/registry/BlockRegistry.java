@@ -23,16 +23,24 @@ public final class BlockRegistry {
 
         add(stack("goto", "go to", List.of(value("x", ValueType.NUMBER, "0"), value("y", ValueType.NUMBER, "64"),
                 value("z", ValueType.NUMBER, "0")), "glade.goto({x}, {y}, {z})"));
-        add(stack("place_block", "place block", xyz(), "glade.place_block({x}, {y}, {z})"));
+        add(def("place_block", "place block", Category.ACTION, Shape.STACK,
+                concat(xyz(), field("block", ValueType.TEXT, "minecraft:stone")), true, true, ValueType.ANY,
+                "glade.place_block({x}, {y}, {z}, {block})"));
         add(stack("break_block", "break block", xyz(), "glade.break_block({x}, {y}, {z})"));
-        add(stack("kill_nearest", "kill nearest", List.of(value("radius", ValueType.NUMBER, "6")),
-                "glade.kill_nearest({radius})"));
+        add(stack("kill_nearest", "kill nearest", List.of(), "glade.kill_nearest()"));
         add(stack("wait_between", "wait between", List.of(value("a", ValueType.NUMBER, "0.2"),
                 value("b", ValueType.NUMBER, "0.5")), "glade.wait_between({a}, {b})"));
         add(def("find_block", "find block", Category.ACTION, Shape.REPORTER,
-                List.of(value("name", ValueType.TEXT, "stone"), value("radius", ValueType.NUMBER, "16")),
-                false, false, ValueType.POSITION, "glade.find_block({name}, {radius})"));
+                List.of(field("name", ValueType.TEXT, "minecraft:stone")),
+                false, false, ValueType.POSITION, "glade.find_block({name})"));
         add(stack("log", "log", List.of(value("msg", ValueType.ANY, "hello")), "glade.log({msg})"));
+
+        add(def("set_variable", "set", Category.VARIABLE, Shape.STACK,
+                List.of(field("name", ValueType.IDENTIFIER, "my_var"), value("value", ValueType.ANY, "0")),
+                true, true, ValueType.ANY, "{name} = {value}"));
+        add(def("get_variable", "variable", Category.VARIABLE, Shape.REPORTER,
+                List.of(field("name", ValueType.IDENTIFIER, "my_var")),
+                false, false, ValueType.ANY, "{name}"));
 
         add(def("if", "if", Category.CONTROL, Shape.C_BLOCK,
                 List.of(value("cond", ValueType.BOOLEAN, "True"), stmt("body")), true, true, ValueType.ANY,
@@ -81,5 +89,10 @@ public final class BlockRegistry {
     private static List<Socket> xyz() {
         return List.of(value("x", ValueType.NUMBER, "0"), value("y", ValueType.NUMBER, "64"),
                 value("z", ValueType.NUMBER, "0"));
+    }
+    private static List<Socket> concat(List<Socket> sockets, Socket extra) {
+        List<Socket> result = new java.util.ArrayList<>(sockets);
+        result.add(extra);
+        return result;
     }
 }
