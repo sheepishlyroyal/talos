@@ -11,7 +11,12 @@ dependencies {
     modImplementation("net.fabricmc.fabric-api:fabric-api:${property("fabric_api_version")}")
     implementation(project(":glade-graalpy-runtime"))
     include(project(":glade-graalpy-runtime"))
+    testImplementation(platform("org.junit:junit-bom:5.12.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
+
+tasks.test { useJUnitPlatform() }
 
 tasks.processResources {
     inputs.property("version", project.version)
