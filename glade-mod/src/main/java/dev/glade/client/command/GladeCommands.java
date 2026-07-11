@@ -63,6 +63,18 @@ public final class GladeCommands {
                                                                 value(context, "x"),
                                                                 value(context, "y"),
                                                                 value(context, "z"))))))))
+                .then(ClientCommandManager.literal("glow")
+                        .then(integer("x")
+                                .then(integer("y")
+                                        .then(integer("z")
+                                                .executes(context -> GlowCommand.execute(
+                                                        context, blockPos(context), GlowCommand.DEFAULT_SECONDS))
+                                                .then(ClientCommandManager.argument(
+                                                                "seconds", IntegerArgumentType.integer(1, 3600))
+                                                        .executes(context -> GlowCommand.execute(
+                                                                context,
+                                                                blockPos(context),
+                                                                value(context, "seconds"))))))))
                 .then(ClientCommandManager.literal("mine")
                         .then(coordinates((context, pos) -> ActionCommand.mine(context, pos))))
                 .then(ClientCommandManager.literal("place")
@@ -80,8 +92,7 @@ public final class GladeCommands {
             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource, Integer> coordinates(
                     CoordinateExecutor executor) {
         return integer("x").then(integer("y").then(integer("z").executes(context ->
-                executor.execute(context, new net.minecraft.util.math.BlockPos(
-                        value(context, "x"), value(context, "y"), value(context, "z"))))));
+                executor.execute(context, blockPos(context)))));
     }
 
     @FunctionalInterface
@@ -94,6 +105,13 @@ public final class GladeCommands {
     private static com.mojang.brigadier.builder.RequiredArgumentBuilder<
             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource, Integer> integer(String name) {
         return ClientCommandManager.argument(name, IntegerArgumentType.integer());
+    }
+
+    private static net.minecraft.util.math.BlockPos blockPos(
+            com.mojang.brigadier.context.CommandContext<
+                            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context) {
+        return new net.minecraft.util.math.BlockPos(
+                value(context, "x"), value(context, "y"), value(context, "z"));
     }
 
     private static int value(
