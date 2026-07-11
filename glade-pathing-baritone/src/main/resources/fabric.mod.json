@@ -4,5 +4,9 @@
   "version": "${version}",
   "name": "Glade Baritone Adapter",
   "environment": "client",
-  "depends": { "fabricloader": ">=0.19.3", "minecraft": "~1.21.11", "glade": "*" }
+  "entrypoints": {
+    "glade:pathing_engine": ["dev.glade.pathing.baritone.BaritoneEngineProvider"]
+  },
+  "depends": { "fabricloader": ">=0.19.3", "minecraft": "~1.21.11", "glade": "*" },
+  "suggests": { "baritone": "*" }
 }

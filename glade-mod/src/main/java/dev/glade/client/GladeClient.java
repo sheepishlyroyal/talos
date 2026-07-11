@@ -1,5 +1,7 @@
 package dev.glade.client;
 
+import dev.glade.client.pathing.PathingEngine;
+import dev.glade.client.pathing.PathingEngineRegistry;
 import dev.glade.client.task.TaskScheduler;
 import dev.glade.client.task.TickBudgetManager;
 
@@ -17,5 +19,13 @@ public final class GladeClient {
 
     public static TickBudgetManager tickBudget() {
         return TICK_BUDGET;
+    }
+
+    public static PathingEngine pathingEngine() {
+        return PathingEngineHolder.INSTANCE;
+    }
+
+    private static final class PathingEngineHolder {
+        private static final PathingEngine INSTANCE = PathingEngineRegistry.discover();
     }
 }

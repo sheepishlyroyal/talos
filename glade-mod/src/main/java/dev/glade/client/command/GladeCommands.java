@@ -1,6 +1,9 @@
 package dev.glade.client.command;
 
 import dev.glade.client.scan.BlockStatePredicate;
+import dev.glade.client.pathing.GoalBlock;
+import dev.glade.client.pathing.GoalNear;
+import dev.glade.client.pathing.GoalXZ;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -29,6 +32,47 @@ public final class GladeCommands {
                                                         "radius", IntegerArgumentType.integer(1, 64))
                                                 .executes(context -> FindCommand.execute(
                                                         context,
-                                                        IntegerArgumentType.getInteger(context, "radius"))))))));
+                                                        IntegerArgumentType.getInteger(context, "radius")))))))
+                .then(ClientCommandManager.literal("goto")
+                        .then(ClientCommandManager.literal("near")
+                                .then(integer("x")
+                                        .then(integer("y")
+                                                .then(integer("z")
+                                                        .then(ClientCommandManager.argument(
+                                                                        "range", IntegerArgumentType.integer(0))
+                                                                .executes(context -> GotoCommand.execute(
+                                                                        context,
+                                                                        new GoalNear(
+                                                                                value(context, "x"),
+                                                                                value(context, "y"),
+                                                                                value(context, "z"),
+                                                                                value(context, "range")))))))))
+                        .then(ClientCommandManager.literal("xz")
+                                .then(integer("x")
+                                        .then(integer("z")
+                                                .executes(context -> GotoCommand.execute(
+                                                        context,
+                                                        new GoalXZ(value(context, "x"), value(context, "z")))))))
+                        .then(integer("x")
+                                .then(integer("y")
+                                        .then(integer("z")
+                                                .executes(context -> GotoCommand.execute(
+                                                        context,
+                                                        new GoalBlock(
+                                                                value(context, "x"),
+                                                                value(context, "y"),
+                                                                value(context, "z")))))))));
+    }
+
+    private static com.mojang.brigadier.builder.RequiredArgumentBuilder<
+            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource, Integer> integer(String name) {
+        return ClientCommandManager.argument(name, IntegerArgumentType.integer());
+    }
+
+    private static int value(
+            com.mojang.brigadier.context.CommandContext<
+                            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context,
+            String name) {
+        return IntegerArgumentType.getInteger(context, name);
     }
 }

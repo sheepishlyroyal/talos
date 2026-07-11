@@ -11,6 +11,8 @@ dependencies {
     // glade-mod is a separate installed mod at runtime; compile against its named classes only
     // (plain compileOnly avoids Loom's mod-remapper reading glade-mod's not-yet-built dev jar).
     compileOnly(project(path = ":glade-mod", configuration = "namedElements"))
+    // Baritone is an optional, separately-installed LGPL mod with no resolvable 1.21.11 artifact.
+    // It is accessed purely via reflection in BaritonePathingEngine (no compile-time dependency).
 }
 
 tasks.processResources {
