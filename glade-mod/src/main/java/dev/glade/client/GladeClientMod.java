@@ -2,6 +2,8 @@ package dev.glade.client;
 
 import dev.glade.client.command.GladeCommands;
 import dev.glade.client.bridge.GladeBridge;
+import dev.glade.client.config.GladeConfig;
+import dev.glade.client.config.GladeConfigManager;
 import dev.glade.client.render.RenderQueue;
 import dev.glade.client.script.GameThreadExecutor;
 import dev.glade.client.script.ScriptEngine;
@@ -17,6 +19,14 @@ public final class GladeClientMod implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        // Load persisted settings before anything else touches Theme/Humanizer, so
+        // subsystems start in the user's last-saved state.
+        GladeConfig config = GladeConfigManager.load();
+        GladeConfigManager.setThemeMode(config.themeMode);
+        GladeConfigManager.setActiveProfile(config.activeProfile);
+        // follow-up: wire live UI toggles (theme switcher, profile picker) to call
+        // GladeConfigManager.setThemeMode/setActiveProfile so in-app changes persist.
+
         GladeCommands.register();
         GladeBridge.start();
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> GladeBridge.stop());
