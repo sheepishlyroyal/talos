@@ -1,0 +1,94 @@
+{
+  "name": "glade",
+  "displayName": "Glade Scripting",
+  "description": "Push and run Python automation scripts against the Glade Minecraft Fabric mod over a local WebSocket, with live log streaming.",
+  "version": "0.1.0",
+  "publisher": "glade",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onLanguage:python"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "glade.runScript",
+        "title": "Glade: Run Script in Minecraft",
+        "icon": "$(play)"
+      },
+      {
+        "command": "glade.stopScript",
+        "title": "Glade: Stop Script",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "glade.reconnect",
+        "title": "Glade: Reconnect",
+        "icon": "$(debug-restart)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "glade.runScript",
+        "key": "ctrl+alt+enter",
+        "mac": "cmd+alt+enter",
+        "when": "editorLangId == python"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "glade.runScript",
+          "when": "editorLangId == python"
+        },
+        {
+          "command": "glade.stopScript"
+        },
+        {
+          "command": "glade.reconnect"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Glade",
+      "properties": {
+        "glade.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host the Glade mod's WebSocket server listens on. Must be a loopback address (127.0.0.1, localhost, or ::1) — the extension refuses to connect elsewhere."
+        },
+        "glade.port": {
+          "type": "number",
+          "default": 43077,
+          "description": "Port the Glade mod's WebSocket server listens on."
+        },
+        "glade.tokenPath": {
+          "type": "string",
+          "default": "~/.glade/token",
+          "description": "Path to the per-session auth token file written by the Glade mod. '~' expands to your home directory."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.5.4"
+  }
+}
