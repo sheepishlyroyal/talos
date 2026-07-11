@@ -39,6 +39,17 @@ public final class Workspace {
         undo.push(capture()); restore(redo.pop()); return true;
     }
 
+    /** Every variable name declared by a "set" block in the graph, in first-seen order. */
+    public java.util.Set<String> variableNames() {
+        java.util.Set<String> names = new java.util.LinkedHashSet<>();
+        for (BlockNode node : nodes.values()) {
+            if (!"set_variable".equals(node.definition().id())) continue;
+            String name = node.fields().get("name");
+            if (name != null && !name.isBlank()) names.add(name);
+        }
+        return names;
+    }
+
     /** Removes all inbound relationships so a node can be dragged as a detached subtree. */
     public void detach(String id) {
         topLevel.remove(id);

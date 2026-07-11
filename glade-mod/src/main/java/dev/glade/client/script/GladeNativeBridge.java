@@ -29,7 +29,9 @@ import net.minecraft.registry.Registries;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import dev.glade.client.render.RenderQueue;
 import org.graalvm.polyglot.HostAccess;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,6 +77,14 @@ public final class GladeNativeBridge {
 
     @HostAccess.Export public String placeBlock(int x, int y, int z) {
         return action(new PlaceBlockAction(new BlockPos(x, y, z)), "place");
+    }
+    @HostAccess.Export public String placeBlockAs(int x, int y, int z, String blockId) {
+        Identifier id = Identifier.tryParse(blockId);
+        if (id == null || !Registries.BLOCK.containsId(id)) throw new IllegalArgumentException("Unknown block: " + blockId);
+        net.minecraft.block.Block wanted = Registries.BLOCK.get(id);
+        java.util.function.Predicate<net.minecraft.item.ItemStack> selector = stack ->
+                stack.getItem() instanceof net.minecraft.item.BlockItem blockItem && blockItem.getBlock() == wanted;
+        return action(new PlaceBlockAction(new BlockPos(x, y, z), selector, Direction.UP, null), "place");
     }
     @HostAccess.Export public String breakBlock(int x, int y, int z) {
         return action(new BreakBlockAction(new BlockPos(x, y, z)), "break");
@@ -213,6 +223,7 @@ public final class GladeNativeBridge {
             while (positions.hasNext() && GladeClient.tickBudget().hasBudgetRemaining()) {
                 BlockPos pos = positions.next();
                 if (client.world.getBlockState(pos).isOf(block)) {
+                    RenderQueue.add("glow:" + pos.asLong(), new Box(pos).expand(0.002), 0x33FF66, 10 * 20);
                     future.complete(new Pos(pos.getX(), pos.getY(), pos.getZ()));
                     _break();
                     return;

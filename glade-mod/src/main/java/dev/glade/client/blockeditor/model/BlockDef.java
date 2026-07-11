@@ -9,10 +9,11 @@ import java.util.Objects;
  */
 public record BlockDef(String id, String label, Category category, Shape shape, List<Socket> sockets,
         boolean acceptsPrevious, boolean acceptsNext, ValueType outputType, String pythonTemplate) {
-    public enum Category { EVENT, ACTION, CONTROL, VALUE }
+    public enum Category { EVENT, ACTION, CONTROL, VALUE, VARIABLE }
     public enum Shape { HAT, STACK, REPORTER, C_BLOCK }
     public enum SocketKind { FIELD, VALUE, STATEMENT }
-    public enum ValueType { ANY, NUMBER, TEXT, BOOLEAN, POSITION }
+    /** IDENTIFIER fields are emitted as raw (unquoted) Python identifiers, e.g. variable names. */
+    public enum ValueType { ANY, NUMBER, TEXT, BOOLEAN, POSITION, IDENTIFIER }
 
     public record Socket(String name, SocketKind kind, ValueType type, String defaultValue) {
         public Socket {
