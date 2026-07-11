@@ -26,7 +26,10 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.registry.Registries;
+import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
@@ -75,6 +78,28 @@ public final class GladeNativeBridge {
 
     @HostAccess.Export public String placeBlock(int x, int y, int z) {
         return action(new PlaceBlockAction(new BlockPos(x, y, z)), "place");
+    }
+
+    /**
+     * Place a hotbar block at whatever block the player is currently looking at
+     * (the crosshair target), mimicking a normal right-click. No re-aim is performed:
+     * the current view/crosshair is used as-is.
+     */
+    @HostAccess.Export public String placeLook() {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            HitResult hit = client.crosshairTarget;
+            if (!(hit instanceof BlockHitResult blockHit) || blockHit.getType() != HitResult.Type.BLOCK) {
+                throw new IllegalStateException("Not looking at a block");
+            }
+            net.minecraft.util.ActionResult interaction =
+                    client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
+            client.player.swingHand(Hand.MAIN_HAND);
+            if (!interaction.isAccepted()) {
+                throw new IllegalStateException("Placement interaction was rejected");
+            }
+            return "Placed block at " + blockHit.getBlockPos().offset(blockHit.getSide()).toShortString();
+        }));
     }
     @HostAccess.Export public String breakBlock(int x, int y, int z) {
         return action(new BreakBlockAction(new BlockPos(x, y, z)), "break");

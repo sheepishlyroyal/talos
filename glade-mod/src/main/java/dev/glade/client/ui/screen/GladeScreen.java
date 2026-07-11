@@ -85,7 +85,12 @@ public final class GladeScreen extends Screen {
 
         ThemePalette palette = Theme.palette();
 
-        int tint = ColorUtil.withAlpha(palette.blurTint(), progress);
+        // Keep the palette's designed translucency (blurTint alpha ~0xB0 ≈ 0.69) and
+        // only fade it in with the open animation — never drive it to fully opaque.
+        // Overwriting the alpha with `progress` (which settles at 1.0) made the glass
+        // solid once the panel finished opening, hiding the blurred backdrop entirely.
+        float baseAlpha = ((palette.blurTint() >>> 24) & 0xFF) / 255.0f;
+        int tint = ColorUtil.withAlpha(palette.blurTint(), baseAlpha * progress);
         GladeUi.glassPanel(context, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT, PANEL_RADIUS, tint);
 
         // Animated 4-stop accent gradient ring — the toolkit's AccentGradient on

@@ -27,6 +27,7 @@ public final class GladeWebSocketServer extends WebSocketServer {
     public static final int PORT = 43077;
     private static final Logger LOGGER = LoggerFactory.getLogger("Glade Bridge");
 
+    private final int port;
     private final BridgeAuth auth;
     private final Set<WebSocket> authenticated = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<WebSocket, Set<String>> pushed = new ConcurrentHashMap<>();
@@ -36,9 +37,18 @@ public final class GladeWebSocketServer extends WebSocketServer {
     private volatile boolean confirmationRequested;
 
     public GladeWebSocketServer(BridgeAuth auth) throws IOException {
-        super(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), PORT));
+        this(auth, PORT);
+    }
+
+    public GladeWebSocketServer(BridgeAuth auth, int port) throws IOException {
+        super(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port));
+        this.port = port;
         this.auth = auth;
         setReuseAddr(false);
+    }
+
+    public int port() {
+        return port;
     }
 
     @Override
@@ -170,7 +180,7 @@ public final class GladeWebSocketServer extends WebSocketServer {
     }
 
     public String statusText() {
-        return "bridge listening on 127.0.0.1:" + PORT + ", "
+        return "bridge listening on 127.0.0.1:" + port + ", "
                 + (sessionAllowed ? "allowed" : "awaiting /glade bridge allow");
     }
 
@@ -210,12 +220,12 @@ public final class GladeWebSocketServer extends WebSocketServer {
 
     @Override
     public void onError(WebSocket connection, Exception error) {
-        if (connection == null) LOGGER.warn("Glade bridge could not bind/start on 127.0.0.1:{}: {}", PORT, error.getMessage());
+        if (connection == null) LOGGER.warn("Glade bridge could not bind/start on 127.0.0.1:{}: {}", port, error.getMessage());
         else LOGGER.warn("Glade bridge connection error: {}", error.getMessage());
     }
 
     @Override
     public void onStart() {
-        LOGGER.info("Glade bridge listening on 127.0.0.1:{}; token file {}", PORT, auth.tokenFile());
+        LOGGER.info("Glade bridge listening on 127.0.0.1:{}; token file {}", port, auth.tokenFile());
     }
 }
