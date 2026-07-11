@@ -2,6 +2,8 @@ package dev.glade.client.script;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,6 +26,11 @@ import org.graalvm.polyglot.io.IOAccess;
 
 /** Process scripting service. Each session owns one worker and one long-lived Python context. */
 public final class ScriptEngine {
+    @FunctionalInterface
+    public interface LogSink {
+        void log(String level, String text);
+    }
+
     public enum State { RUNNING, STOPPING, STOPPED }
     private static final ScriptEngine INSTANCE = new ScriptEngine();
     private static final CompletableFuture<Engine> SHARED_ENGINE = new CompletableFuture<>();
@@ -45,6 +52,10 @@ public final class ScriptEngine {
     public static ScriptEngine instance() { return INSTANCE; }
 
     public CompletableFuture<Void> run(String scriptName) {
+        return run(scriptName, null);
+    }
+
+    public CompletableFuture<Void> run(String scriptName, LogSink logSink) {
         Objects.requireNonNull(scriptName, "scriptName");
         if (!scriptName.matches("[A-Za-z0-9_.-]+") || scriptName.contains(".."))
             return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid script name"));
@@ -58,7 +69,7 @@ public final class ScriptEngine {
             Path file = scripts.resolve(filename).normalize();
             if (!file.getParent().equals(scripts))
                 return CompletableFuture.failedFuture(new IllegalArgumentException("Script must be directly in glade/scripts"));
-            return current.submit(() -> { current.evaluate(file); return null; });
+            return current.submit(() -> { current.evaluate(file, logSink); return null; });
         }
     }
 
@@ -98,6 +109,8 @@ public final class ScriptEngine {
         private final EventDispatcher events = new EventDispatcher(this::enqueueEvent);
         private volatile Context context;
         private volatile GladeNativeBridge bridge;
+        private final LineOutput stdout = new LineOutput("info");
+        private final LineOutput stderr = new LineOutput("error");
 
         private <T> CompletableFuture<T> submit(java.util.concurrent.Callable<T> task) {
             CompletableFuture<T> result = new CompletableFuture<>();
@@ -120,18 +133,27 @@ public final class ScriptEngine {
             submit(() -> { ensureContext(); event.run(); return null; });
         }
 
-        private void evaluate(Path file) throws IOException {
+        private void evaluate(Path file, LogSink logSink) throws IOException {
             if (!Files.isRegularFile(file)) throw new IOException("Script not found: " + file);
-            ensureContext();
-            context.eval("python", "\nimport sys\nfor _name in list(sys.modules):\n"
-                    + "    if _name == 'glade' or _name.startswith('glade.') or (_name not in _glade_baseline_modules and not _name.startswith('_')):\n"
-                    + "        sys.modules.pop(_name, None)\n"
-                    + "for _key in list(globals()):\n"
-                    + "    if _key not in {'_glade_host', '_glade_baseline_modules', '__builtins__'} and not _key.startswith('__'):\n"
-                    + "        globals().pop(_key, None)\n");
-            events.clear();
-            installApi(context);
-            context.eval(Source.newBuilder("python", file.toFile()).build());
+            stdout.sink = logSink;
+            stderr.sink = logSink;
+            try {
+                ensureContext();
+                context.eval("python", "\nimport sys\nfor _name in list(sys.modules):\n"
+                        + "    if _name == 'glade' or _name.startswith('glade.') or (_name not in _glade_baseline_modules and not _name.startswith('_')):\n"
+                        + "        sys.modules.pop(_name, None)\n"
+                        + "for _key in list(globals()):\n"
+                        + "    if _key not in {'_glade_host', '_glade_baseline_modules', '__builtins__'} and not _key.startswith('__'):\n"
+                        + "        globals().pop(_key, None)\n");
+                events.clear();
+                installApi(context);
+                context.eval(Source.newBuilder("python", file.toFile()).build());
+                stdout.flushLine();
+                stderr.flushLine();
+            } finally {
+                stdout.sink = null;
+                stderr.sink = null;
+            }
         }
 
         private void ensureContext() {
@@ -147,6 +169,8 @@ public final class ScriptEngine {
                     .allowCreateThread(false)
                     .allowEnvironmentAccess(EnvironmentAccess.NONE)
                     .allowPolyglotAccess(PolyglotAccess.NONE)
+                    .out(stdout)
+                    .err(stderr)
                     .build();
             bridge = new GladeNativeBridge(GameThreadExecutor.instance(), events);
             created.getBindings("python").putMember("_glade_host", bridge);
@@ -193,6 +217,28 @@ public final class ScriptEngine {
             worker.shutdownNow();
             events.clear();
             state.set(State.STOPPED);
+        }
+
+        private static final class LineOutput extends OutputStream {
+            private final String level;
+            private final ByteArrayOutputStream line = new ByteArrayOutputStream();
+            private volatile LogSink sink;
+
+            private LineOutput(String level) { this.level = level; }
+
+            @Override
+            public synchronized void write(int value) {
+                if (value == '\n') flushLine();
+                else if (value != '\r') line.write(value);
+            }
+
+            private synchronized void flushLine() {
+                if (line.size() == 0) return;
+                LogSink current = sink;
+                String text = line.toString(StandardCharsets.UTF_8);
+                line.reset();
+                if (current != null) current.log(level, text);
+            }
         }
     }
 }

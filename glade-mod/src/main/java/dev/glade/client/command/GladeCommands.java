@@ -1,6 +1,7 @@
 package dev.glade.client.command;
 
 import dev.glade.client.scan.BlockStatePredicate;
+import dev.glade.client.bridge.GladeBridge;
 import dev.glade.client.pathing.GoalBlock;
 import dev.glade.client.pathing.GoalNear;
 import dev.glade.client.pathing.GoalXZ;
@@ -102,6 +103,19 @@ public final class GladeCommands {
                                 .executes(context -> {
                                     ScriptEngine.instance().stop();
                                     context.getSource().sendFeedback(Text.literal("Stopped script engine"));
+                                    return 1;
+                                })))
+                .then(ClientCommandManager.literal("bridge")
+                        .then(ClientCommandManager.literal("allow")
+                                .executes(context -> {
+                                    int result = GladeBridge.allowSession();
+                                    if (result == 0) context.getSource().sendError(Text.literal("Glade bridge is not running"));
+                                    else context.getSource().sendFeedback(Text.literal("VS Code bridge allowed for this session"));
+                                    return result;
+                                }))
+                        .then(ClientCommandManager.literal("status")
+                                .executes(context -> {
+                                    context.getSource().sendFeedback(Text.literal(GladeBridge.statusText()));
                                     return 1;
                                 })))
                 .then(ClientCommandManager.literal("kill")

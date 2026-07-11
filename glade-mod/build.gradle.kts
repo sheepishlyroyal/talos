@@ -15,6 +15,8 @@ dependencies {
     modImplementation("net.fabricmc.fabric-api:fabric-api:${property("fabric_api_version")}")
     implementation(project(":glade-graalpy-runtime"))
     include(project(":glade-graalpy-runtime"))
+    implementation("org.java-websocket:Java-WebSocket:1.5.7")
+    include("org.java-websocket:Java-WebSocket:1.5.7")
     testImplementation(platform("org.junit:junit-bom:5.12.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
