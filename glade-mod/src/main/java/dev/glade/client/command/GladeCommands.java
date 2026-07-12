@@ -97,9 +97,14 @@ public final class GladeCommands {
                                                                 blockPos(context),
                                                                 value(context, "seconds"))))))))
                 .then(ClientCommandManager.literal("mine")
-                        .then(coordinates((context, pos) -> ActionCommand.mine(context, pos))))
+                        .then(coordinates((context, pos) -> ActionCommand.mine(context, pos)))
+                        .then(ClientCommandManager.literal("direction")
+                                .then(directionNode((context, pos) -> ActionCommand.mine(context, pos)))))
                 .then(ClientCommandManager.literal("place")
                         .then(coordinates((context, pos) -> ActionCommand.place(context, pos))))
+                .then(ClientCommandManager.literal("coords")
+                        .then(ClientCommandManager.literal("direction")
+                                .then(directionNode(CoordsCommand::executeDirection))))
                 .then(ClientCommandManager.literal("ui")
                         .executes(UiCommand::execute))
                 .then(ClientCommandManager.literal("editor")
@@ -164,6 +169,9 @@ public final class GladeCommands {
      *       entity of a given type, optionally also filtered by scoreboard tag.</li>
      *   <li>{@code /glade look entity tag <tag> [n]} — aim at the Nth-closest entity with a tag,
      *       regardless of type.</li>
+     *   <li>{@code /glade look <selector> [n]} — Minecraft-style target selector: {@code @e[...]},
+     *       {@code @a}, {@code @p} (nearest player excluding yourself) or {@code @s} (self). See
+     *       {@link EntitySelector} for the supported bracket arguments.</li>
      * </ul>
      */
     private static LiteralArgumentBuilder<FabricClientCommandSource> lookNode() {
@@ -175,6 +183,10 @@ public final class GladeCommands {
                         .then(ClientCommandManager.argument("blockId", IdentifierArgumentType.identifier())
                                 .executes(context -> LookCommand.executeBlock(context, 1))
                                 .then(nArgument(n -> LookCommand.executeBlock(n.context(), n.n())))))
+                .then(ClientCommandManager.argument("selector", SelectorArgumentType.selector())
+                        .executes(context -> LookCommand.executeSelector(context, selectorArg(context), 1))
+                        .then(nArgument(n -> LookCommand.executeSelector(
+                                n.context(), selectorArg(n.context()), n.n()))))
                 .then(ClientCommandManager.literal("entity")
                         .then(ClientCommandManager.literal("type")
                                 .then(ClientCommandManager.argument("entityType", IdentifierArgumentType.identifier())
@@ -211,6 +223,41 @@ public final class GladeCommands {
 
     private static String tagArg(com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
         return StringArgumentType.getString(context, "tag");
+    }
+
+    private static String selectorArg(com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
+        return context.getArgument("selector", String.class);
+    }
+
+    /**
+     * Builds the {@code direction <yaw> <pitch>} sub-node shared by {@code /glade mine} and
+     * {@code /glade coords}: {@code ^}/{@code ^n}-relative angles (via
+     * {@link RelativeAngleArgumentType}) that raycast from the player's eyes to a {@link
+     * net.minecraft.util.math.BlockPos} via {@link DirectionRaycast}.
+     */
+    private static com.mojang.brigadier.builder.RequiredArgumentBuilder<FabricClientCommandSource,
+            RelativeAngleArgumentType.Angle> directionNode(DirectionExecutor executor) {
+        return ClientCommandManager.argument("yaw", RelativeAngleArgumentType.angle())
+                .then(ClientCommandManager.argument("pitch", RelativeAngleArgumentType.angle())
+                        .executes(context -> {
+                            var source = context.getSource();
+                            var player = source.getPlayer();
+                            float yaw = RelativeAngleArgumentType.resolve(context, "yaw", player.getYaw());
+                            float pitch = RelativeAngleArgumentType.resolve(context, "pitch", player.getPitch());
+                            var pos = DirectionRaycast.blockAt(player, yaw, pitch);
+                            if (pos == null) {
+                                source.sendError(Text.literal("No block in range along yaw %.2f, pitch %.2f"
+                                        .formatted(yaw, pitch)));
+                                return 0;
+                            }
+                            return executor.execute(context, pos);
+                        }));
+    }
+
+    @FunctionalInterface
+    private interface DirectionExecutor {
+        int execute(com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context,
+                    net.minecraft.util.math.BlockPos pos);
     }
 
     private static GoalXZ xzGoal(
