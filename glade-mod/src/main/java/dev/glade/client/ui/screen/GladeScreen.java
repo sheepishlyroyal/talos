@@ -1,5 +1,6 @@
 package dev.glade.client.ui.screen;
 
+import dev.glade.client.blockeditor.util.GladeGuiScale;
 import dev.glade.client.ui.anim.Animation;
 import dev.glade.client.ui.anim.EaseOutQuad;
 import dev.glade.client.ui.draw.GladeUi;
@@ -41,6 +42,9 @@ public final class GladeScreen extends Screen {
     private ToggleSwitch themeToggle;
     private Button closeButton;
     private boolean closing;
+    // Item 9: cap the effective GUI scale this panel lays out against so it stays legible at the
+    // largest configured GUI scales — see GladeGuiScale's class doc. Identity (factor 1) at scale 1-3.
+    private GladeGuiScale.Adjust scaleAdjust = new GladeGuiScale.Adjust(1f, 1, 1);
 
     public GladeScreen() {
         super(Text.literal("Glade"));
@@ -48,8 +52,9 @@ public final class GladeScreen extends Screen {
 
     @Override
     protected void init() {
-        int panelX = (this.width - PANEL_WIDTH) / 2;
-        int panelY = (this.height - PANEL_HEIGHT) / 2;
+        scaleAdjust = GladeGuiScale.compute(this.width, this.height);
+        int panelX = (scaleAdjust.virtualWidth() - PANEL_WIDTH) / 2;
+        int panelY = (scaleAdjust.virtualHeight() - PANEL_HEIGHT) / 2;
 
         this.themeToggle = new ToggleSwitch(
                 panelX + PANEL_WIDTH - Spacing.S24 - 36, panelY + 86,
@@ -73,12 +78,15 @@ public final class GladeScreen extends Screen {
         float progress = openAnim.getValue();
         float scale = 0.92f + 0.08f * progress;
 
-        int panelX = (this.width - PANEL_WIDTH) / 2;
-        int panelY = (this.height - PANEL_HEIGHT) / 2;
+        scaleAdjust = GladeGuiScale.compute(this.width, this.height); // GUI Scale can change while open
+        int vw = scaleAdjust.virtualWidth(), vh = scaleAdjust.virtualHeight();
+        int panelX = (vw - PANEL_WIDTH) / 2;
+        int panelY = (vh - PANEL_HEIGHT) / 2;
         float centerX = panelX + PANEL_WIDTH / 2.0f;
         float centerY = panelY + PANEL_HEIGHT / 2.0f;
 
         context.getMatrices().pushMatrix();
+        context.getMatrices().scale(scaleAdjust.factor());
         context.getMatrices().translate(centerX, centerY);
         context.getMatrices().scale(scale);
         context.getMatrices().translate(-centerX, -centerY);
@@ -103,26 +111,29 @@ public final class GladeScreen extends Screen {
                 ColorUtil.withAlpha(accent.bottomRight(), progress));
 
         context.drawCenteredTextWithShadow(this.textRenderer, this.title,
-                this.width / 2, panelY + 16, ColorUtil.withAlpha(palette.text(), progress));
+                vw / 2, panelY + 16, ColorUtil.withAlpha(palette.text(), progress));
         context.drawCenteredTextWithShadow(this.textRenderer, DESCRIPTION,
-                this.width / 2, panelY + 32, ColorUtil.withAlpha(palette.description(), progress));
+                vw / 2, panelY + 32, ColorUtil.withAlpha(palette.description(), progress));
 
         context.drawText(this.textRenderer, TOGGLE_LABEL,
                 panelX + Spacing.S24, panelY + 90, ColorUtil.withAlpha(palette.text(), progress), false);
 
-        this.themeToggle.render(context, mouseX, mouseY, deltaTicks);
-        this.closeButton.render(context, mouseX, mouseY, deltaTicks);
+        int vMouseX = (int) scaleAdjust.toVirtualX(mouseX), vMouseY = (int) scaleAdjust.toVirtualY(mouseY);
+        this.themeToggle.render(context, vMouseX, vMouseY, deltaTicks);
+        this.closeButton.render(context, vMouseX, vMouseY, deltaTicks);
 
         context.getMatrices().popMatrix();
     }
 
     @Override
     public boolean mouseClicked(Click click, boolean doubled) {
+        double vx = scaleAdjust.toVirtualX(click.x());
+        double vy = scaleAdjust.toVirtualY(click.y());
         if (!closing) {
-            if (themeToggle.mouseClicked(click.x(), click.y(), click.button())) {
+            if (themeToggle.mouseClicked(vx, vy, click.button())) {
                 return true;
             }
-            if (closeButton.mouseClicked(click.x(), click.y(), click.button())) {
+            if (closeButton.mouseClicked(vx, vy, click.button())) {
                 return true;
             }
         }

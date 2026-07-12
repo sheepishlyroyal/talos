@@ -24,14 +24,16 @@ public final class BlockRegistry {
         add(stack("goto", "go to", List.of(value("x", ValueType.NUMBER, "0"), value("y", ValueType.NUMBER, "64"),
                 value("z", ValueType.NUMBER, "0")), "glade.goto({x}, {y}, {z})"));
         add(def("place_block", "place block", Category.ACTION, Shape.STACK,
-                concat(xyz(), field("block", ValueType.TEXT, "minecraft:stone")), true, true, ValueType.ANY,
+                concat(xyz(), blockPickerField("block", "minecraft:stone")), true, true, ValueType.ANY,
                 "glade.place_block({x}, {y}, {z}, {block})"));
         add(stack("break_block", "break block", xyz(), "glade.break_block({x}, {y}, {z})"));
         add(stack("kill_nearest", "kill nearest", List.of(), "glade.kill_nearest()"));
         add(stack("wait_between", "wait between", List.of(value("a", ValueType.NUMBER, "0.2"),
                 value("b", ValueType.NUMBER, "0.5")), "glade.wait_between({a}, {b})"));
+        add(stack("wait", "wait (seconds)", List.of(field("seconds", ValueType.NUMBER, "1.0")),
+                "glade.wait_between({seconds}, {seconds})"));
         add(def("find_block", "find block", Category.ACTION, Shape.REPORTER,
-                List.of(field("name", ValueType.TEXT, "minecraft:stone")),
+                List.of(blockPickerField("name", "minecraft:stone")),
                 false, false, ValueType.POSITION, "glade.find_block({name})"));
         add(stack("log", "log", List.of(value("msg", ValueType.ANY, "hello")), "glade.log({msg})"));
 
@@ -81,6 +83,10 @@ public final class BlockRegistry {
     }
     private static Socket field(String name, ValueType type, String value) {
         return new Socket(name, SocketKind.FIELD, type, value);
+    }
+    /** A FIELD socket whose chip renders as a clickable Minecraft block texture + picker grid. */
+    private static Socket blockPickerField(String name, String value) {
+        return new Socket(name, SocketKind.FIELD, ValueType.TEXT, value, BlockDef.FieldWidget.BLOCK_PICKER);
     }
     private static Socket value(String name, ValueType type, String value) {
         return new Socket(name, SocketKind.VALUE, type, value);

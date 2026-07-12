@@ -72,8 +72,10 @@ public final class PythonCodeGenerator {
         String childId = owner.valueInputs().get(socket.name());
         BlockNode child = workspace.get(childId);
         if (child == null) {
-            String raw = socket.kind() == SocketKind.FIELD
-                    ? owner.fields().getOrDefault(socket.name(), socket.defaultValue()) : socket.defaultValue();
+            // Unconnected VALUE sockets are edited in-canvas the same way FIELD sockets are (see
+            // BlockCanvas#editableSockets), so both kinds read the persisted literal from fields()
+            // first, falling back to the socket's declared default only if never edited.
+            String raw = owner.fields().getOrDefault(socket.name(), socket.defaultValue());
             return literal(raw, socket.type());
         }
         if (!path.add(child.id())) return "None";
