@@ -50,6 +50,9 @@ public final class BlockRegistry {
         add(def("repeat", "repeat", Category.CONTROL, Shape.C_BLOCK,
                 List.of(value("n", ValueType.NUMBER, "3"), stmt("body")), true, true, ValueType.ANY,
                 "for _ in range(int({n})):\n{body}"));
+        add(def("parallel", "run both at once", Category.CONTROL, Shape.C_BLOCK,
+                List.of(stmt("branch_a"), stmt("branch_b")), true, true, ValueType.ANY,
+                ""));
 
         add(def("random_between", "random between", Category.VALUE, Shape.REPORTER,
                 List.of(value("a", ValueType.NUMBER, "0"), value("b", ValueType.NUMBER, "1")),

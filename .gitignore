@@ -11,3 +11,4 @@ out/
 build/
 **/build/
 .claude/
+**/__pycache__/

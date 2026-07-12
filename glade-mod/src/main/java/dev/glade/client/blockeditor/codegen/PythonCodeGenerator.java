@@ -28,6 +28,8 @@ public final class PythonCodeGenerator {
 
     private String statement(Workspace workspace, BlockNode node, int indent, Set<String> emitted, int cDepth) {
         if (!emitted.add(node.id())) return line(indent, "# skipped cyclic block link");
+        if (node.definition().id().equals("parallel"))
+            return parallelStatement(workspace, node, indent, emitted, cDepth);
         String code = node.definition().pythonTemplate();
         String bodyMarker = "__GLADE_BODY__";
         String bodyCode = null;
@@ -52,6 +54,22 @@ public final class PythonCodeGenerator {
             else renderedBuilder.append(line(indent, line));
         }
         String rendered = renderedBuilder.toString();
+        BlockNode next = workspace.get(node.next());
+        if (next != null) rendered += "\n" + statement(workspace, next, indent, emitted, cDepth);
+        return rendered;
+    }
+
+    private String parallelStatement(Workspace workspace, BlockNode node, int indent, Set<String> emitted, int cDepth) {
+        String suffix = uniqueIdentifierSuffix(node.id());
+        String partA = "_partA_" + suffix;
+        String partB = "_partB_" + suffix;
+        String branchA = body(workspace, node.statementInputs().getOrDefault("branch_a", List.of()),
+                indent + 1, emitted, cDepth + 1);
+        String branchB = body(workspace, node.statementInputs().getOrDefault("branch_b", List.of()),
+                indent + 1, emitted, cDepth + 1);
+        String rendered = line(indent, "def " + partA + "():") + "\n" + branchA + "\n"
+                + line(indent, "def " + partB + "():") + "\n" + branchB + "\n"
+                + line(indent, "glade.parallel(" + partA + ", " + partB + ")");
         BlockNode next = workspace.get(node.next());
         if (next != null) rendered += "\n" + statement(workspace, next, indent, emitted, cDepth);
         return rendered;
@@ -106,6 +124,12 @@ public final class PythonCodeGenerator {
         String cleaned = value == null ? "" : value.replaceAll("[^A-Za-z0-9_]", "_");
         if (cleaned.isEmpty() || Character.isDigit(cleaned.charAt(0))) cleaned = "_" + cleaned;
         return cleaned.isEmpty() || cleaned.equals("_") ? "var" : cleaned;
+    }
+
+    /** Hex code points retain the complete block id while remaining a valid identifier suffix. */
+    private static String uniqueIdentifierSuffix(String value) {
+        if (value == null || value.isEmpty()) return "empty";
+        return value.codePoints().mapToObj(Integer::toHexString).collect(java.util.stream.Collectors.joining("_"));
     }
 
     private static String line(int indent, String text) { return "    ".repeat(indent) + text; }

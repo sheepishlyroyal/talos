@@ -8,13 +8,19 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.graalvm.polyglot.Value;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.MutableText;
@@ -40,6 +46,7 @@ public final class ScriptEngine {
     private static final ScriptEngine INSTANCE = new ScriptEngine();
     private static final CompletableFuture<Engine> SHARED_ENGINE = new CompletableFuture<>();
     private static final List<String> API_FILES = List.of("actions.py", "events.py", "humanize.py", "__init__.py");
+    private static final int MAX_SESSIONS = 8;
 
     static {
         Thread thread = new Thread(() -> {
@@ -60,6 +67,8 @@ public final class ScriptEngine {
     public static final LogSink CHAT = ScriptEngine::sendToChat;
 
     private final Object lock = new Object();
+    private final Map<Integer, Session> sessions = new ConcurrentHashMap<>();
+    private final AtomicInteger nextSessionId = new AtomicInteger(1);
     private volatile Session session;
 
     private ScriptEngine() {}
@@ -74,7 +83,10 @@ public final class ScriptEngine {
         if (!scriptName.matches("[A-Za-z0-9_.-]+") || scriptName.contains(".."))
             return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid script name"));
         synchronized (lock) {
-            if (session == null || session.state.get() == State.STOPPED) session = new Session();
+            if (session == null || session.state.get() == State.STOPPED) {
+                session = createSession(logSink, true);
+                if (session == null) return tooManySessions(logSink);
+            }
             Session current = session;
             if (current.state.get() != State.RUNNING)
                 return CompletableFuture.failedFuture(new IllegalStateException("Script engine is stopping"));
@@ -88,29 +100,83 @@ public final class ScriptEngine {
     }
 
     public void tick() {
-        Session current = session;
-        if (current != null && current.state.get() == State.RUNNING) current.events.post("tick");
+        for (Session current : List.copyOf(sessions.values()))
+            if (current.state.get() == State.RUNNING) current.events.post("tick");
     }
 
     public void stop() {
-        Session current;
-        synchronized (lock) { current = session; }
-        if (current != null) current.stop();
+        for (Session current : List.copyOf(sessions.values())) current.stop();
     }
 
     public void onDisconnect() {
-        Session current = session;
-        if (current != null) current.events.post("disconnect");
+        for (Session current : List.copyOf(sessions.values()))
+            if (current.state.get() == State.RUNNING) current.events.post("disconnect");
         stop();
     }
 
     /** Entry point for client-side hooks; Python dispatch still occurs only on the worker. */
     public void postEvent(String event, Object... snapshots) {
-        Session current = session;
-        if (current != null && current.state.get() == State.RUNNING) current.events.post(event, snapshots);
+        for (Session current : List.copyOf(sessions.values()))
+            if (current.state.get() == State.RUNNING) current.events.post(event, snapshots);
     }
 
     public State state() { Session current = session; return current == null ? State.STOPPED : current.state.get(); }
+
+    private Session createSession(LogSink sink, boolean primary) {
+        synchronized (lock) {
+            sessions.values().removeIf(current -> current.state.get() == State.STOPPED);
+            if (sessions.size() >= MAX_SESSIONS) return null;
+            int id = nextSessionId.getAndIncrement();
+            Session created = new Session(id, sink, primary);
+            sessions.put(id, created);
+            return created;
+        }
+    }
+
+    private static <T> CompletableFuture<T> tooManySessions(LogSink sink) {
+        String message = "Glade supports at most " + MAX_SESSIONS + " concurrent script sessions";
+        if (sink != null) sink.log("error", message);
+        return CompletableFuture.failedFuture(new IllegalStateException(message));
+    }
+
+    private ScriptHandle spawn(Session parent, String payload) {
+        Objects.requireNonNull(payload, "payload");
+        LogSink childSink = parent.baseSink;
+        Session child = createSession(childSink, false);
+        if (child == null) {
+            tooManySessions(childSink);
+            throw new IllegalStateException("Glade supports at most " + MAX_SESSIONS + " concurrent script sessions");
+        }
+        CompletableFuture<String> result = child.submit(() -> child.evaluateCallable(payload));
+        ScriptHandle handle = new ScriptHandle(child, result);
+        result.whenComplete((ignored, error) -> child.stop());
+        return handle;
+    }
+
+    /** Host-visible handle for one independently cancellable child script session. */
+    public final class ScriptHandle {
+        private final Session child;
+        private final CompletableFuture<String> result;
+
+        private ScriptHandle(Session child, CompletableFuture<String> result) {
+            this.child = child;
+            this.result = result;
+        }
+
+        @HostAccess.Export public void stop() { child.stop(); }
+        @HostAccess.Export public String join() { return result.join(); }
+        @HostAccess.Export public boolean isRunning() { return child.state.get() == State.RUNNING && !result.isDone(); }
+    }
+
+    /** Separate from GladeNativeBridge so concurrency never broadens the game bridge. */
+    public final class ConcurrencyHost {
+        private final Session owner;
+        private ConcurrencyHost(Session owner) { this.owner = owner; }
+
+        @HostAccess.Export public ScriptHandle spawn(String callablePayload) {
+            return ScriptEngine.this.spawn(owner, callablePayload);
+        }
+    }
 
     /**
      * {@link LogSink#log} fires on the GraalPy worker thread (from {@code LineOutput}
@@ -123,29 +189,52 @@ public final class ScriptEngine {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client == null || client.inGameHud == null) return null;
             Formatting color = "error".equals(level) ? Formatting.RED : Formatting.GRAY;
-            MutableText message = Text.literal("[Glade] ").formatted(Formatting.AQUA, Formatting.BOLD)
-                    .append(Text.literal(text).formatted(color));
+            String prefix = "[Glade] ";
+            String body = text;
+            if (text.startsWith("[Glade:") && text.contains("] ")) {
+                int end = text.indexOf("] ") + 2;
+                prefix = text.substring(0, end);
+                body = text.substring(end);
+            }
+            MutableText message = Text.literal(prefix).formatted(Formatting.AQUA, Formatting.BOLD)
+                    .append(Text.literal(body).formatted(color));
             client.inGameHud.getChatHud().addMessage(message);
             return null;
         });
     }
 
-    private static final class Session {
+    private final class Session {
+        private final int id;
+        private final LogSink outputSink;
+        private volatile LogSink baseSink;
         private final AtomicReference<State> state = new AtomicReference<>(State.RUNNING);
-        private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(256), runnable -> {
-                    Thread thread = new Thread(runnable, "Glade Script Worker");
-                    thread.setDaemon(true);
-                    return thread;
-                });
+        private final ThreadPoolExecutor worker;
+        private final Set<CompletableFuture<?>> pending = ConcurrentHashMap.newKeySet();
         private final EventDispatcher events = new EventDispatcher(this::enqueueEvent);
         private volatile Context context;
         private volatile GladeNativeBridge bridge;
         private final LineOutput stdout = new LineOutput("info");
         private final LineOutput stderr = new LineOutput("error");
 
+        private Session(int id, LogSink sink, boolean primary) {
+            this.id = id;
+            this.baseSink = sink == null ? CHAT : sink;
+            this.outputSink = primary ? this.baseSink
+                    : (level, text) -> this.baseSink.log(level, "[Glade:" + id + "] " + text);
+            this.worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(256), runnable -> {
+                        Thread thread = new Thread(runnable, "Glade Script Worker " + id);
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+            stdout.sink = this.outputSink;
+            stderr.sink = this.outputSink;
+        }
+
         private <T> CompletableFuture<T> submit(java.util.concurrent.Callable<T> task) {
             CompletableFuture<T> result = new CompletableFuture<>();
+            pending.add(result);
+            result.whenComplete((ignored, error) -> pending.remove(result));
             try {
                 worker.execute(() -> {
                     if (state.get() != State.RUNNING) {
@@ -186,15 +275,17 @@ public final class ScriptEngine {
             // Left wired after this call returns (not reset to null) so output/errors from
             // event handlers the script registers via glade.on(...) keep streaming to the
             // same sink for the rest of the session.
-            stdout.sink = logSink;
-            stderr.sink = logSink;
+            LogSink effectiveSink = logSink == null ? outputSink : logSink;
+            baseSink = effectiveSink;
+            stdout.sink = effectiveSink;
+            stderr.sink = effectiveSink;
             try {
                 ensureContext();
                 context.eval("python", "\nimport sys\nfor _name in list(sys.modules):\n"
                         + "    if _name == 'glade' or _name.startswith('glade.') or (_name not in _glade_baseline_modules and not _name.startswith('_')):\n"
                         + "        sys.modules.pop(_name, None)\n"
                         + "for _key in list(globals()):\n"
-                        + "    if _key not in {'_glade_host', '_glade_baseline_modules', '__builtins__'} and not _key.startswith('__'):\n"
+                        + "    if _key not in {'_glade_host', '_glade_concurrency', '_glade_baseline_modules', '__builtins__'} and not _key.startswith('__'):\n"
                         + "        globals().pop(_key, None)\n");
                 events.clear();
                 installApi(context);
@@ -204,7 +295,32 @@ public final class ScriptEngine {
             } catch (RuntimeException error) {
                 stdout.flushLine();
                 stderr.flushLine();
-                reportError(error, logSink);
+                reportError(error, effectiveSink);
+                throw error;
+            }
+        }
+
+        private String evaluateCallable(String payload) {
+            try {
+                ensureContext();
+                String code = "import base64, importlib, marshal, pickle, types, glade\n"
+                        + "_d = pickle.loads(base64.b64decode(" + py(payload) + "))\n"
+                        + "_g = {'__builtins__': __builtins__, 'glade': glade}\n"
+                        + "_g.update(_d['globals'])\n"
+                        + "_g.update({name: importlib.import_module(module) for name, module in _d['modules'].items()})\n"
+                        + "def _cell(value):\n    return (lambda: value).__closure__[0]\n"
+                        + "_closure = tuple(_cell(v) for v in _d['closure']) or None\n"
+                        + "_fn = types.FunctionType(marshal.loads(_d['code']), _g, _d['name'], _d['defaults'], _closure)\n"
+                        + "_fn.__kwdefaults__ = _d['kwdefaults']\n"
+                        + "base64.b64encode(pickle.dumps(_fn())).decode('ascii')";
+                Value value = context.eval("python", code);
+                stdout.flushLine();
+                stderr.flushLine();
+                return value.asString();
+            } catch (RuntimeException error) {
+                stdout.flushLine();
+                stderr.flushLine();
+                reportError(error, outputSink);
                 throw error;
             }
         }
@@ -242,8 +358,13 @@ public final class ScriptEngine {
                     .out(stdout)
                     .err(stderr)
                     .build();
+            if (state.get() != State.RUNNING) {
+                created.close(true);
+                throw new IllegalStateException("Script engine is stopping");
+            }
             bridge = new GladeNativeBridge(GameThreadExecutor.instance(), events);
             created.getBindings("python").putMember("_glade_host", bridge);
+            created.getBindings("python").putMember("_glade_concurrency", new ConcurrencyHost(this));
             context = created;
             installApi(created);
             created.eval("python", "_glade_baseline_modules = frozenset(__import__('sys').modules)");
@@ -259,6 +380,7 @@ public final class ScriptEngine {
                         .append("_m.__file__=").append(py("embedded:/glade/" + file)).append("\n")
                         .append(file.equals("__init__.py") ? "_m.__path__=[]\n" : "")
                         .append("_m.__dict__['_glade_host']=_glade_host\n")
+                        .append("_m.__dict__['_glade_concurrency']=_glade_concurrency\n")
                         .append("sys.modules[").append(py(module)).append("]=_m\n")
                         .append("exec(compile(").append(py(source)).append(", _m.__file__, 'exec'), _m.__dict__)\n");
             }
@@ -285,8 +407,11 @@ public final class ScriptEngine {
                 try { currentContext.close(true); } catch (RuntimeException ignored) { }
             }
             worker.shutdownNow();
+            for (CompletableFuture<?> future : List.copyOf(pending))
+                future.completeExceptionally(new CancellationException("Glade script session stopped"));
             events.clear();
             state.set(State.STOPPED);
+            sessions.remove(id, this);
         }
 
         private static final class LineOutput extends OutputStream {
