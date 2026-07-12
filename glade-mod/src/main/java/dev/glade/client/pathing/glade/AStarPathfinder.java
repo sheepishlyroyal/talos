@@ -159,8 +159,11 @@ public final class AStarPathfinder {
             boolean clearNormalDiagonal = cardinalDestinations.containsKey(xDirection)
                     && cardinalDestinations.containsKey(zDirection);
             if (destination != null && (clearNormalDiagonal || openBridgeLanding)) {
-                result.add(new Move(destination,
-                        movementCost(from, destination, classify(from, destination, true))));
+                MoveType type = classify(from, destination, true);
+                // Crawling diagonally can clip the low corner before the pose settles.
+                if (type != MoveType.CRAWL) {
+                    result.add(new Move(destination, movementCost(from, destination, type)));
+                }
             }
         }
 
@@ -306,8 +309,10 @@ public final class AStarPathfinder {
         if (type == MoveType.JUMP) cost += 0.55;
         if (type == MoveType.SPRINT_JUMP) cost += 0.75;
         if (type == MoveType.PLACE) cost += estimatePlaceTimeSeconds(to.getY() > from.getY());
-        if (!isPassable(to)) cost += estimateBreakTimeSeconds(to);
-        if (!isPassable(to.up())) cost += estimateBreakTimeSeconds(to.up());
+        if (type != MoveType.CRAWL) {
+            if (!isPassable(to)) cost += estimateBreakTimeSeconds(to);
+            if (!isPassable(to.up())) cost += estimateBreakTimeSeconds(to.up());
+        }
         return cost;
     }
 

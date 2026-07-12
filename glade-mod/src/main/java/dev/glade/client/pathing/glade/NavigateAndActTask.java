@@ -199,6 +199,14 @@ public final class NavigateAndActTask extends GladeTask {
         if (index + 1 >= nodes.size()) return current;
         BlockPos next = nodes.get(index + 1);
         if (next.getY() != node.getY() || isCrawlNode(node) || isCrawlNode(next)) return current;
+        if (index > 0) {
+            BlockPos previous = nodes.get(index - 1);
+            int inX = Integer.compare(node.getX(), previous.getX());
+            int inZ = Integer.compare(node.getZ(), previous.getZ());
+            int outX = Integer.compare(next.getX(), node.getX());
+            int outZ = Integer.compare(next.getZ(), node.getZ());
+            if (inX != outX || inZ != outZ) return current;
+        }
         Vec3d ahead = clearanceAdjustedCenter(next, player.getEyeY());
         return current.lerp(ahead, 0.45);
     }
@@ -252,17 +260,22 @@ public final class NavigateAndActTask extends GladeTask {
             float yaw = player.getYaw() + MathHelper.clamp(delta, -maxChange, maxChange);
             player.setYaw(yaw); player.setHeadYaw(yaw); player.setBodyYaw(yaw);
         }
+        player.setPitch(MathHelper.lerp(0.18F, player.getPitch(), 0.0F));
         if (slippery && (Math.abs(delta) > 28.0F || speed > 0.48)) {
             client.options.sprintKey.setPressed(false);
         }
     }
 
     private boolean isSlippery(ClientPlayerEntity player, BlockPos target) {
-        return slipperiness(player.getBlockPos().down()) > 0.61F || slipperiness(target.down()) > 0.61F;
+        return isIce(player.getBlockPos().down()) || isIce(target.down());
     }
 
-    private float slipperiness(BlockPos pos) {
-        return client.world.getBlockState(pos).getBlock().getFriction();
+    private boolean isIce(BlockPos pos) {
+        var state = client.world.getBlockState(pos);
+        return state.isOf(net.minecraft.block.Blocks.ICE)
+                || state.isOf(net.minecraft.block.Blocks.PACKED_ICE)
+                || state.isOf(net.minecraft.block.Blocks.BLUE_ICE)
+                || state.isOf(net.minecraft.block.Blocks.FROSTED_ICE);
     }
 
     private boolean isCrawlNode(BlockPos pos) {
