@@ -8,9 +8,14 @@ import dev.glade.client.pathing.GoalXZ;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import dev.glade.client.script.ScriptEngine;
 import dev.glade.client.blockeditor.screen.BlockEditorScreen;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import net.minecraft.command.argument.IdentifierArgumentType;
 import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.math.Vec3d;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -74,10 +79,7 @@ public final class GladeCommands {
                                 .then(coordinate("z")
                                         .executes(context -> GotoCommand.execute(
                                                 context, xzGoal(context))))))
-                .then(ClientCommandManager.literal("look")
-                        .then(ClientCommandManager.argument("yaw", RelativeAngleArgumentType.angle())
-                                .then(ClientCommandManager.argument("pitch", RelativeAngleArgumentType.angle())
-                                        .executes(LookCommand::execute))))
+                .then(lookNode())
                 .then(ClientCommandManager.literal("glow")
                         .then(coordinate("x")
                                 .then(coordinate("y")
@@ -143,6 +145,64 @@ public final class GladeCommands {
                                                 "radius", DoubleArgumentType.doubleArg(1.0, 64.0))
                                         .executes(context -> ActionCommand.killNearest(context,
                                                 DoubleArgumentType.getDouble(context, "radius")))))));
+    }
+
+    /**
+     * Builds the {@code /glade look} subtree:
+     * <ul>
+     *   <li>{@code /glade look <yaw> <pitch>} — absolute or {@code ^}-relative angles (existing behavior).</li>
+     *   <li>{@code /glade look block <blockId> [n]} — aim at the Nth-closest matching block.</li>
+     *   <li>{@code /glade look entity type <entityTypeId> [tag <tag>] [n]} — aim at the Nth-closest
+     *       entity of a given type, optionally also filtered by scoreboard tag.</li>
+     *   <li>{@code /glade look entity tag <tag> [n]} — aim at the Nth-closest entity with a tag,
+     *       regardless of type.</li>
+     * </ul>
+     */
+    private static LiteralArgumentBuilder<FabricClientCommandSource> lookNode() {
+        return ClientCommandManager.literal("look")
+                .then(ClientCommandManager.argument("yaw", RelativeAngleArgumentType.angle())
+                        .then(ClientCommandManager.argument("pitch", RelativeAngleArgumentType.angle())
+                                .executes(LookCommand::execute)))
+                .then(ClientCommandManager.literal("block")
+                        .then(ClientCommandManager.argument("blockId", IdentifierArgumentType.identifier())
+                                .executes(context -> LookCommand.executeBlock(context, 1))
+                                .then(nArgument(n -> LookCommand.executeBlock(n.context(), n.n())))))
+                .then(ClientCommandManager.literal("entity")
+                        .then(ClientCommandManager.literal("type")
+                                .then(ClientCommandManager.argument("entityType", IdentifierArgumentType.identifier())
+                                        .executes(context -> LookCommand.executeEntity(context, entityTypeArg(context), null, 1))
+                                        .then(nArgument(n -> LookCommand.executeEntity(
+                                                n.context(), entityTypeArg(n.context()), null, n.n())))
+                                        .then(ClientCommandManager.literal("tag")
+                                                .then(ClientCommandManager.argument("tag", StringArgumentType.word())
+                                                        .executes(context -> LookCommand.executeEntity(
+                                                                context, entityTypeArg(context), tagArg(context), 1))
+                                                        .then(nArgument(n -> LookCommand.executeEntity(
+                                                                n.context(), entityTypeArg(n.context()), tagArg(n.context()), n.n())))))))
+                        .then(ClientCommandManager.literal("tag")
+                                .then(ClientCommandManager.argument("tag", StringArgumentType.word())
+                                        .executes(context -> LookCommand.executeEntity(context, null, tagArg(context), 1))
+                                        .then(nArgument(n -> LookCommand.executeEntity(
+                                                n.context(), null, tagArg(n.context()), n.n()))))));
+    }
+
+    private record NArg(com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context, int n) {
+    }
+
+    /** Builds the trailing optional {@code n} (rank, default 1) argument node for {@code /glade look} selectors. */
+    private static RequiredArgumentBuilder<FabricClientCommandSource, Integer> nArgument(
+            java.util.function.ToIntFunction<NArg> executor) {
+        return ClientCommandManager.argument("n", IntegerArgumentType.integer(1))
+                .executes(context -> executor.applyAsInt(new NArg(context, value(context, "n"))));
+    }
+
+    private static Identifier entityTypeArg(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
+        return context.getArgument("entityType", Identifier.class);
+    }
+
+    private static String tagArg(com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
+        return StringArgumentType.getString(context, "tag");
     }
 
     private static GoalXZ xzGoal(
