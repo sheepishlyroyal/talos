@@ -40,6 +40,10 @@ public final class NavigateAndActTask extends GladeTask {
     private static final double NODE_DISTANCE_SQUARED = 0.36;
     private static final long MIN_SPAM_JUMP_INTERVAL_NANOS = 1_000_000_000L / 11L;
     private static final long MAX_SPAM_JUMP_INTERVAL_NANOS = 1_000_000_000L / 7L;
+    private static final int PLAN_LOOKAHEAD_NODES = 6;
+    private static final int BRAKING_NODES = 3;
+    private static final int MIN_MODE_DWELL_TICKS = 8;
+    private enum PlannedMode { SPRINT_JUMP, WALK, SPRINT, SPAM_JUMP, SWIM, CRAWL }
     private final MinecraftClient client;
     private final List<BlockPos> nodes;
     private final Predicate<BlockPos> goal;
@@ -58,6 +62,9 @@ public final class NavigateAndActTask extends GladeTask {
     private boolean spamJumpWasGrounded;
     private BlockPos sprintJumpLanding;
     private boolean sprintJumpWasAirborne;
+    private boolean sprintJumpUsesSprint = true;
+    private PlannedMode committedMode = PlannedMode.WALK;
+    private int committedModeSinceTick;
     private String lastStatus = "";
 
     /** Unobtrusive action-bar readout so the current movement mode is visible in-game. */
@@ -120,6 +127,7 @@ public final class NavigateAndActTask extends GladeTask {
 
         BlockPos node = nodes.get(index);
         if (handleTraversal(player, node)) { scheduleDelay(); return; }
+        updateCommittedMode();
         Vec3d actionTarget = action == null ? null : action.target();
         if (actionTarget != null && player.getEyePos().squaredDistanceTo(actionTarget)
                 <= action.reach() * action.reach()) {
@@ -183,15 +191,26 @@ public final class NavigateAndActTask extends GladeTask {
                 steerToward(player, followTarget, isSlippery(player, node));
                 // A gap edge is one indivisible movement: never let waypoint advancement
                 // turn the player back toward a passed node during the airborne arc.
-                status("sprint-jump");
+                sprintJumpUsesSprint = committedMode != PlannedMode.WALK || horizontalDistance > 2;
+                status(sprintJumpUsesSprint ? "sprint-jump" : "precise jump");
                 sprintJumpLanding = node.toImmutable();
                 sprintJumpWasAirborne = !player.isOnGround();
+                client.options.sprintKey.setPressed(sprintJumpUsesSprint);
                 client.options.jumpKey.setPressed(true);
-            } else if (!hasOpenJumpHeadroom(player.getBlockPos()) || !hasOpenJumpHeadroom(node)) {
+            } else if (committedMode == PlannedMode.SPAM_JUMP) {
                 steerToward(player, followTarget, isSlippery(player, node));
                 status("spam-jump");
                 client.options.jumpKey.setPressed(false);
                 pressSpamJumpIfReady(player);
+            } else if (committedMode == PlannedMode.WALK) {
+                steerToward(player, followTarget, isSlippery(player, node));
+                status("walk/precise");
+                client.options.sprintKey.setPressed(false);
+                client.options.jumpKey.setPressed(false);
+            } else if (committedMode == PlannedMode.SPRINT) {
+                steerToward(player, followTarget, isSlippery(player, node));
+                status("sprint");
+                client.options.jumpKey.setPressed(false);
             } else {
                 steerToward(player, followTarget, isSlippery(player, node));
                 // Continuous bunny-hopping is only appropriate in a fully open
@@ -203,6 +222,110 @@ public final class NavigateAndActTask extends GladeTask {
         scheduleDelay();
     }
 
+    /**
+     * Builds a small segment plan ahead of the current waypoint.  Safety modes may
+     * begin before their first node (the braking window); open running begins only
+     * when the whole visible prefix is consistently open.
+     */
+    private void updateCommittedMode() {
+        PlannedMode desired = classifyNode(index);
+        int end = Math.min(nodes.size(), index + PLAN_LOOKAHEAD_NODES);
+        if (desired == PlannedMode.SPRINT_JUMP) {
+            for (int i = index + 1; i < end; i++) {
+                PlannedMode ahead = classifyNode(i);
+                if (ahead != PlannedMode.SPRINT_JUMP) {
+                    if (i - index <= BRAKING_NODES) desired = brakingMode(ahead);
+                    break;
+                }
+            }
+        }
+
+        if (desired == committedMode) return;
+        boolean safetyTransition = committedMode == PlannedMode.SPRINT_JUMP
+                && desired != PlannedMode.SPRINT_JUMP;
+        boolean dwellComplete = ticks - committedModeSinceTick >= MIN_MODE_DWELL_TICKS;
+        // A safety boundary must brake immediately. Other boundaries wait out the
+        // dwell, preventing one-tick open/precise flicker from starting a new run.
+        if (safetyTransition || dwellComplete) {
+            committedMode = desired;
+            committedModeSinceTick = ticks;
+            if (committedMode != PlannedMode.SPRINT_JUMP) {
+                client.options.jumpKey.setPressed(false);
+            }
+        }
+    }
+
+    private PlannedMode brakingMode(PlannedMode upcoming) {
+        return switch (upcoming) {
+            case SWIM, CRAWL, SPAM_JUMP, WALK -> PlannedMode.WALK;
+            case SPRINT -> PlannedMode.SPRINT;
+            case SPRINT_JUMP -> PlannedMode.SPRINT_JUMP;
+        };
+    }
+
+    /** Classifies the segment beginning at one path node using path and terrain shape. */
+    private PlannedMode classifyNode(int at) {
+        BlockPos pos = nodes.get(at);
+        BlockPos from = at > 0 ? nodes.get(at - 1) : pos;
+        if (isFluid(pos)) return PlannedMode.SWIM;
+        if (isCrawlNode(pos)) return PlannedMode.CRAWL;
+        if (isLowCeilingAscent(from, pos) || isStairOrSlab(pos.down())
+                || isStairOrSlab(from.down())) return PlannedMode.SPAM_JUMP;
+        if (!hasOpenJumpHeadroom(pos)) return PlannedMode.SPAM_JUMP;
+        if (isIce(pos.down())) return PlannedMode.SPRINT;
+
+        // The final three nodes, turns/reversals, narrow footing, and exposed edges
+        // are precision segments. They are deliberately identified from the path,
+        // not from transient player position.
+        if (nodes.size() - 1 - at <= BRAKING_NODES || isTurn(at)
+                || isNarrowLanding(pos) || isEdgeBounded(pos) || isTightGap(pos)) {
+            return PlannedMode.WALK;
+        }
+        return PlannedMode.SPRINT_JUMP;
+    }
+
+    private boolean isTurn(int at) {
+        if (at <= 0 || at + 1 >= nodes.size()) return false;
+        BlockPos before = nodes.get(at - 1), here = nodes.get(at), after = nodes.get(at + 1);
+        int inX = Integer.compare(here.getX(), before.getX());
+        int inZ = Integer.compare(here.getZ(), before.getZ());
+        int outX = Integer.compare(after.getX(), here.getX());
+        int outZ = Integer.compare(after.getZ(), here.getZ());
+        return inX != outX || inZ != outZ;
+    }
+
+    /** A landing with no dependable lateral neighbor is effectively a pillar. */
+    private boolean isNarrowLanding(BlockPos pos) {
+        int safeSides = 0;
+        for (Direction direction : Direction.Type.HORIZONTAL) {
+            if (!isFallRisk(pos.offset(direction).down())) safeSides++;
+        }
+        return safeSides <= 1;
+    }
+
+    /** Two or more exposed sides make momentum beyond this node dangerous. */
+    private boolean isEdgeBounded(BlockPos pos) {
+        int exposed = 0;
+        for (Direction direction : Direction.Type.HORIZONTAL) {
+            BlockPos side = pos.offset(direction);
+            if (isFallRisk(side.down()) || isHazardCell(side) || isHazardCell(side.down())) exposed++;
+        }
+        return exposed >= 2;
+    }
+
+    /** Opposing body-height walls identify a one-wide entrance/corridor. */
+    private boolean isTightGap(BlockPos pos) {
+        return (blocksBody(pos.west()) && blocksBody(pos.east()))
+                || (blocksBody(pos.north()) && blocksBody(pos.south()));
+    }
+
+    private boolean isHazardCell(BlockPos pos) {
+        var state = client.world.getBlockState(pos);
+        return state.isOf(Blocks.FIRE) || state.isOf(Blocks.SOUL_FIRE)
+                || state.isOf(Blocks.CACTUS) || state.isOf(Blocks.MAGMA_BLOCK)
+                || state.isOf(Blocks.CAMPFIRE) || state.isOf(Blocks.SOUL_CAMPFIRE);
+    }
+
     private void continueSprintJump(ClientPlayerEntity player) {
         Vec3d landingAim = new Vec3d(sprintJumpLanding.getX() + 0.5, player.getEyeY(),
                 sprintJumpLanding.getZ() + 0.5);
@@ -210,7 +333,7 @@ public final class NavigateAndActTask extends GladeTask {
         aim.tick();
         releaseDirectionalInputs();
         client.options.forwardKey.setPressed(true);
-        client.options.sprintKey.setPressed(true);
+        client.options.sprintKey.setPressed(sprintJumpUsesSprint);
         // Holding jump is intentional for a single gap-crossing arc; randomized pulses
         // are reserved for repeated grounded stair/step/head-bump jumps.
         client.options.jumpKey.setPressed(true);
@@ -279,8 +402,12 @@ public final class NavigateAndActTask extends GladeTask {
         float delta = MathHelper.wrapDegrees(targetYaw - player.getYaw());
         float deadzone = slippery ? 2.5F : 1.25F;
         if (Math.abs(delta) > deadzone) {
-            float maxChange = slippery ? 4.0F : 12.0F;
-            float yaw = player.getYaw() + MathHelper.clamp(delta, -maxChange, maxChange);
+            // Snap the heading on normal terrain so jumps launch in the right direction
+            // (the look-ahead target already smooths steering); only ice keeps a damped
+            // turn to avoid overshooting on low friction.
+            float yaw = slippery
+                    ? player.getYaw() + MathHelper.clamp(delta, -4.0F, 4.0F)
+                    : targetYaw;
             player.setYaw(yaw); player.setHeadYaw(yaw); player.setBodyYaw(yaw);
         }
         player.setPitch(MathHelper.lerp(0.18F, player.getPitch(), 0.0F));
