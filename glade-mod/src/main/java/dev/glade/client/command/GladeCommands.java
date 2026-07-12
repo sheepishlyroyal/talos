@@ -99,7 +99,11 @@ public final class GladeCommands {
                 .then(ClientCommandManager.literal("mine")
                         .then(coordinates((context, pos) -> ActionCommand.mine(context, pos)))
                         .then(ClientCommandManager.literal("direction")
-                                .then(directionNode((context, pos) -> ActionCommand.mine(context, pos)))))
+                                .then(directionNode((context, pos) -> ActionCommand.mine(context, pos))))
+                        .then(ClientCommandManager.literal("block")
+                                .then(ClientCommandManager.argument("blockId", IdentifierArgumentType.identifier())
+                                        .executes(context -> ActionCommand.mineBlock(context, 1))
+                                        .then(nArgument(n -> ActionCommand.mineBlock(n.context(), n.n()))))))
                 .then(ClientCommandManager.literal("place")
                         .then(coordinates((context, pos) -> ActionCommand.place(context, pos))))
                 .then(ClientCommandManager.literal("coords")
@@ -165,6 +169,10 @@ public final class GladeCommands {
      * <ul>
      *   <li>{@code /glade look <yaw> <pitch>} — absolute or {@code ^}-relative angles (existing behavior).</li>
      *   <li>{@code /glade look block <blockId> [n]} — aim at the Nth-closest matching block.</li>
+     *   <li>{@code /glade look coords <x> <y> <z>} — aim at the center of an explicit block position
+     *       ({@code ~}-relative coordinates supported).</li>
+     *   <li>{@code /glade look direction <yaw> <pitch>} — aim at the block hit by a raycast along a
+     *       ({@code ^}-relative) direction.</li>
      *   <li>{@code /glade look entity type <entityTypeId> [tag <tag>] [n]} — aim at the Nth-closest
      *       entity of a given type, optionally also filtered by scoreboard tag.</li>
      *   <li>{@code /glade look entity tag <tag> [n]} — aim at the Nth-closest entity with a tag,
@@ -183,6 +191,10 @@ public final class GladeCommands {
                         .then(ClientCommandManager.argument("blockId", IdentifierArgumentType.identifier())
                                 .executes(context -> LookCommand.executeBlock(context, 1))
                                 .then(nArgument(n -> LookCommand.executeBlock(n.context(), n.n())))))
+                .then(ClientCommandManager.literal("coords")
+                        .then(coordinates((context, pos) -> LookCommand.executeCoords(context, pos))))
+                .then(ClientCommandManager.literal("direction")
+                        .then(directionNode((context, pos) -> LookCommand.executeDirection(context, pos))))
                 .then(ClientCommandManager.argument("selector", SelectorArgumentType.selector())
                         .executes(context -> LookCommand.executeSelector(context, selectorArg(context), 1))
                         .then(nArgument(n -> LookCommand.executeSelector(
