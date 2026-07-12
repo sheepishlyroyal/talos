@@ -59,12 +59,15 @@ public final class GladeCommands {
                                                                                 coordValue(context, "y", eyePos(context).y),
                                                                                 coordValue(context, "z", eyePos(context).z),
                                                                                 value(context, "range")))))))))
-                        .then(ClientCommandManager.literal("xz")
-                                .then(coordinate("x")
-                                        .then(coordinate("z")
-                                                .executes(context -> GotoCommand.execute(
-                                                        context, xzGoal(context))))))
+                        // `/glade goto <x> <z>` — pathfind to X,Z at the player's current Y.
+                        // `/glade goto <x> <y> <z>` — pathfind to an exact block. These are two
+                        // distinct sibling argument nodes under "x" (named "z" and "y"
+                        // respectively) so the 2nd token's meaning is unambiguous per branch —
+                        // chaining a shared node here would silently swap Y and Z.
                         .then(coordinate("x")
+                                .then(coordinate("z")
+                                        .executes(context -> GotoCommand.execute(
+                                                context, xzGoal(context))))
                                 .then(coordinate("y")
                                         .then(coordinate("z")
                                                 .executes(context -> GotoCommand.execute(
@@ -73,7 +76,8 @@ public final class GladeCommands {
                                                                 coordValue(context, "x", eyePos(context).x),
                                                                 coordValue(context, "y", eyePos(context).y),
                                                                 coordValue(context, "z", eyePos(context).z))))))))
-                // Top-level shorthand for `glade goto xz <x> <z>`.
+                // Back-compat alias: `/glade xz <x> <z>` delegates to the same XZ handler as
+                // `/glade goto <x> <z>`.
                 .then(ClientCommandManager.literal("xz")
                         .then(coordinate("x")
                                 .then(coordinate("z")
@@ -138,6 +142,10 @@ public final class GladeCommands {
                                     context.getSource().sendFeedback(Text.literal(GladeBridge.statusText()));
                                     return 1;
                                 })))
+                .then(ClientCommandManager.literal("stop")
+                        .executes(StopCommand::execute)
+                        .then(ClientCommandManager.literal("all")
+                                .executes(StopCommand::execute)))
                 .then(ClientCommandManager.literal("kill")
                         .then(ClientCommandManager.literal("nearest")
                                 .executes(context -> ActionCommand.killNearest(context, 6.0))
