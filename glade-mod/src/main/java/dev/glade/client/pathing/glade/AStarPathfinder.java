@@ -9,6 +9,10 @@ import java.util.PriorityQueue;
 import java.util.function.Predicate;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.FenceGateBlock;
+import net.minecraft.block.SlabBlock;
+import net.minecraft.block.StairsBlock;
+import net.minecraft.block.TrapdoorBlock;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.enchantment.Enchantments;
@@ -16,6 +20,7 @@ import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.tag.FluidTags;
+import net.minecraft.state.property.Properties;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 
@@ -116,19 +121,20 @@ public final class AStarPathfinder {
     }
 
     private List<Move> neighbors(BlockPos from) {
-        List<Move> result = new ArrayList<>(8);
+        List<Move> result = new ArrayList<>(16);
         BlockPos pillar = from.up();
         if (hasPlaceableBlocks && isLoaded(pillar.up()) && isPassable(pillar)
                 && isPassable(pillar.up())) {
-            result.add(new Move(pillar.toImmutable(), movementCost(from, pillar, false)));
+            result.add(new Move(pillar.toImmutable(), movementCost(from, pillar, MoveType.PLACE)));
         }
         Map<Direction, BlockPos> cardinalDestinations = new HashMap<>();
         for (Direction direction : CARDINALS) {
             BlockPos destination = resolveMove(from, direction.getOffsetX(), direction.getOffsetZ());
             if (destination != null) {
                 cardinalDestinations.put(direction, destination);
-                result.add(new Move(destination, movementCost(from, destination, false)));
+                result.add(new Move(destination, movementCost(from, destination, classify(from, destination, false))));
             }
+            addJumpMoves(result, from, direction);
         }
 
         int[][] diagonals = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
@@ -142,15 +148,54 @@ public final class AStarPathfinder {
             }
             BlockPos destination = resolveMove(from, diagonal[0], diagonal[1]);
             if (destination != null) {
-                result.add(new Move(destination, movementCost(from, destination, true)));
+                result.add(new Move(destination, movementCost(from, destination, MoveType.DIAGONAL)));
             }
         }
+
+        // Water is a volume rather than a floor: allow deliberate ascent and descent.
+        if (isWater(from) || isWater(from.down())) {
+            BlockPos up = from.up();
+            if (isSwimmable(up)) result.add(new Move(up.toImmutable(), movementCost(from, up, MoveType.SWIM)));
+            BlockPos down = from.down();
+            if (isSwimmable(down)) result.add(new Move(down.toImmutable(), movementCost(from, down, MoveType.SWIM)));
+        }
         return result;
+    }
+
+    private void addJumpMoves(List<Move> result, BlockPos from, Direction direction) {
+        for (int distance = 2; distance <= 4; distance++) {
+            BlockPos same = from.offset(direction, distance);
+            BlockPos lower = same.down();
+            BlockPos landing = isStandable(same) ? same : isStandable(lower) ? lower : null;
+            if (landing == null || !hasGap(from, direction, distance)
+                    || !jumpArcClear(from, direction, distance, landing)) continue;
+            MoveType type = distance == 2 ? MoveType.JUMP : MoveType.SPRINT_JUMP;
+            result.add(new Move(landing.toImmutable(), movementCost(from, landing, type)));
+        }
+    }
+
+    private boolean hasGap(BlockPos from, Direction direction, int distance) {
+        for (int step = 1; step < distance; step++) {
+            if (!hasSafeSupport(from.offset(direction, step).down())) return true;
+        }
+        return false;
+    }
+
+    private boolean jumpArcClear(BlockPos from, Direction direction, int distance, BlockPos landing) {
+        if (!isPassable(from.up())) return false;
+        for (int step = 1; step < distance; step++) {
+            BlockPos path = from.offset(direction, step);
+            // The player rises during the middle of the arc, so reserve foot, body and head cells.
+            if (!isLoaded(path) || !isPassable(path) || !isPassable(path.up())
+                    || !isPassable(path.up(2))) return false;
+        }
+        return isPassable(landing) && isPassable(landing.up());
     }
 
     private BlockPos resolveMove(BlockPos from, int dx, int dz) {
         BlockPos horizontal = from.add(dx, 0, dz);
         if (!isLoaded(horizontal)) return null;
+        if (isSwimmable(horizontal)) return horizontal.toImmutable();
         if (isStandable(horizontal)) return horizontal.toImmutable();
 
         // A two-block-high mine-through corridor is a legal edge. The closed-form
@@ -179,6 +224,7 @@ public final class AStarPathfinder {
         if (!isLoaded(pos) || !isLoaded(pos.down()) || !isLoaded(pos.up())) return false;
         if (isHazard(pos) || isHazard(pos.up()) || isHazard(pos.down())) return false;
         if (!isPassable(pos) || !isPassable(pos.up())) return false;
+        if (isWater(pos) || isWater(pos.up())) return true;
         BlockState support = world.getBlockState(pos.down());
         if (support.isSolidBlock(world, pos.down())) return true;
         var shape = support.getCollisionShape(world, pos.down());
@@ -186,7 +232,16 @@ public final class AStarPathfinder {
     }
 
     private boolean isPassable(BlockPos pos) {
-        return !isHazard(pos) && world.getBlockState(pos).getCollisionShape(world, pos).isEmpty();
+        if (!isLoaded(pos) || isHazard(pos)) return false;
+        BlockState state = world.getBlockState(pos);
+        if (state.getBlock() instanceof TrapdoorBlock || state.getBlock() instanceof FenceGateBlock) {
+            return state.contains(Properties.OPEN) && state.get(Properties.OPEN);
+        }
+        return state.getCollisionShape(world, pos).isEmpty();
+    }
+
+    private boolean isSwimmable(BlockPos pos) {
+        return isLoaded(pos) && isWater(pos) && isPassable(pos) && isPassable(pos.up());
     }
 
     private boolean isHazard(BlockPos pos) {
@@ -196,20 +251,32 @@ public final class AStarPathfinder {
                 || state.isOf(Blocks.CAMPFIRE) || state.isOf(Blocks.SOUL_CAMPFIRE);
     }
 
-    private double movementCost(BlockPos from, BlockPos to, boolean diagonal) {
-        double horizontal = diagonal ? SQRT_TWO : 1.0;
-        double vertical = Math.abs(to.getY() - from.getY()) * 0.35;
-        double water = isWater(to) || isWater(to.up()) ? 2.5 : 1.0;
-        // Flat cardinal edges are the straight-line sprintable primitive.
-        double sprintDiscount = !diagonal && to.getY() == from.getY() ? 0.95 : 1.0;
-        double seconds = (horizontal / 4.317 + vertical * 0.25) * water * sprintDiscount;
-        if (!isPassable(to)) seconds += estimateBreakTimeSeconds(to);
-        if (!isPassable(to.up())) seconds += estimateBreakTimeSeconds(to.up());
-        if (!hasSolidSupport(to.down())) seconds += estimatePlaceTimeSeconds(false);
-        if (to.getY() > from.getY() && !hasSolidSupport(to.down())) {
-            seconds += estimatePlaceTimeSeconds(true);
+    private MoveType classify(BlockPos from, BlockPos to, boolean diagonal) {
+        if (isWater(from) || isWater(to)) return MoveType.SWIM;
+        if (!isPassable(to) || !isPassable(to.up())) return MoveType.BREAK;
+        if (!hasSafeSupport(to.down())) return MoveType.PLACE;
+        if (to.getY() > from.getY()) {
+            BlockState support = world.getBlockState(to.down());
+            return support.getBlock() instanceof StairsBlock || support.getBlock() instanceof SlabBlock
+                    ? MoveType.STAIR_STEP : MoveType.JUMP;
         }
-        return seconds;
+        return diagonal ? MoveType.DIAGONAL : MoveType.WALK;
+    }
+
+    private double movementCost(BlockPos from, BlockPos to, MoveType type) {
+        double cost = switch (type) {
+            case WALK -> to.getY() == from.getY() && hasSafeSupport(to.down()) ? 0.90 : 1.0;
+            case DIAGONAL -> SQRT_TWO;
+            case JUMP -> 1.0;
+            case SPRINT_JUMP -> 1.05;
+            case SWIM -> 1.75 + Math.abs(to.getY() - from.getY()) * 0.20;
+            case PLACE -> 2.0 + (to.getY() > from.getY() ? 0.5 : 0.0);
+            case BREAK -> 1.0;
+            case STAIR_STEP -> 0.95;
+        };
+        if (!isPassable(to)) cost += estimateBreakTimeSeconds(to);
+        if (!isPassable(to.up())) cost += estimateBreakTimeSeconds(to.up());
+        return cost;
     }
 
     public double estimateBreakTimeSeconds(BlockPos pos) {
@@ -267,6 +334,15 @@ public final class AStarPathfinder {
                 && state.getCollisionShape(world, pos).getMax(Direction.Axis.Y) >= 0.999);
     }
 
+    private boolean hasSafeSupport(BlockPos pos) {
+        if (!hasSolidSupport(pos)) return false;
+        BlockState state = world.getBlockState(pos);
+        if (state.getBlock() instanceof TrapdoorBlock || state.getBlock() instanceof FenceGateBlock) {
+            return !(state.contains(Properties.OPEN) && state.get(Properties.OPEN));
+        }
+        return true;
+    }
+
     private boolean isWater(BlockPos pos) {
         return world.getBlockState(pos).getFluidState().isIn(FluidTags.WATER);
     }
@@ -280,7 +356,7 @@ public final class AStarPathfinder {
         int dz = Math.abs(pos.getZ() - target.getZ());
         int min = Math.min(dx, dz);
         double octile = dx + dz + (SQRT_TWO - 2.0) * min;
-        return octile / 4.317 + Math.abs(pos.getY() - target.getY()) * 0.25;
+        return octile * 0.90 + Math.abs(pos.getY() - target.getY()) * 0.20;
     }
 
     private static List<BlockPos> reconstruct(BlockPos end, Map<BlockPos, BlockPos> parents) {
@@ -296,8 +372,9 @@ public final class AStarPathfinder {
         @Override public int compareTo(OpenNode other) { return Double.compare(score, other.score); }
     }
     private record Move(BlockPos pos, double cost) { }
+    private enum MoveType { WALK, DIAGONAL, JUMP, SPRINT_JUMP, SWIM, PLACE, BREAK, STAIR_STEP }
 
     public record SearchResult(List<BlockPos> path, boolean reachesGoal, String detail) { }
 
-    // TODO v1: parkour jumps, elytra, upward swimming, and doors.
+    // Elytra and interactive door opening remain outside the ground-navigation model.
 }

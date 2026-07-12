@@ -16,9 +16,15 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.item.BlockItem;
+import net.minecraft.block.FenceGateBlock;
+import net.minecraft.block.SlabBlock;
+import net.minecraft.block.StairsBlock;
+import net.minecraft.block.TrapdoorBlock;
+import net.minecraft.registry.tag.FluidTags;
+import net.minecraft.state.property.Properties;
 import org.jetbrains.annotations.Nullable;
 
-/** One cooperative tick loop for waypoint movement, humanized looking, and route actions. */
+/** One cooperative tick loop for waypoint movement, immediate looking, and route actions. */
 public final class NavigateAndActTask extends GladeTask {
     public interface RouteAction {
         /** Current world-space target, or null when there is no target to act on. */
@@ -78,8 +84,23 @@ public final class NavigateAndActTask extends GladeTask {
             aim.tick();
             releaseInputs();
             client.options.forwardKey.setPressed(true);
-            if (node.getY() > player.getBlockY() && player.isOnGround()) client.options.jumpKey.setPressed(true);
-            if (index + 1 < nodes.size() && node.getY() == nodes.get(index + 1).getY())
+            int horizontalDistance = Math.max(Math.abs(node.getX() - player.getBlockX()),
+                    Math.abs(node.getZ() - player.getBlockZ()));
+            boolean jumpEdge = horizontalDistance > 1;
+            boolean ascending = node.getY() > player.getBlockY();
+            boolean stairOrSlab = isStairOrSlab(node.down()) || isStairOrSlab(player.getBlockPos().down());
+            if (player.isTouchingWater()) {
+                // Keep swimming forward; rise for higher nodes and near-level surface transitions.
+                client.options.jumpKey.setPressed(ascending || node.getY() >= player.getBlockY());
+            } else if (jumpEdge) {
+                client.options.sprintKey.setPressed(true);
+                client.options.jumpKey.setPressed(true);
+            } else if (ascending || stairOrSlab) {
+                // Reassert every tick: stairs, slabs, and head-hit ascents benefit from space spam.
+                client.options.jumpKey.setPressed(true);
+            }
+            if (!player.isTouchingWater() && index + 1 < nodes.size()
+                    && node.getY() == nodes.get(index + 1).getY())
                 client.options.sprintKey.setPressed(true);
         }
         scheduleDelay();
@@ -110,8 +131,16 @@ public final class NavigateAndActTask extends GladeTask {
         }
         breaking = null;
         BlockPos support = node.down();
-        if (client.world.getBlockState(support).getCollisionShape(client.world, support).isEmpty()) {
+        var supportState = client.world.getBlockState(support);
+        if (isWater(node) || isWater(support)) return false;
+        if (isFallRisk(support)) {
             releaseInputs();
+            // Open trapdoors/gates occupy the support cell: remove them before filling it.
+            if (!supportState.isAir() && (supportState.getBlock() instanceof TrapdoorBlock
+                    || supportState.getBlock() instanceof FenceGateBlock)) {
+                breakBlock(player, support, supportState);
+                return true;
+            }
             int blockSlot = -1;
             for (int i = 0; i < 9; i++) if (player.getInventory().getStack(i).getItem() instanceof BlockItem) {
                 blockSlot = i; break;
@@ -136,6 +165,43 @@ public final class NavigateAndActTask extends GladeTask {
             return true;
         }
         return false;
+    }
+
+    private void breakBlock(ClientPlayerEntity player, BlockPos pos, net.minecraft.block.BlockState state) {
+        aim.aimAt(pos); aim.tick();
+        if (player.getEyePos().squaredDistanceTo(Vec3d.ofCenter(pos))
+                > player.getBlockInteractionRange() * player.getBlockInteractionRange()
+                || !aim.isAimed() || !GladeClient.tickBudget().hasBudgetRemaining()) return;
+        int best = player.getInventory().getSelectedSlot();
+        float speed = player.getInventory().getStack(best).getMiningSpeedMultiplier(state);
+        for (int i = 0; i < 9; i++) {
+            float candidate = player.getInventory().getStack(i).getMiningSpeedMultiplier(state);
+            if (candidate > speed) { best = i; speed = candidate; }
+        }
+        player.getInventory().setSelectedSlot(best);
+        if (!pos.equals(breaking)) {
+            client.interactionManager.attackBlock(pos, Direction.UP);
+            breaking = pos.toImmutable();
+        } else client.interactionManager.updateBlockBreakingProgress(pos, Direction.UP);
+        player.swingHand(Hand.MAIN_HAND);
+    }
+
+    private boolean isFallRisk(BlockPos support) {
+        var state = client.world.getBlockState(support);
+        if (state.getBlock() instanceof TrapdoorBlock || state.getBlock() instanceof FenceGateBlock) {
+            return state.contains(Properties.OPEN) && state.get(Properties.OPEN);
+        }
+        var shape = state.getCollisionShape(client.world, support);
+        return shape.isEmpty() || shape.getMax(Direction.Axis.Y) < 0.5;
+    }
+
+    private boolean isStairOrSlab(BlockPos pos) {
+        var block = client.world.getBlockState(pos).getBlock();
+        return block instanceof StairsBlock || block instanceof SlabBlock;
+    }
+
+    private boolean isWater(BlockPos pos) {
+        return client.world.getBlockState(pos).getFluidState().isIn(FluidTags.WATER);
     }
 
     private static boolean reached(ClientPlayerEntity player, BlockPos node) {

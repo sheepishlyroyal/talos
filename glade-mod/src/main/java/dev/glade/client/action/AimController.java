@@ -11,8 +11,10 @@ import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.RaycastContext;
 
-/** Applies humanized rotation plans without ever snapping directly to a target. */
+/** Applies either immediate or humanized rotation plans to a target. */
 public final class AimController {
+    /** Global escape hatch for legacy humanized looking. Movement requires snapping by default. */
+    public static boolean HUMANIZE = false;
     private static final double REPLAN_DISTANCE_SQUARED = 0.12 * 0.12;
     private static final float AIM_EPSILON_DEGREES = 1.25F;
 
@@ -46,6 +48,12 @@ public final class AimController {
             plan = null;
             return;
         }
+        if (!HUMANIZE) {
+            plan = null;
+            plannedTarget = newTarget;
+            snapToTarget();
+            return;
+        }
         if (plan == null || plannedTarget == null
                 || plannedTarget.squaredDistanceTo(newTarget) > REPLAN_DISTANCE_SQUARED) {
             float[] angles = RotationHumanizer.yawPitchTo(client.player.getEyePos(), newTarget);
@@ -57,6 +65,10 @@ public final class AimController {
 
     /** Advances at most one humanized rotation step. */
     public void tick() {
+        if (!HUMANIZE) {
+            snapToTarget();
+            return;
+        }
         if (client.player == null || plan == null || !plan.hasNext()) {
             return;
         }
@@ -68,12 +80,25 @@ public final class AimController {
     }
 
     public boolean isAimed() {
+        if (!HUMANIZE) return client.player != null && target != null;
         if (client.player == null || target == null || (plan != null && plan.hasNext())) {
             return false;
         }
         float[] desired = RotationHumanizer.yawPitchTo(client.player.getEyePos(), target);
         return Math.abs(MathHelper.wrapDegrees(desired[0] - client.player.getYaw())) <= AIM_EPSILON_DEGREES
                 && Math.abs(desired[1] - client.player.getPitch()) <= AIM_EPSILON_DEGREES;
+    }
+
+    private void snapToTarget() {
+        if (client.player == null || target == null) return;
+        Vec3d delta = target.subtract(client.player.getEyePos());
+        double horizontal = Math.sqrt(delta.x * delta.x + delta.z * delta.z);
+        float yaw = (float) MathHelper.wrapDegrees(Math.toDegrees(Math.atan2(delta.z, delta.x)) - 90.0);
+        float pitch = (float) MathHelper.clamp(-Math.toDegrees(Math.atan2(delta.y, horizontal)), -90.0, 90.0);
+        client.player.setYaw(yaw);
+        client.player.setPitch(pitch);
+        client.player.setHeadYaw(yaw);
+        client.player.setBodyYaw(yaw);
     }
 
     public boolean hasLineOfSight(Vec3d targetPoint) {
