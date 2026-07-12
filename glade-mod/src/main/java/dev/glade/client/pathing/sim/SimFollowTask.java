@@ -28,6 +28,8 @@ import net.minecraft.util.math.Vec3d;
 public final class SimFollowTask extends GladeTask {
     private static final double REACHED_SQUARED = 0.36;
     private static final int ROLLOUT_TICKS = 6;
+    private static final int LANDING_ROLLOUT_TICKS = 40;
+    private static final double OVERSHOOT_SLOP = 0.05;
     private static final int STUCK_TICKS = 100;
 
     private final MinecraftClient client;
@@ -109,7 +111,8 @@ public final class SimFollowTask extends GladeTask {
     /** Entity coordinates are feet/bottom-center, exactly the origin MotionState.box uses. */
     public static MotionState liveState(ClientPlayerEntity player) {
         MotionState.Pose pose = player.isCrawling() ? MotionState.Pose.CRAWL
-                : (player.isSwimming() || player.isInSwimmingPose())
+                : (player.isSubmergedInWater() || player.isSwimming()
+                        || player.isInSwimmingPose())
                         ? MotionState.Pose.SWIM : MotionState.Pose.STAND;
         // Classify fluid from the same exact AABB used by simulation, rather than trusting
         // entity flags whose update may trail the current client-world collision state.
@@ -135,29 +138,48 @@ public final class SimFollowTask extends GladeTask {
                 || primitive == Primitive.SWIM;
         boolean wantsSneak = primitive == Primitive.CRAWL || primitive == Primitive.PLACE;
         boolean continuousRun = primitive == Primitive.SPRINT_JUMP;
+        Vec3d from = index > 0 ? route.waypoints().get(index - 1).position() : live.position();
+        Vec3d finalTarget = route.waypoints().getLast().position();
+        Vec3d finalFrom = route.waypoints().size() > 1
+                ? route.waypoints().get(route.waypoints().size() - 2).position()
+                : live.position();
+        boolean approachingFinal = index + 1 == route.waypoints().size();
+
+        // Preserve the held sprint-jump through open runs, but predict its actual landing on
+        // every control tick. A landing beyond the active mark is the one reason to release
+        // jump mid-commitment and offer forward/sneak braking controls.
+        MotionState heldLanding = continuousRun ? predictLanding(live,
+                new Input(1, 0, true, true, false, yaw), profile) : null;
+        boolean brakeForOvershoot = heldLanding != null
+                && (overshoot(heldLanding.position(), from, waypoint.position()) > OVERSHOOT_SLOP
+                || approachingFinal && overshoot(heldLanding.position(), finalFrom, finalTarget)
+                        > OVERSHOOT_SLOP);
         if (primitive != committedPrimitive) {
             committedPrimitive = primitive;
             committedStrafe = 0;
             strafeCommitUntil = ticks;
         }
         List<Input> candidates = new ArrayList<>();
-        candidates.add(new Input(1, 0, wantsJump, wantsSprint, wantsSneak, yaw));
+        candidates.add(new Input(1, 0, wantsJump && !brakeForOvershoot,
+                wantsSprint, wantsSneak || brakeForOvershoot, yaw));
         // Never offer a one-tick jump release during a committed sprint-jump or ledge climb.
-        if (!continuousRun && primitive != Primitive.STEP_UP) {
+        if ((!continuousRun || brakeForOvershoot) && primitive != Primitive.STEP_UP) {
             candidates.add(new Input(1, 0, false, wantsSprint, wantsSneak, yaw));
         }
         if (committedStrafe != 0 && ticks < strafeCommitUntil) {
-            candidates.add(new Input(1, committedStrafe * .35F, wantsJump,
+            candidates.add(new Input(1, committedStrafe * .35F,
+                    wantsJump && !brakeForOvershoot,
                     wantsSprint, wantsSneak, yaw));
         } else {
-            candidates.add(new Input(1, .35F, wantsJump, wantsSprint, wantsSneak, yaw));
-            candidates.add(new Input(1, -.35F, wantsJump, wantsSprint, wantsSneak, yaw));
+            candidates.add(new Input(1, .35F, wantsJump && !brakeForOvershoot,
+                    wantsSprint, wantsSneak, yaw));
+            candidates.add(new Input(1, -.35F, wantsJump && !brakeForOvershoot,
+                    wantsSprint, wantsSneak, yaw));
         }
         candidates.add(new Input(1, 0, false, false, true, yaw));
         candidates.add(new Input(0, 0, false, false, false, yaw));
         if (live.inFluid()) candidates.add(new Input(1, 0, true, false, false, yaw));
 
-        Vec3d from = index > 0 ? route.waypoints().get(index - 1).position() : live.position();
         Input best = candidates.getFirst();
         double bestScore = Double.NEGATIVE_INFINITY;
         for (Input candidate : candidates) {
@@ -175,9 +197,24 @@ public final class SimFollowTask extends GladeTask {
                 if (state.bumpedHorizontally()) score -= 7.0;
                 if (state.fluid() == MotionState.Fluid.LAVA) score -= 100.0;
                 if (isHazard(BlockPos.ofFloored(state.position()))) score -= 60.0;
-                if (!PlayerMotion.hitboxFits(client.world, state.pose(), state.position())) score -= 100.0;
+                if (!PlayerMotion.hitboxFits(client.world, state.pose(), state.position())) {
+                    score -= 1_000.0;
+                    break;
+                }
                 if (state.position().y < Math.min(from.y, waypoint.position().y) - 2.5) score -= 80.0;
+                score -= overshoot(state.position(), from, waypoint.position()) * 24.0;
+                if (approachingFinal) {
+                    score -= overshoot(state.position(), finalFrom, finalTarget) * 32.0;
+                }
                 oldDistance = distance;
+            }
+            MotionState landing = (!live.onGround() || candidate.jump())
+                    ? predictLanding(live, candidate, profile) : null;
+            if (landing != null) {
+                score -= overshoot(landing.position(), from, waypoint.position()) * 40.0;
+                if (approachingFinal) {
+                    score -= overshoot(landing.position(), finalFrom, finalTarget) * 55.0;
+                }
             }
             // Precision endpoints prefer braking over flying through the waypoint.
             boolean precise = index + 1 == route.waypoints().size()
@@ -347,6 +384,29 @@ public final class SimFollowTask extends GladeTask {
         double t = Math.max(0.0, Math.min(1.0,
                 ((point.x - a.x) * dx + (point.z - a.z) * dz) / length));
         return Math.hypot(point.x - (a.x + dx * t), point.z - (a.z + dz * t));
+    }
+
+    /** Horizontal distance beyond {@code target}, measured along this route edge. */
+    private static double overshoot(Vec3d point, Vec3d from, Vec3d target) {
+        double dx = target.x - from.x, dz = target.z - from.z;
+        double length = Math.hypot(dx, dz);
+        if (length < 1.0E-8) return 0.0;
+        return Math.max(0.0,
+                ((point.x - target.x) * dx + (point.z - target.z) * dz) / length);
+    }
+
+    /** Continue a fixed input until the arc lands, with a hard cooperative tick bound. */
+    private MotionState predictLanding(MotionState start, Input input,
+            MovementProfile profile) {
+        MotionState state = start;
+        boolean airborne = !start.onGround();
+        for (int tick = 0; tick < LANDING_ROLLOUT_TICKS; tick++) {
+            state = PlayerMotion.step(client.world, state, input, profile);
+            if (!PlayerMotion.hitboxFits(client.world, state.pose(), state.position())) return null;
+            airborne |= !state.onGround();
+            if (airborne && state.onGround()) return state;
+        }
+        return null;
     }
 
     private static String label(Primitive primitive) {

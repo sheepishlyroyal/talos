@@ -125,7 +125,12 @@ public final class SimPathfinder {
                     new Input(1.0F, 0.0F, true, true, false, yaw), true, false));
 
             MotionState fluidStart = withPose(node.state(), MotionState.Pose.SWIM);
-            if (node.state().inFluid() || fluidNear(world, node.cell(), dx, dz)) {
+            // Merely wet feet do not enable vanilla's compact swimming movement. A new swim
+            // edge requires water at both feet and head in the destination; an already compact
+            // swimming/crawling state is allowed to continue across a shallow boundary.
+            boolean continuingCompactPose = node.state().pose() == MotionState.Pose.SWIM
+                    || node.state().pose() == MotionState.Pose.CRAWL;
+            if (continuingCompactPose || deepWater(world, node.cell().add(dx, 0, dz))) {
                 add(result, rollout(world, node.withState(fluidStart), profile, opts,
                         Primitive.SWIM, direction,
                         new Input(1.0F, 0.0F, true, false, false, yaw), false, true));
@@ -262,8 +267,9 @@ public final class SimPathfinder {
         return world.getBlockState(pos).getCollisionShape(world, pos).isEmpty();
     }
 
-    private static boolean fluidNear(World world, BlockPos cell, int dx, int dz) {
-        return !world.getFluidState(cell.add(dx, 0, dz)).isEmpty();
+    private static boolean deepWater(World world, BlockPos feet) {
+        return world.getFluidState(feet).isIn(FluidTags.WATER)
+                && world.getFluidState(feet.up()).isIn(FluidTags.WATER);
     }
 
     private static MotionState withPose(MotionState state, MotionState.Pose pose) {
