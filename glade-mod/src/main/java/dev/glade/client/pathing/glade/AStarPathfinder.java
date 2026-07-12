@@ -292,6 +292,10 @@ public final class AStarPathfinder {
         if (!isPassable(to) || !isPassable(to.up())) return MoveType.BREAK;
         if (!hasSafeSupport(to.down())) return MoveType.PLACE;
         if (to.getY() > from.getY()) {
+            // The destination still has the two body cells required to stand, but a
+            // ceiling immediately above it prevents a normal jump arc. Treat this as
+            // an intentional head-bump step rather than making A* shy away from it.
+            if (!isPassable(to.up(2))) return MoveType.HEAD_HIT_STEP;
             // Supported one-block ascents are continuous spam-jump/step movement, not
             // discrete gap jumps with takeoff and landing recovery.
             return MoveType.STAIR_STEP;
@@ -303,7 +307,22 @@ public final class AStarPathfinder {
         double dx = to.getX() - from.getX(), dz = to.getZ() - from.getZ();
         double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
         double verticalDistance = Math.abs(to.getY() - from.getY());
-        double cost = horizontalDistance / effectiveSpeed(type, to) + verticalDistance * 0.12;
+        BlockState support = world.getBlockState(to.down());
+        BlockState through = world.getBlockState(to);
+        double velocityMultiplier = Math.min(support.getBlock().getVelocityMultiplier(),
+                through.getBlock().getVelocityMultiplier());
+        // Keep every terrain edge finite even for unusual modded blocks reporting zero.
+        double terrainMultiplier = 1.0 / Math.max(0.05, Math.min(1.0, velocityMultiplier));
+        // Cobweb slowdown is applied by entity collision while moving through its cell;
+        // its block velocity multiplier alone does not represent vanilla's severe drag.
+        if (through.isOf(Blocks.COBWEB)) terrainMultiplier *= 8.0;
+
+        double travelTime = (horizontalDistance / effectiveSpeed(type, to)
+                + verticalDistance * (type == MoveType.HEAD_HIT_STEP ? 0.08 : 0.12))
+                * terrainMultiplier;
+        // Ice remains attractive for meaningfully shorter routes, but loses close ties.
+        if (support.getBlock().getSlipperiness() > 0.6F) travelTime *= 1.20;
+        double cost = travelTime;
         // Gap jumps include alignment/takeoff and landing recovery. Raw airborne speed
         // alone otherwise makes them look cheaper than an equally quick ground route.
         if (type == MoveType.JUMP) cost += 0.55;
@@ -323,6 +342,7 @@ public final class AStarPathfinder {
             case BREAK, JUMP -> 4.317;
             case SPRINT_JUMP -> 6.0;
             case STAIR_STEP -> 5.2;
+            case HEAD_HIT_STEP -> 5.4;
             case PLACE -> 1.3;
             case SWIM -> isWater(destination.down()) ? 3.9 : 1.8;
         };
@@ -433,7 +453,10 @@ public final class AStarPathfinder {
         @Override public int compareTo(OpenNode other) { return Double.compare(score, other.score); }
     }
     private record Move(BlockPos pos, double cost) { }
-    private enum MoveType { WALK, DIAGONAL, JUMP, SPRINT_JUMP, SWIM, CRAWL, PLACE, BREAK, STAIR_STEP }
+    private enum MoveType {
+        WALK, DIAGONAL, JUMP, SPRINT_JUMP, SWIM, CRAWL, PLACE, BREAK, STAIR_STEP,
+        HEAD_HIT_STEP
+    }
 
     public record SearchResult(List<BlockPos> path, boolean reachesGoal, String detail) { }
 

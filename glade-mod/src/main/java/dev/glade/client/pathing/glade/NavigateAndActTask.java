@@ -19,6 +19,7 @@ import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.item.BlockItem;
 import net.minecraft.block.FenceGateBlock;
+import net.minecraft.block.Blocks;
 import net.minecraft.block.SlabBlock;
 import net.minecraft.block.StairsBlock;
 import net.minecraft.block.TrapdoorBlock;
@@ -139,17 +140,39 @@ public final class NavigateAndActTask extends GladeTask {
             boolean stairOrSlab = isStairOrSlab(node.down()) || isStairOrSlab(player.getBlockPos().down());
             boolean swimEdge = isFluid(node) || player.isSwimming() || player.isSubmergedInWater()
                     || player.isTouchingWater() || player.isInLava();
+            boolean inCobweb = isCobweb(player.getBlockPos()) || isCobweb(node);
+            boolean stickyJumpSurface = isStickyJumpSurface(player.getBlockPos().down())
+                    || isStickyJumpSurface(node.down());
+            boolean headHitStep = isLowCeilingAscent(player.getBlockPos(), node);
             if (swimEdge) {
                 // Swimming is driven by view pitch. Jump causes repeated surface
                 // breaches and sinking, so it is deliberately never used here.
                 status(isLava(node) || player.isInLava() ? "swimming (lava)" : "swimming");
                 client.options.jumpKey.setPressed(false);
                 steerSwimming(player, followTarget, node);
+            } else if (inCobweb) {
+                // Sprinting and jumping only waste inputs against cobweb collision.
+                status("slow terrain (cobweb)");
+                client.options.sprintKey.setPressed(false);
+                client.options.jumpKey.setPressed(false);
+                steerToward(player, followTarget, false);
+            } else if (stickyJumpSurface) {
+                // Honey suppresses jump velocity and slime turns repeated jumps into
+                // unwanted bounces. Push through without fighting either surface.
+                status("slow terrain (sticky)");
+                client.options.sprintKey.setPressed(false);
+                client.options.jumpKey.setPressed(false);
+                steerToward(player, followTarget, false);
             } else if (isCrawlNode(node)) {
                 status("crawling");
                 client.options.sneakKey.setPressed(true);
                 client.options.jumpKey.setPressed(false);
                 steerToward(player, followTarget, false);
+            } else if (headHitStep) {
+                steerToward(player, followTarget, isSlippery(player, node));
+                status("spam-jump (head-hit)");
+                client.options.jumpKey.setPressed(false);
+                pressSpamJumpIfReady(player);
             } else if (stairOrSlab) {
                 steerToward(player, followTarget, isSlippery(player, node));
                 status("spam-jump (stairs)");
@@ -281,6 +304,22 @@ public final class NavigateAndActTask extends GladeTask {
     private boolean isCrawlNode(BlockPos pos) {
         return client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty()
                 && !client.world.getBlockState(pos.up()).getCollisionShape(client.world, pos.up()).isEmpty();
+    }
+
+    private boolean isCobweb(BlockPos pos) {
+        return client.world.getBlockState(pos).isOf(Blocks.COBWEB);
+    }
+
+    private boolean isStickyJumpSurface(BlockPos pos) {
+        var state = client.world.getBlockState(pos);
+        return state.isOf(Blocks.HONEY_BLOCK) || state.isOf(Blocks.SLIME_BLOCK)
+                || state.getBlock().getJumpVelocityMultiplier() < 1.0F;
+    }
+
+    /** Detect a supported ascent whose low destination ceiling forces head-bump pulses. */
+    private boolean isLowCeilingAscent(BlockPos feet, BlockPos destination) {
+        return destination.getY() > feet.getY()
+                && (!hasOpenJumpHeadroom(feet) || !hasOpenJumpHeadroom(destination));
     }
 
     private void pressSpamJumpIfReady(ClientPlayerEntity player) {
