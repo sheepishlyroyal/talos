@@ -138,7 +138,7 @@ public final class SimPathfinder {
                         new Input(1.0F, 0.0F, false, false, true, yaw), false, false));
             }
 
-            add(result, stepUp(world, node, dx, dz, direction));
+            add(result, stepUp(world, node, profile, opts, dx, dz, direction, yaw));
             add(result, drop(world, node, profile, opts, dx, dz, direction, yaw));
             if (opts.allowMining()) add(result, mine(world, node, dx, dz, direction));
             if (opts.allowPlacing()) add(result, place(world, node, profile, opts,
@@ -180,14 +180,28 @@ public final class SimPathfinder {
         return null;
     }
 
-    /* Stage A has no step-height collision retry. Model this single-cell topology edge only
-       after exact endpoint-fit/support checks; Stage C will approach and revalidate it. */
-    private static Edge stepUp(World world, Node node, int dx, int dz, int direction) {
+    /** A full-block rise is an actual held-jump rollout, never a topology teleport. */
+    private static Edge stepUp(World world, Node node, MovementProfile profile, Options opts,
+            int dx, int dz, int direction, float yaw) {
         BlockPos target = node.cell().add(dx, 1, dz);
         if (!standable(world, target, MotionState.Pose.STAND)) return null;
-        Vec3d position = bottomCenter(target);
-        MotionState state = new MotionState(position, Vec3d.ZERO, true, MotionState.Pose.STAND);
-        return new Edge(state, Primitive.STEP_UP, 1, 1.0, direction);
+        MotionState state = node.state();
+        int bumps = 0;
+        Input jump = new Input(1.0F, 0.0F, true, false, false, yaw);
+        for (int tick = 1; tick <= opts.maxRolloutTicks(); tick++) {
+            state = PlayerMotion.step(world, state, jump, profile);
+            if (state.bumpedHorizontally()) bumps++;
+            if (state.fluid() == MotionState.Fluid.LAVA) return null;
+            if (!PlayerMotion.hitboxFits(world, state.pose(), state.position())) return null;
+            BlockPos reached = cell(state.position());
+            if (state.onGround() && reached.equals(target)) {
+                return new Edge(state, Primitive.STEP_UP, tick,
+                        tick + bumps * BUMP_PENALTY, direction);
+            }
+            // Landing anywhere else means this control does not realize the requested edge.
+            if (tick > 1 && state.onGround()) return null;
+        }
+        return null;
     }
 
     private static Edge drop(World world, Node node, MovementProfile profile, Options opts,
@@ -270,7 +284,7 @@ public final class SimPathfinder {
         List<PlannedRoute.Waypoint> reverse = new ArrayList<>();
         for (Node node = end; node != null; node = node.parent()) {
             double edgeCost = node.parent() == null ? 0.0 : node.g() - node.parent().g();
-            reverse.add(new PlannedRoute.Waypoint(node.state().position(), node.via(),
+            reverse.add(new PlannedRoute.Waypoint(node.state().position(), node.state().pose(), node.via(),
                     node.edgeTicks(), edgeCost));
         }
         List<PlannedRoute.Waypoint> forward = new ArrayList<>(reverse.size());

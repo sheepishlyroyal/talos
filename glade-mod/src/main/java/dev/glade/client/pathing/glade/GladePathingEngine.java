@@ -22,7 +22,6 @@ import java.util.function.Predicate;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import dev.glade.client.render.RenderQueue;
 import org.slf4j.Logger;
@@ -192,7 +191,7 @@ public final class GladePathingEngine implements PathingEngine {
                 .map(PlannedRoute.Waypoint::position).toList();
         int requested = run.options.nodeCount() > 0 ? run.options.nodeCount() : nodeCount;
         currentNodes = sampleWaypoints(waypoints, requested);
-        renderNodes(currentNodes);
+        renderRouteNodes(route);
 
         CompletableFuture<PathResult> segmentFuture = new CompletableFuture<>();
         SimFollowTask task = new SimFollowTask(client, route, run.snapshot.test(), segmentFuture);
@@ -315,8 +314,17 @@ public final class GladePathingEngine implements PathingEngine {
         for (int i = 0; i < nodes.size(); i++) {
             Vec3d node = nodes.get(i);
             RenderQueue.add("glade-path-node:" + i,
-                    new Box(node.x - 0.16, node.y - 0.16, node.z - 0.16,
-                            node.x + 0.16, node.y + 0.16, node.z + 0.16), 0x66CCFF, 20 * 30);
+                    MotionState.box(MotionState.Pose.STAND, node), 0x66CCFF, 20 * 30);
+        }
+    }
+
+    /** Render every simulation waypoint as the exact player AABB for its planned pose. */
+    private static void renderRouteNodes(PlannedRoute route) {
+        for (int i = 0; i < route.waypoints().size(); i++) {
+            PlannedRoute.Waypoint waypoint = route.waypoints().get(i);
+            RenderQueue.add("glade-path-node:" + i,
+                    MotionState.box(waypoint.pose(), waypoint.position()),
+                    0x66CCFF, 20 * 30);
         }
     }
 

@@ -42,6 +42,9 @@ public final class SimFollowTask extends GladeTask {
     private BlockPos lastPlacement;
     private int lastPlacementTick = Integer.MIN_VALUE;
     private String lastStatus = "";
+    private Primitive committedPrimitive;
+    private int committedStrafe;
+    private int strafeCommitUntil;
 
     public SimFollowTask(MinecraftClient client, PlannedRoute route, Predicate<BlockPos> goal,
             CompletableFuture<PathResult> future) {
@@ -103,7 +106,7 @@ public final class SimFollowTask extends GladeTask {
         scheduleDelay();
     }
 
-    /** Player getPos() is already feet/bottom-center, exactly the origin MotionState.box uses. */
+    /** Entity coordinates are feet/bottom-center, exactly the origin MotionState.box uses. */
     public static MotionState liveState(ClientPlayerEntity player) {
         MotionState.Pose pose = player.isCrawling() ? MotionState.Pose.CRAWL
                 : (player.isSwimming() || player.isInSwimmingPose())
@@ -131,11 +134,25 @@ public final class SimFollowTask extends GladeTask {
         boolean wantsJump = primitive == Primitive.SPRINT_JUMP || primitive == Primitive.STEP_UP
                 || primitive == Primitive.SWIM;
         boolean wantsSneak = primitive == Primitive.CRAWL || primitive == Primitive.PLACE;
+        boolean continuousRun = primitive == Primitive.SPRINT_JUMP;
+        if (primitive != committedPrimitive) {
+            committedPrimitive = primitive;
+            committedStrafe = 0;
+            strafeCommitUntil = ticks;
+        }
         List<Input> candidates = new ArrayList<>();
         candidates.add(new Input(1, 0, wantsJump, wantsSprint, wantsSneak, yaw));
-        candidates.add(new Input(1, 0, false, wantsSprint, wantsSneak, yaw));
-        candidates.add(new Input(1, .35F, wantsJump, wantsSprint, wantsSneak, yaw));
-        candidates.add(new Input(1, -.35F, wantsJump, wantsSprint, wantsSneak, yaw));
+        // Never offer a one-tick jump release during a committed sprint-jump or ledge climb.
+        if (!continuousRun && primitive != Primitive.STEP_UP) {
+            candidates.add(new Input(1, 0, false, wantsSprint, wantsSneak, yaw));
+        }
+        if (committedStrafe != 0 && ticks < strafeCommitUntil) {
+            candidates.add(new Input(1, committedStrafe * .35F, wantsJump,
+                    wantsSprint, wantsSneak, yaw));
+        } else {
+            candidates.add(new Input(1, .35F, wantsJump, wantsSprint, wantsSneak, yaw));
+            candidates.add(new Input(1, -.35F, wantsJump, wantsSprint, wantsSneak, yaw));
+        }
         candidates.add(new Input(1, 0, false, false, true, yaw));
         candidates.add(new Input(0, 0, false, false, false, yaw));
         if (live.inFluid()) candidates.add(new Input(1, 0, true, false, false, yaw));
@@ -166,7 +183,21 @@ public final class SimFollowTask extends GladeTask {
             boolean precise = index + 1 == route.waypoints().size()
                     || primitive == Primitive.PLACE || primitive == Primitive.MINE;
             if (precise) score -= horizontalDistance(state.position(), waypoint.position()) * 3.0;
-            if (score > bestScore) { bestScore = score; best = candidate; }
+            if (ticks < strafeCommitUntil
+                    && Float.compare(candidate.strafe(), 0.0F) == committedStrafe) {
+                score += 0.8; // Four-tick hysteresis, still overridable by a clearly safer line.
+            }
+            // Stable ordering is the deterministic tie-break: forward is first. Strafing must
+            // beat it materially, preventing close scores from alternating left/right.
+            double margin = candidate.strafe() == 0.0F ? 0.0 : 0.75;
+            if (score > bestScore + margin) { bestScore = score; best = candidate; }
+        }
+        int chosenStrafe = Float.compare(best.strafe(), 0.0F);
+        if (chosenStrafe != 0) {
+            committedStrafe = chosenStrafe;
+            strafeCommitUntil = ticks + 4;
+        } else if (ticks >= strafeCommitUntil) {
+            committedStrafe = 0;
         }
         return best;
     }
@@ -276,7 +307,8 @@ public final class SimFollowTask extends GladeTask {
     }
 
     private void apply(ClientPlayerEntity player, Input input) {
-        releaseInputs();
+        // Set the complete desired state directly. Releasing first created a real per-tick
+        // false/true pulse that broke continuous sprint-jump holds and bunny-hop momentum.
         client.options.forwardKey.setPressed(input.forward() > .1F);
         client.options.backKey.setPressed(input.forward() < -.1F);
         client.options.leftKey.setPressed(input.strafe() > .1F);

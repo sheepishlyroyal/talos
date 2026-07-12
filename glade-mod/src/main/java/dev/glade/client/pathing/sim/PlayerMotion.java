@@ -21,8 +21,8 @@ import net.minecraft.world.World;
  */
 public final class PlayerMotion {
     private static final double EPSILON = 1.0E-7;
-    // Stage A intentionally uses a smaller planner-only sprint-jump impulse than vanilla.
-    private static final double SPRINT_JUMP_IMPULSE = 0.1;
+    // LivingEntity.jump() in the 1.21.11 named jar adds exactly 0.2 along facing yaw.
+    private static final double SPRINT_JUMP_IMPULSE = 0.2;
     private PlayerMotion() {}
 
     /** Baseline-compatible overload for callers that do not yet have a live snapshot. */
@@ -60,8 +60,7 @@ public final class PlayerMotion {
         Vec3d velocity = state.velocity().add(inputVelocity(input, acceleration));
 
         // Vanilla LivingEntity jump velocity is 0.42 for an unmodified player. Entity's
-        // sprint jump impulse is (-sin(yaw)*0.2, 0, cos(yaw)*0.2); Stage A intentionally
-        // uses the requested smaller planner impulse.
+        // sprint jump impulse is (-sin(yaw)*0.2, 0, cos(yaw)*0.2).
         if (input.jump() && state.onGround() && fluid == MotionState.Fluid.NONE) {
             velocity = new Vec3d(velocity.x, profile.jumpVelocity(), velocity.z);
             if (input.sprint()) {
@@ -76,9 +75,25 @@ public final class PlayerMotion {
 
         Vec3d requested = velocity;
         Vec3d resolved = collide(world, box, requested);
+        // Vanilla can retry a horizontally blocked grounded move above STEP_HEIGHT. This lets
+        // slabs emerge as ordinary walking while a full block (above the usual 0.6) still
+        // requires the explicit held-jump STEP_UP rollout.
+        if (state.onGround() && profile.stepHeight() > 0.0
+                && (changed(requested.x, resolved.x) || changed(requested.z, resolved.z))) {
+            Vec3d stepped = collide(world, box,
+                    new Vec3d(requested.x, profile.stepHeight(), requested.z));
+            Vec3d settled = collide(world, box.offset(stepped),
+                    new Vec3d(0.0, -profile.stepHeight(), 0.0));
+            stepped = stepped.add(settled);
+            if (stepped.horizontalLengthSquared() > resolved.horizontalLengthSquared() + EPSILON) {
+                resolved = stepped;
+            }
+        }
         boolean clampedX = changed(requested.x, resolved.x);
         boolean clampedY = changed(requested.y, resolved.y);
         boolean clampedZ = changed(requested.z, resolved.z);
+        // A ceiling clips only Y. It must shorten the arc without paying the pathfinder's
+        // horizontal obstruction penalty; only X/Z resolution is a horizontal bump.
         boolean bumped = clampedX || clampedZ;
         boolean onGround = clampedY && requested.y < 0.0;
 
