@@ -55,6 +55,16 @@ public final class NavigateAndActTask extends GladeTask {
     private long nextSpamJumpNanos;
     private BlockPos sprintJumpLanding;
     private boolean sprintJumpWasAirborne;
+    private String lastStatus = "";
+
+    /** Unobtrusive action-bar readout so the current movement mode is visible in-game. */
+    private void status(String mode) {
+        if (mode.equals(lastStatus)) return;
+        lastStatus = mode;
+        if (client.player != null) {
+            client.player.sendMessage(net.minecraft.text.Text.literal("§bGlade §7» §f" + mode), true);
+        }
+    }
 
     public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
                               Predicate<BlockPos> goal, @Nullable RouteAction action,
@@ -122,17 +132,22 @@ public final class NavigateAndActTask extends GladeTask {
                     || player.isSubmergedInWater() || player.isTouchingWater());
             if (swimEdge) {
                 // Sprint is required to enter and maintain the swimming pose.
+                status("swimming");
                 client.options.sprintKey.setPressed(true);
                 client.options.jumpKey.setPressed(ascending || node.getY() >= player.getBlockY());
             } else if (jumpEdge) {
                 // A gap edge is one indivisible movement: never let waypoint advancement
                 // turn the player back toward a passed node during the airborne arc.
+                status("sprint-jump");
                 sprintJumpLanding = node.toImmutable();
                 sprintJumpWasAirborne = !player.isOnGround();
                 client.options.sprintKey.setPressed(true);
                 client.options.jumpKey.setPressed(true);
             } else if (ascending || stairOrSlab) {
+                status(stairOrSlab ? "spam-jump (stairs)" : "spam-jump");
                 pressSpamJumpIfReady(player);
+            } else {
+                status("walking");
             }
             if (!player.isTouchingWater() && index + 1 < nodes.size()
                     && node.getY() == nodes.get(index + 1).getY())
@@ -178,6 +193,7 @@ public final class NavigateAndActTask extends GladeTask {
                 finish(false, "Route became blocked and mining is disabled");
                 return true;
             }
+            status("mining");
             releaseInputs();
             aim.aimAt(node); aim.tick();
             if (player.getEyePos().squaredDistanceTo(Vec3d.ofCenter(node))
@@ -204,6 +220,7 @@ public final class NavigateAndActTask extends GladeTask {
         if (isFallRisk(support)) {
             // Never approach an unsupported edge at walking speed.  Keeping sneak held
             // also makes a delayed server placement safe: the player stops at the lip.
+            status("bridging");
             releaseInputs();
             client.options.sneakKey.setPressed(true);
             // Open trapdoors/gates occupy the support cell: remove them before filling it.
@@ -267,6 +284,7 @@ public final class NavigateAndActTask extends GladeTask {
     }
 
     private boolean handlePillar(ClientPlayerEntity player) {
+        status("pillaring up");
         releaseInputs();
         int blockSlot = findBlockSlot(player);
         if (blockSlot < 0) { finish(false, "Ran out of pillar blocks"); return true; }
@@ -338,7 +356,14 @@ public final class NavigateAndActTask extends GladeTask {
     }
 
     public void cancel() { finish(false, "Pathing cancelled"); _break(); }
-    private void finish(boolean success, String detail) { releaseInputs(); future.complete(new PathResult(success, detail)); }
+    private void finish(boolean success, String detail) {
+        if (client.player != null) {
+            client.player.sendMessage(net.minecraft.text.Text.literal(
+                    (success ? "§aGlade §7» §f" : "§cGlade §7» §f") + detail), true);
+        }
+        releaseInputs();
+        future.complete(new PathResult(success, detail));
+    }
     private void releaseInputs() {
         client.options.forwardKey.setPressed(false); client.options.backKey.setPressed(false);
         client.options.leftKey.setPressed(false); client.options.rightKey.setPressed(false);
