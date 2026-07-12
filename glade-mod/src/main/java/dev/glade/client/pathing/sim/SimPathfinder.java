@@ -195,10 +195,14 @@ public final class SimPathfinder {
 
             add(result, stepUp(world, node, profile, opts, dx, dz, direction, yaw));
             add(result, drop(world, node, profile, opts, dx, dz, direction, yaw));
-            if (opts.allowMining()) add(result, mine(world, node, dx, dz, direction));
-            if (opts.allowPlacing()) add(result, place(world, node, profile, opts,
-                    dx, dz, direction, yaw));
+            // Edits are cardinal-only: a diagonal doorway/bridge has no shared face to act on.
+            if (dx * dz == 0) {
+                if (opts.allowMining()) add(result, mine(world, node, dx, dz, direction));
+                if (opts.allowPlacing()) add(result, place(world, node, dx, dz, direction));
+            }
         }
+        if (opts.allowMining()) add(result, mineDown(world, node));
+        if (opts.allowPlacing()) add(result, placeUp(world, node));
         return result;
     }
 
@@ -269,35 +273,61 @@ public final class SimPathfinder {
                 ? edge : null;
     }
 
-    /* Mining is represented without mutating World: require a solid two-block face and a safe
-       standable cell immediately beyond it, then hand Stage C the post-edit waypoint. */
+    /*
+     * Mining is represented without mutating World: the edge ends INSIDE the dug-out wall
+     * cell, so successive MINE edges chain a tunnel through walls of any thickness. Each
+     * blocked slot of the 1x2 doorway pays a full edit penalty.
+     */
     private static Edge mine(World world, Node node, int dx, int dz, int direction) {
         BlockPos wall = node.cell().add(dx, 0, dz);
         BlockPos wallHead = wall.up();
-        if (!mineable(world, wall) || !mineable(world, wallHead)) return null;
-        BlockPos target = wall.add(dx, 0, dz);
-        if (!standable(world, target, MotionState.Pose.STAND)) return null;
-        MotionState state = new MotionState(bottomCenter(target), Vec3d.ZERO, true,
+        boolean feetBlocked = !empty(world, wall);
+        boolean headBlocked = !empty(world, wallHead);
+        if (!feetBlocked && !headBlocked) return null; // plain movement already handles it
+        if (feetBlocked && !mineable(world, wall)) return null;
+        if (headBlocked && !mineable(world, wallHead)) return null;
+        if (empty(world, wall.down())) return null;    // the dug doorway needs a floor
+        if (world.getFluidState(wall).isIn(FluidTags.LAVA)
+                || world.getFluidState(wallHead).isIn(FluidTags.LAVA)) return null;
+        int blocks = (feetBlocked ? 1 : 0) + (headBlocked ? 1 : 0);
+        MotionState state = new MotionState(bottomCenter(wall), Vec3d.ZERO, true,
                 MotionState.Pose.STAND);
-        return new Edge(state, Primitive.MINE, 1, 1.0 + EDIT_PENALTY, direction);
+        return new Edge(state, Primitive.MINE, 8, 8.0 + EDIT_PENALTY * blocks, direction);
     }
 
-    /* Placement likewise keeps the rollout pure. The approach is simulated across the gap; if
-       Stage A cannot land in-budget, a checked far-side endpoint represents the future bridge. */
-    private static Edge place(World world, Node node, MovementProfile profile, Options opts,
-            int dx, int dz, int direction, float yaw) {
-        BlockPos gap = node.cell().add(dx, 0, dz);
-        if (!empty(world, gap.down()) || !empty(world, gap)) return null;
-        BlockPos target = gap.add(dx, 0, dz);
-        if (!standable(world, target, MotionState.Pose.STAND)) return null;
-        Edge simulated = rollout(world, node, profile, opts, Primitive.PLACE, direction,
-                new Input(1.0F, 0.0F, false, false, false, yaw), false, false);
-        if (simulated != null && cell(simulated.state().position()).equals(target)) {
-            return simulated.withAddedCost(EDIT_PENALTY);
-        }
-        MotionState state = new MotionState(bottomCenter(target), Vec3d.ZERO, true,
+    /** Dig straight down one cell; chains for a vertical shaft. Never digs into a void drop. */
+    private static Edge mineDown(World world, Node node) {
+        if (!node.state().onGround()) return null;
+        BlockPos below = node.cell().down();
+        if (!mineable(world, below)) return null;
+        if (empty(world, below.down())) return null;   // land on something solid
+        if (world.getFluidState(below.down()).isIn(FluidTags.LAVA)) return null;
+        MotionState state = new MotionState(bottomCenter(below), Vec3d.ZERO, true,
                 MotionState.Pose.STAND);
-        return new Edge(state, Primitive.PLACE, 1, 1.0 + EDIT_PENALTY, direction);
+        return new Edge(state, Primitive.MINE, 8, 8.0 + EDIT_PENALTY, node.heading());
+    }
+
+    /*
+     * Placement likewise ends ON the newly placed support in the gap cell, so bridging
+     * chains across a span of any width one block at a time.
+     */
+    private static Edge place(World world, Node node, int dx, int dz, int direction) {
+        if (!node.state().onGround()) return null;
+        BlockPos gap = node.cell().add(dx, 0, dz);
+        if (!empty(world, gap.down()) || !empty(world, gap) || !empty(world, gap.up())) return null;
+        MotionState state = new MotionState(bottomCenter(gap), Vec3d.ZERO, true,
+                MotionState.Pose.STAND);
+        return new Edge(state, Primitive.PLACE, 8, 8.0 + EDIT_PENALTY, direction);
+    }
+
+    /** Nerdpole: jump and place under your own feet. Requires head clearance two above. */
+    private static Edge placeUp(World world, Node node) {
+        if (!node.state().onGround()) return null;
+        if (!empty(world, node.cell().up(2))) return null;
+        if (empty(world, node.cell().down())) return null; // needs an anchor face below
+        MotionState state = new MotionState(bottomCenter(node.cell().up()), Vec3d.ZERO, true,
+                MotionState.Pose.STAND);
+        return new Edge(state, Primitive.PLACE, 12, 12.0 + EDIT_PENALTY, node.heading());
     }
 
     private static boolean standable(World world, BlockPos feet, MotionState.Pose pose) {

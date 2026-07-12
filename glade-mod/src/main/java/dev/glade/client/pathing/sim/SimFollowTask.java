@@ -52,6 +52,7 @@ public final class SimFollowTask extends GladeTask {
     private int lastProgressTick;
     private double bestRemaining = Double.POSITIVE_INFINITY;
     private BlockPos breaking;
+    private BlockPos pillarOrigin;
     private BlockPos lastPlacement;
     private int lastPlacementTick = Integer.MIN_VALUE;
     private String lastStatus = "";
@@ -77,8 +78,22 @@ public final class SimFollowTask extends GladeTask {
     /** Hot-swap in a fresher plan without releasing keys; passed waypoints self-advance. */
     public void swapRoute(PlannedRoute replacement) {
         if (replacement == null || replacement.waypoints().size() <= 1) return;
+        // The search began from a snapshot several ticks old, so the route's early waypoints
+        // are typically behind the player by now. Fast-forward to the first waypoint AFTER
+        // the nearest one, or the follower would steer backwards onto the stale prefix.
+        int nearest = 0;
+        ClientPlayerEntity player = client.player;
+        if (player != null) {
+            Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
+            double best = Double.MAX_VALUE;
+            List<PlannedRoute.Waypoint> waypoints = replacement.waypoints();
+            for (int i = 0; i < waypoints.size(); i++) {
+                double distance = waypoints.get(i).position().squaredDistanceTo(feet);
+                if (distance < best) { best = distance; nearest = i; }
+            }
+        }
         this.route = replacement;
-        this.index = 1;
+        this.index = Math.max(1, Math.min(nearest + 1, replacement.waypoints().size() - 1));
         this.bestRemaining = Double.POSITIVE_INFINITY;
         this.lastProgressTick = ticks;
         this.replanRequested = false;
@@ -342,8 +357,12 @@ public final class SimFollowTask extends GladeTask {
         int dx = Integer.compare(destination.getX(), origin.getX());
         int dz = Integer.compare(destination.getZ(), origin.getZ());
         BlockPos block = null;
+        if (dx == 0 && dz == 0 && destination.getY() < origin.getY()) {
+            // Vertical shaft: dig the block directly underfoot.
+            if (blocking(origin.down())) block = origin.down();
+        }
         // MINE waypoints describe the post-edit cell, so inspect the intervening tunnel.
-        for (int step = 1; step <= 3 && block == null; step++) {
+        for (int step = 1; step <= 3 && block == null && (dx != 0 || dz != 0); step++) {
             BlockPos feet = origin.add(dx * step, 0, dz * step);
             if (blocking(feet)) block = feet;
             else if (blocking(feet.up())) block = feet.up();
@@ -374,6 +393,10 @@ public final class SimFollowTask extends GladeTask {
     private boolean place(ClientPlayerEntity player, Vec3d target) {
         BlockPos destination = BlockPos.ofFloored(target);
         BlockPos feet = player.getBlockPos();
+        if (destination.getX() == feet.getX() && destination.getZ() == feet.getZ()
+                && destination.getY() > feet.getY()) {
+            return pillar(player);
+        }
         int dx = Integer.compare(destination.getX(), feet.getX());
         int dz = Integer.compare(destination.getZ(), feet.getZ());
         // PLACE waypoints are normally the far-side landing; the missing support is the
@@ -408,6 +431,29 @@ public final class SimFollowTask extends GladeTask {
         return true;
     }
 
+    /** Nerdpole: hold jump and place under the feet once they clear the origin cell. */
+    private boolean pillar(ClientPlayerEntity player) {
+        status("pillaring up");
+        int slot = findBlockSlot(player);
+        if (slot < 0) { finish(false, "Ran out of pillar blocks"); return true; }
+        releaseInputs();
+        client.options.jumpKey.setPressed(true);
+        if (pillarOrigin == null || player.isOnGround()) {
+            pillarOrigin = player.getBlockPos().toImmutable();
+        }
+        BlockPos anchor = pillarOrigin.down();
+        Vec3d hit = Vec3d.ofCenter(anchor).add(0.0, 0.5, 0.0);
+        player.getInventory().setSelectedSlot(slot);
+        // Jump input applies after this tick; place only once the feet clear the target cell,
+        // since same-tick jump+place is rejected by the placement collision check.
+        if (player.getY() >= pillarOrigin.getY() + 0.42) {
+            client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
+                    new BlockHitResult(hit, Direction.UP, anchor, false));
+            player.swingHand(Hand.MAIN_HAND);
+        }
+        return true;
+    }
+
     private void advance(ClientPlayerEntity player) {
         while (index < route.waypoints().size()) {
             Vec3d target = route.waypoints().get(index).position();
@@ -416,7 +462,10 @@ public final class SimFollowTask extends GladeTask {
                     && Math.abs(player.getY() - target.y) <= .75;
             Vec3d previous = route.waypoints().get(index - 1).position();
             double edgeX = target.x - previous.x, edgeZ = target.z - previous.z;
-            boolean passed = (player.getX() - target.x) * edgeX
+            // A vertical edge (pillar/shaft) has no horizontal direction to be "past"; it can
+            // only be completed by actually reaching the waypoint.
+            boolean passed = edgeX * edgeX + edgeZ * edgeZ > 1.0E-6
+                    && (player.getX() - target.x) * edgeX
                     + (player.getZ() - target.z) * edgeZ >= 0.0;
             if (!reached && !passed) break;
             index++;

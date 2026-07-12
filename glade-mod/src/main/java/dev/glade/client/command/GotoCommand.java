@@ -23,7 +23,7 @@ final class GotoCommand {
         }
 
         source.sendFeedback(Text.literal("Pathing started"));
-        engine.goTo(goal, PathingOptions.NAVIGATE_ONLY).whenComplete((result, error) ->
+        engine.goTo(goal, PathingOptions.DEFAULT).whenComplete((result, error) ->
                 source.getClient().execute(() -> report(source, result, error)));
         return 1;
     }

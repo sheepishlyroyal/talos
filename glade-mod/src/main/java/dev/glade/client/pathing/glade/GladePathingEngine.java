@@ -335,15 +335,24 @@ public final class GladePathingEngine implements PathingEngine {
         }
     }
 
+    private static int lastRenderedRouteNodes;
+
     /** Render every simulation waypoint as the exact player AABB for its planned pose. */
     private static void renderRouteNodes(PlannedRoute route) {
         final int waypointColor = 0x66CCFF; // Keep route boxes distinct from orange predictions.
-        for (int i = 0; i < route.waypoints().size(); i++) {
+        int count = route.waypoints().size();
+        for (int i = 0; i < count; i++) {
             PlannedRoute.Waypoint waypoint = route.waypoints().get(i);
             RenderQueue.add("glade-path-node:" + i,
                     MotionState.box(waypoint.pose(), waypoint.position()),
                     waypointColor, 20 * 30);
         }
+        // Two overlapping plans on screen read as the pathfinder having "two ideas": always
+        // drop the previous route's leftover boxes the moment a fresh plan is drawn.
+        for (int i = count; i < lastRenderedRouteNodes; i++) {
+            RenderQueue.remove("glade-path-node:" + i);
+        }
+        lastRenderedRouteNodes = count;
     }
 
     private static GoalSnapshot snapshotGoal(Goal goal, MinecraftClient client) {
