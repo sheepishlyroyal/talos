@@ -121,37 +121,37 @@ public final class NavigateAndActTask extends GladeTask {
         } else {
             aim.aimAt(new Vec3d(node.getX() + 0.5, player.getEyeY(), node.getZ() + 0.5));
             aim.tick();
-            releaseInputs();
+            // Recompute steering without flickering sprint/jump off for part of every
+            // client tick. Normal travel keeps both inputs continuously held.
+            releaseDirectionalInputs();
             client.options.forwardKey.setPressed(true);
+            client.options.sprintKey.setPressed(true);
             int horizontalDistance = Math.max(Math.abs(node.getX() - player.getBlockX()),
                     Math.abs(node.getZ() - player.getBlockZ()));
             boolean jumpEdge = horizontalDistance > 1;
-            boolean ascending = node.getY() > player.getBlockY();
             boolean stairOrSlab = isStairOrSlab(node.down()) || isStairOrSlab(player.getBlockPos().down());
             boolean swimEdge = isWater(node) && (isWater(node.down()) || player.isSwimming()
                     || player.isSubmergedInWater() || player.isTouchingWater());
             if (swimEdge) {
                 // Sprint is required to enter and maintain the swimming pose.
                 status("swimming");
-                client.options.sprintKey.setPressed(true);
-                client.options.jumpKey.setPressed(ascending || node.getY() >= player.getBlockY());
+                client.options.jumpKey.setPressed(node.getY() >= player.getBlockY());
+            } else if (stairOrSlab) {
+                status("spam-jump (stairs)");
+                // Stair/slab travel deliberately pulses space instead of holding it.
+                client.options.jumpKey.setPressed(false);
+                pressSpamJumpIfReady(player);
             } else if (jumpEdge) {
                 // A gap edge is one indivisible movement: never let waypoint advancement
                 // turn the player back toward a passed node during the airborne arc.
                 status("sprint-jump");
                 sprintJumpLanding = node.toImmutable();
                 sprintJumpWasAirborne = !player.isOnGround();
-                client.options.sprintKey.setPressed(true);
                 client.options.jumpKey.setPressed(true);
-            } else if (ascending || stairOrSlab) {
-                status(stairOrSlab ? "spam-jump (stairs)" : "spam-jump");
-                pressSpamJumpIfReady(player);
             } else {
-                status("walking");
+                status("sprint-jump");
+                client.options.jumpKey.setPressed(true);
             }
-            if (!player.isTouchingWater() && index + 1 < nodes.size()
-                    && node.getY() == nodes.get(index + 1).getY())
-                client.options.sprintKey.setPressed(true);
         }
         scheduleDelay();
     }
@@ -161,7 +161,7 @@ public final class NavigateAndActTask extends GladeTask {
                 sprintJumpLanding.getZ() + 0.5);
         aim.aimAt(landingAim);
         aim.tick();
-        releaseInputs();
+        releaseDirectionalInputs();
         client.options.forwardKey.setPressed(true);
         client.options.sprintKey.setPressed(true);
         // Holding jump is intentional for a single gap-crossing arc; randomized pulses
@@ -365,9 +365,12 @@ public final class NavigateAndActTask extends GladeTask {
         future.complete(new PathResult(success, detail));
     }
     private void releaseInputs() {
+        releaseDirectionalInputs();
+        client.options.jumpKey.setPressed(false); client.options.sprintKey.setPressed(false);
+    }
+    private void releaseDirectionalInputs() {
         client.options.forwardKey.setPressed(false); client.options.backKey.setPressed(false);
         client.options.leftKey.setPressed(false); client.options.rightKey.setPressed(false);
-        client.options.jumpKey.setPressed(false); client.options.sprintKey.setPressed(false);
         client.options.sneakKey.setPressed(false);
     }
     @Override public void onCompleted() {

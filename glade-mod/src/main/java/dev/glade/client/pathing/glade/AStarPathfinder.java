@@ -241,8 +241,14 @@ public final class AStarPathfinder {
         if (isWater(pos) || isWater(pos.up())) return true;
         BlockState support = world.getBlockState(pos.down());
         if (support.isSolidBlock(world, pos.down())) return true;
+        // Partial-height collision surfaces (notably stairs and slabs) are valid
+        // floors even though their collision top is below the old full-block cutoff.
+        // Open trapdoors/gates are handled as passages, never as dependable footing.
+        if (support.getBlock() instanceof TrapdoorBlock || support.getBlock() instanceof FenceGateBlock) {
+            if (support.contains(Properties.OPEN) && support.get(Properties.OPEN)) return false;
+        }
         var shape = support.getCollisionShape(world, pos.down());
-        return !shape.isEmpty() && shape.getMax(Direction.Axis.Y) >= 0.999;
+        return !shape.isEmpty() && shape.getMax(Direction.Axis.Y) > 0.0;
     }
 
     private boolean isPassable(BlockPos pos) {
@@ -363,7 +369,7 @@ public final class AStarPathfinder {
         BlockState state = world.getBlockState(pos);
         return state.isSolidBlock(world, pos)
                 || (!state.getCollisionShape(world, pos).isEmpty()
-                && state.getCollisionShape(world, pos).getMax(Direction.Axis.Y) >= 0.999);
+                && state.getCollisionShape(world, pos).getMax(Direction.Axis.Y) > 0.0);
     }
 
     private boolean hasSafeSupport(BlockPos pos) {
