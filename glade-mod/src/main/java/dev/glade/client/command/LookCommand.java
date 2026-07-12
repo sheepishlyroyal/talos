@@ -7,9 +7,11 @@ import java.util.List;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.minecraft.block.Block;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.AbstractClientPlayerEntity;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.registry.Registries;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.Box;
@@ -20,9 +22,16 @@ import net.minecraft.text.Text;
 /**
  * {@code /glade look <yaw> <pitch>} — set the player's look angles, supports {@code ^} relative syntax.
  *
- * <p>Also supports selector-style targeting: {@code /glade look block <id> [n]} aims at the
- * Nth-closest matching block, and {@code /glade look entity type <id>|tag <tag> [n]} aims at the
- * Nth-closest matching entity.</p>
+ * <p>Also supports selector-style targeting:</p>
+ * <ul>
+ *   <li>{@code /glade look block <id> [n]} aims at the Nth-closest matching block.</li>
+ *   <li>{@code /glade look entity type <id>|tag <tag> [n]} aims at the Nth-closest matching
+ *       entity (legacy, kept for back-compat).</li>
+ *   <li>{@code /glade look <selector> [n]} aims at the Nth-closest match of a Minecraft-style
+ *       target selector: {@code @e[...]}, {@code @a}, {@code @p} (nearest player excluding
+ *       yourself) or {@code @s} (self). See {@link EntitySelector} for the supported subset of
+ *       bracket arguments.</li>
+ * </ul>
  */
 final class LookCommand {
     /** Radius (in chunks) scanned for {@code /glade look block}, matching the client's view distance. */
@@ -134,6 +143,92 @@ final class LookCommand {
         Identifier targetTypeId = Registries.ENTITY_TYPE.getId(target.getType());
         source.sendFeedback(Text.literal("Looking at %s #%d at %.0f, %.0f, %.0f"
                 .formatted(targetTypeId, n, target.getX(), target.getY(), target.getZ())));
+        return 1;
+    }
+
+    /**
+     * Handles {@code /glade look <selector> [n]} for Minecraft-style target selectors:
+     * {@code @e[...]}, {@code @a}, {@code @p} (nearest player excluding the caller) and
+     * {@code @s} (self).
+     */
+    static int executeSelector(CommandContext<FabricClientCommandSource> context, String token, int n) {
+        FabricClientCommandSource source = context.getSource();
+        if (n < 1) {
+            source.sendError(Text.literal("n must be >= 1"));
+            return 0;
+        }
+
+        String[] error = new String[1];
+        EntitySelector selector = EntitySelector.parse(token, error);
+        if (selector == null) {
+            source.sendError(Text.literal(error[0]));
+            return 0;
+        }
+
+        ClientPlayerEntity player = source.getPlayer();
+        MinecraftClient client = source.getClient();
+        if (client.world == null) {
+            source.sendError(Text.literal("No world loaded"));
+            return 0;
+        }
+
+        return switch (selector.kind()) {
+            case SELF -> {
+                source.sendFeedback(Text.literal("@s is you — no aim change"));
+                yield 1;
+            }
+            case PLAYER_NEAREST -> aimAtNth(source, player,
+                    playerCandidates(client, player, false), selector, n, "player");
+            case PLAYERS_ALL -> aimAtNth(source, player,
+                    playerCandidates(client, player, true), selector, n, "player");
+            case ENTITIES -> {
+                Box box = player.getBoundingBox().expand(ENTITY_SEARCH_RADIUS);
+                List<Entity> candidates = client.world.getEntitiesByClass(Entity.class, box,
+                        entity -> entity.isAlive() && selector.matchesFilters(entity));
+                yield aimAtNth(source, player, candidates, selector, n, "entity");
+            }
+        };
+    }
+
+    private static List<Entity> playerCandidates(MinecraftClient client, ClientPlayerEntity self, boolean includeSelf) {
+        List<Entity> players = new java.util.ArrayList<>();
+        for (AbstractClientPlayerEntity other : client.world.getPlayers()) {
+            if (includeSelf || other != self) {
+                players.add(other);
+            }
+        }
+        return players;
+    }
+
+    /** Filters by distance, sorts (nearest by default, furthest if requested), applies {@code limit=} then picks the Nth match. */
+    private static int aimAtNth(FabricClientCommandSource source, ClientPlayerEntity player,
+            List<Entity> candidates, EntitySelector selector, int n, String noun) {
+        Comparator<Entity> byDistance = Comparator.comparingDouble(player::squaredDistanceTo);
+        List<Entity> filtered = candidates.stream()
+                .filter(entity -> selector.withinDistance(Math.sqrt(player.squaredDistanceTo(entity))))
+                .sorted(selector.furthest() ? byDistance.reversed() : byDistance)
+                .toList();
+        Integer limit = selector.limit();
+        if (limit != null && filtered.size() > limit) {
+            filtered = filtered.subList(0, Math.max(limit, 0));
+        }
+
+        if (filtered.size() < n) {
+            source.sendError(Text.literal("Only found %d matching %s%s, need at least %d"
+                    .formatted(filtered.size(), noun, filtered.size() == 1 ? "" : "s", n)));
+            return 0;
+        }
+
+        Entity target = filtered.get(n - 1);
+        aimAt(player, target.getEyePos());
+
+        Text label = target instanceof PlayerEntity playerEntity
+                ? playerEntity.getName()
+                : Text.literal(Registries.ENTITY_TYPE.getId(target.getType()).toString());
+        source.sendFeedback(Text.literal("Looking at ")
+                .append(label)
+                .append(Text.literal(" #%d at %.0f, %.0f, %.0f"
+                        .formatted(n, target.getX(), target.getY(), target.getZ()))));
         return 1;
     }
 
