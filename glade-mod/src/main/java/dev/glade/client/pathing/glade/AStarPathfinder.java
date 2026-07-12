@@ -298,8 +298,8 @@ public final class AStarPathfinder {
         double cost = horizontalDistance / effectiveSpeed(type, to) + verticalDistance * 0.12;
         // Gap jumps include alignment/takeoff and landing recovery. Raw airborne speed
         // alone otherwise makes them look cheaper than an equally quick ground route.
-        if (type == MoveType.JUMP) cost += 0.30;
-        if (type == MoveType.SPRINT_JUMP) cost += 0.45;
+        if (type == MoveType.JUMP) cost += 0.55;
+        if (type == MoveType.SPRINT_JUMP) cost += 0.75;
         if (type == MoveType.PLACE) cost += estimatePlaceTimeSeconds(to.getY() > from.getY());
         if (!isPassable(to)) cost += estimateBreakTimeSeconds(to);
         if (!isPassable(to.up())) cost += estimateBreakTimeSeconds(to.up());

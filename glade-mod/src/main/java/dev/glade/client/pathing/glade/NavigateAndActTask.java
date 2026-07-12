@@ -53,6 +53,7 @@ public final class NavigateAndActTask extends GladeTask {
     private int lastBridgePlaceTick = Integer.MIN_VALUE;
     private final Random jumpRandom = new Random();
     private long nextSpamJumpNanos;
+    private boolean spamJumpWasGrounded;
     private BlockPos sprintJumpLanding;
     private boolean sprintJumpWasAirborne;
     private String lastStatus = "";
@@ -94,10 +95,15 @@ public final class NavigateAndActTask extends GladeTask {
         ClientPlayerEntity player = client.player;
         if (player == null || client.world == null) { finish(false, "World unloaded while navigating"); return; }
         if (ticks >= 60 * 20) { finish(false, "Navigation timed out after 60 seconds"); return; }
+        advancePastReachedOrPassed(player);
         if (sprintJumpLanding != null) {
             sprintJumpWasAirborne |= !player.isOnGround();
-            if (!(sprintJumpWasAirborne && player.isOnGround()
-                    && reached(player, sprintJumpLanding))) {
+            if (!(sprintJumpWasAirborne && player.isOnGround())) {
+                // An overshot landing must never remain the aim lock. While airborne,
+                // move the lock forward with the path as soon as its old node is passed.
+                if (index < nodes.size() && !nodes.get(index).equals(sprintJumpLanding)) {
+                    sprintJumpLanding = nodes.get(index).toImmutable();
+                }
                 continueSprintJump(player);
                 scheduleDelay();
                 return;
@@ -106,7 +112,9 @@ public final class NavigateAndActTask extends GladeTask {
             sprintJumpWasAirborne = false;
         }
         if (goal.test(player.getBlockPos())) { finish(true, "Arrived"); return; }
-        while (index < nodes.size() && reached(player, nodes.get(index))) index++;
+        // Landing may have carried us over several short nodes. Discard all of them
+        // before selecting a new steering target, rather than aiming back at one.
+        advancePastReachedOrPassed(player);
         if (index >= nodes.size()) { finish(false, "Nodes ended before the goal was reached"); return; }
 
         BlockPos node = nodes.get(index);
@@ -148,7 +156,13 @@ public final class NavigateAndActTask extends GladeTask {
                 sprintJumpLanding = node.toImmutable();
                 sprintJumpWasAirborne = !player.isOnGround();
                 client.options.jumpKey.setPressed(true);
+            } else if (!hasOpenJumpHeadroom(player.getBlockPos()) || !hasOpenJumpHeadroom(node)) {
+                status("spam-jump");
+                client.options.jumpKey.setPressed(false);
+                pressSpamJumpIfReady(player);
             } else {
+                // Continuous bunny-hopping is only appropriate in a fully open
+                // corridor. A block in either jump headspace uses prompt pulses.
                 status("sprint-jump");
                 client.options.jumpKey.setPressed(true);
             }
@@ -170,13 +184,45 @@ public final class NavigateAndActTask extends GladeTask {
     }
 
     private void pressSpamJumpIfReady(ClientPlayerEntity player) {
-        if (!player.isOnGround()) return;
+        if (!player.isOnGround()) {
+            spamJumpWasGrounded = false;
+            return;
+        }
         long now = System.nanoTime();
-        if (now < nextSpamJumpNanos) return;
+        // A landing always wins over the humanized repeat timer. The timer only adds
+        // light jitter while we remain grounded; it can never consume a landing window.
+        boolean justLanded = !spamJumpWasGrounded;
+        spamJumpWasGrounded = true;
+        if (!justLanded && now < nextSpamJumpNanos) return;
         client.options.jumpKey.setPressed(true);
         long range = MAX_SPAM_JUMP_INTERVAL_NANOS - MIN_SPAM_JUMP_INTERVAL_NANOS;
         nextSpamJumpNanos = now + MIN_SPAM_JUMP_INTERVAL_NANOS
                 + (long) (jumpRandom.nextDouble() * (range + 1L));
+    }
+
+    private boolean hasOpenJumpHeadroom(BlockPos feet) {
+        return client.world.getBlockState(feet.up()).getCollisionShape(client.world, feet.up()).isEmpty()
+                && client.world.getBlockState(feet.up(2))
+                .getCollisionShape(client.world, feet.up(2)).isEmpty();
+    }
+
+    private void advancePastReachedOrPassed(ClientPlayerEntity player) {
+        while (index < nodes.size()
+                && (reached(player, nodes.get(index)) || passed(player, nodes.get(index)))) {
+            index++;
+        }
+    }
+
+    /** True once the player has crossed the plane through this node along its path edge. */
+    private boolean passed(ClientPlayerEntity player, BlockPos node) {
+        if (index <= 0 || index >= nodes.size() || !nodes.get(index).equals(node)) return false;
+        BlockPos previous = nodes.get(index - 1);
+        double edgeX = node.getX() - previous.getX();
+        double edgeZ = node.getZ() - previous.getZ();
+        if (edgeX == 0.0 && edgeZ == 0.0) return player.getY() >= node.getY();
+        double beyondX = player.getX() - (node.getX() + 0.5);
+        double beyondZ = player.getZ() - (node.getZ() + 0.5);
+        return beyondX * edgeX + beyondZ * edgeZ >= 0.0;
     }
 
     private boolean handleTraversal(ClientPlayerEntity player, BlockPos node) {
