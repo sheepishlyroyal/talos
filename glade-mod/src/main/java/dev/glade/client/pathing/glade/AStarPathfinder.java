@@ -148,13 +148,19 @@ public final class AStarPathfinder {
         for (int[] diagonal : diagonals) {
             Direction xDirection = diagonal[0] > 0 ? Direction.EAST : Direction.WEST;
             Direction zDirection = diagonal[1] > 0 ? Direction.SOUTH : Direction.NORTH;
-            // Both side corridors must be traversable, preventing diagonal corner clipping.
-            if (!cardinalDestinations.containsKey(xDirection)
-                    || !cardinalDestinations.containsKey(zDirection)) {
-                continue;
-            }
             BlockPos destination = resolveMove(from, diagonal[0], diagonal[1]);
-            if (destination != null) {
+            boolean diagonalBridge = destination != null && destination.getY() == from.getY()
+                    && !hasSafeSupport(destination.down());
+            BlockPos xBridgeSupport = from.down().add(diagonal[0], 0, 0);
+            // Normal diagonals retain the strict two-corridor corner check.  A bridge
+            // may create its missing X-side support as the first half of an L-shaped
+            // speedbridge cycle, but still requires open landing and head cells.
+            boolean openBridgeLanding = diagonalBridge && hasPlaceableBlocks
+                    && isPassable(destination) && isPassable(destination.up())
+                    && (hasSafeSupport(xBridgeSupport) || isPassable(xBridgeSupport));
+            boolean clearNormalDiagonal = cardinalDestinations.containsKey(xDirection)
+                    && cardinalDestinations.containsKey(zDirection);
+            if (destination != null && (clearNormalDiagonal || openBridgeLanding)) {
                 result.add(new Move(destination,
                         movementCost(from, destination, classify(from, destination, true))));
             }

@@ -46,6 +46,8 @@ public final class NavigateAndActTask extends GladeTask {
     private int ticks;
     private BlockPos breaking;
     private BlockPos pillarOrigin;
+    private BlockPos lastBridgeTarget;
+    private int lastBridgePlaceTick = Integer.MIN_VALUE;
 
     public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
                               Predicate<BlockPos> goal, @Nullable RouteAction action,
@@ -156,37 +158,68 @@ public final class NavigateAndActTask extends GladeTask {
         var supportState = client.world.getBlockState(support);
         if (isWater(node) || isWater(support)) return false;
         if (isFallRisk(support)) {
+            // Never approach an unsupported edge at walking speed.  Keeping sneak held
+            // also makes a delayed server placement safe: the player stops at the lip.
             releaseInputs();
+            client.options.sneakKey.setPressed(true);
             // Open trapdoors/gates occupy the support cell: remove them before filling it.
             if (!supportState.isAir() && (supportState.getBlock() instanceof TrapdoorBlock
                     || supportState.getBlock() instanceof FenceGateBlock)) {
                 breakBlock(player, support, supportState);
                 return true;
             }
-            int blockSlot = -1;
-            for (int i = 0; i < 9; i++) if (player.getInventory().getStack(i).getItem() instanceof BlockItem) {
-                blockSlot = i; break;
-            }
+            int blockSlot = findBlockSlot(player);
             if (blockSlot < 0) { finish(false, "Ran out of bridge blocks"); return true; }
-            BlockPos anchor = player.getBlockPos().down();
             int dx = Integer.compare(node.getX(), player.getBlockX());
             int dz = Integer.compare(node.getZ(), player.getBlockZ());
             boolean pillar = dx == 0 && dz == 0 && node.getY() > player.getBlockY();
-            Direction side = pillar ? Direction.UP : dx > 0 ? Direction.EAST : dx < 0 ? Direction.WEST
-                    : dz > 0 ? Direction.SOUTH : Direction.NORTH;
-            aim.aimAt(Vec3d.ofCenter(anchor).add(side.getOffsetX() * 0.5,
-                    side.getOffsetY() * 0.5, side.getOffsetZ() * 0.5));
-            aim.tick();
-            if (aim.isAimed() && GladeClient.tickBudget().hasBudgetRemaining()) {
-                player.getInventory().setSelectedSlot(blockSlot);
-                if (pillar && player.isOnGround()) client.options.jumpKey.setPressed(true);
-                client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
-                        new BlockHitResult(Vec3d.ofCenter(anchor), side, anchor, false));
-                player.swingHand(Hand.MAIN_HAND);
+            if (pillar) return handlePillar(player);
+
+            BlockPos standingSupport = player.getBlockPos().down();
+            BlockPos placementTarget = support;
+            BlockPos anchor = standingSupport;
+            Direction side;
+            if (dx != 0 && dz != 0) {
+                // A diagonal bridge is an L-shaped two-block cycle.  First extend the
+                // standing block along X, then attach the diagonal block to its Z face.
+                BlockPos xSupport = standingSupport.add(dx, 0, 0);
+                if (isFallRisk(xSupport)) {
+                    placementTarget = xSupport;
+                    side = dx > 0 ? Direction.EAST : Direction.WEST;
+                } else {
+                    anchor = xSupport;
+                    side = dz > 0 ? Direction.SOUTH : Direction.NORTH;
+                }
+            } else {
+                side = dx > 0 ? Direction.EAST : dx < 0 ? Direction.WEST
+                        : dz > 0 ? Direction.SOUTH : Direction.NORTH;
             }
+
+            placeBridgeBlock(player, blockSlot, anchor, side, placementTarget);
             return true;
         }
+        lastBridgeTarget = null;
         return false;
+    }
+
+    private void placeBridgeBlock(ClientPlayerEntity player, int blockSlot, BlockPos anchor,
+                                  Direction side, BlockPos placementTarget) {
+        // Never attempt to replace either of the two cells occupied by the player.
+        BlockPos feet = player.getBlockPos();
+        if (placementTarget.equals(feet) || placementTarget.equals(feet.up())) return;
+        Vec3d hit = Vec3d.ofCenter(anchor).add(side.getOffsetX() * 0.5,
+                side.getOffsetY() * 0.5, side.getOffsetZ() * 0.5);
+        aim.aimAt(hit);
+        aim.tick();
+        boolean rateReady = !placementTarget.equals(lastBridgeTarget)
+                || ticks - lastBridgePlaceTick >= 2;
+        if (!rateReady || !aim.isAimed() || !GladeClient.tickBudget().hasBudgetRemaining()) return;
+        player.getInventory().setSelectedSlot(blockSlot);
+        client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
+                new BlockHitResult(hit, side, anchor, false));
+        player.swingHand(Hand.MAIN_HAND);
+        lastBridgeTarget = placementTarget.toImmutable();
+        lastBridgePlaceTick = ticks;
     }
 
     private boolean handlePillar(ClientPlayerEntity player) {
