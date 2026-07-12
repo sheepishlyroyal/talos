@@ -39,20 +39,27 @@ public final class AStarPathfinder {
     private final long timeBudgetNanos;
     private final ClientPlayerEntity player;
     private final boolean hasPlaceableBlocks;
+    private final boolean allowMining;
 
     public AStarPathfinder(ClientWorld world) {
-        this(world, null, DEFAULT_NODE_CAP, DEFAULT_TIME_BUDGET_NANOS);
+        this(world, null, true, DEFAULT_NODE_CAP, DEFAULT_TIME_BUDGET_NANOS);
     }
 
     public AStarPathfinder(ClientWorld world, ClientPlayerEntity player) {
-        this(world, player, DEFAULT_NODE_CAP, DEFAULT_TIME_BUDGET_NANOS);
+        this(world, player, true, DEFAULT_NODE_CAP, DEFAULT_TIME_BUDGET_NANOS);
     }
 
-    AStarPathfinder(ClientWorld world, ClientPlayerEntity player, int nodeCap, long timeBudgetNanos) {
+    public AStarPathfinder(ClientWorld world, ClientPlayerEntity player, boolean allowMining) {
+        this(world, player, allowMining, DEFAULT_NODE_CAP, DEFAULT_TIME_BUDGET_NANOS);
+    }
+
+    AStarPathfinder(ClientWorld world, ClientPlayerEntity player, boolean allowMining,
+                    int nodeCap, long timeBudgetNanos) {
         this.world = world;
         this.player = player;
         this.nodeCap = nodeCap;
         this.timeBudgetNanos = timeBudgetNanos;
+        this.allowMining = allowMining;
         this.hasPlaceableBlocks = player != null && player.getInventory().getMainStacks().stream()
                 .anyMatch(stack -> !stack.isEmpty() && stack.getItem() instanceof BlockItem);
     }
@@ -148,16 +155,17 @@ public final class AStarPathfinder {
             }
             BlockPos destination = resolveMove(from, diagonal[0], diagonal[1]);
             if (destination != null) {
-                result.add(new Move(destination, movementCost(from, destination, MoveType.DIAGONAL)));
+                result.add(new Move(destination,
+                        movementCost(from, destination, classify(from, destination, true))));
             }
         }
 
         // Water is a volume rather than a floor: allow deliberate ascent and descent.
         if (isWater(from) || isWater(from.down())) {
             BlockPos up = from.up();
-            if (isSwimmable(up)) result.add(new Move(up.toImmutable(), movementCost(from, up, MoveType.SWIM)));
+            if (isLegalSwimDestination(up)) result.add(new Move(up.toImmutable(), movementCost(from, up, MoveType.SWIM)));
             BlockPos down = from.down();
-            if (isSwimmable(down)) result.add(new Move(down.toImmutable(), movementCost(from, down, MoveType.SWIM)));
+            if (isLegalSwimDestination(down)) result.add(new Move(down.toImmutable(), movementCost(from, down, MoveType.SWIM)));
         }
         return result;
     }
@@ -195,12 +203,14 @@ public final class AStarPathfinder {
     private BlockPos resolveMove(BlockPos from, int dx, int dz) {
         BlockPos horizontal = from.add(dx, 0, dz);
         if (!isLoaded(horizontal)) return null;
-        if (isSwimmable(horizontal)) return horizontal.toImmutable();
+        if (isWater(horizontal)) {
+            return isLegalSwimDestination(horizontal) ? horizontal.toImmutable() : null;
+        }
         if (isStandable(horizontal)) return horizontal.toImmutable();
 
         // A two-block-high mine-through corridor is a legal edge. The closed-form
         // break estimate below makes A* prefer walking around whenever that is faster.
-        if (canMine(horizontal) && canMine(horizontal.up())
+        if (allowMining && canMine(horizontal) && canMine(horizontal.up())
                 && hasSolidSupport(horizontal.down())) return horizontal.toImmutable();
 
         // Bridge one block over a gap only when the inventory can actually supply it.
@@ -244,6 +254,14 @@ public final class AStarPathfinder {
         return isLoaded(pos) && isWater(pos) && isPassable(pos) && isPassable(pos.up());
     }
 
+    private boolean isLegalSwimDestination(BlockPos pos) {
+        if (!isSwimmable(pos)) return false;
+        boolean deepEnough = isLoaded(pos.down()) && isWater(pos.down());
+        boolean continuing = player != null && (player.isSwimming()
+                || player.isSubmergedInWater() || player.isTouchingWater());
+        return deepEnough || continuing;
+    }
+
     private boolean isHazard(BlockPos pos) {
         BlockState state = world.getBlockState(pos);
         return state.isOf(Blocks.LAVA) || state.isOf(Blocks.FIRE) || state.isOf(Blocks.SOUL_FIRE)
@@ -252,7 +270,7 @@ public final class AStarPathfinder {
     }
 
     private MoveType classify(BlockPos from, BlockPos to, boolean diagonal) {
-        if (isWater(from) || isWater(to)) return MoveType.SWIM;
+        if (isWater(to) && isLegalSwimDestination(to)) return MoveType.SWIM;
         if (!isPassable(to) || !isPassable(to.up())) return MoveType.BREAK;
         if (!hasSafeSupport(to.down())) return MoveType.PLACE;
         if (to.getY() > from.getY()) {
@@ -264,19 +282,23 @@ public final class AStarPathfinder {
     }
 
     private double movementCost(BlockPos from, BlockPos to, MoveType type) {
-        double cost = switch (type) {
-            case WALK -> to.getY() == from.getY() && hasSafeSupport(to.down()) ? 0.90 : 1.0;
-            case DIAGONAL -> SQRT_TWO;
-            case JUMP -> 1.0;
-            case SPRINT_JUMP -> 1.05;
-            case SWIM -> 1.75 + Math.abs(to.getY() - from.getY()) * 0.20;
-            case PLACE -> 2.0 + (to.getY() > from.getY() ? 0.5 : 0.0);
-            case BREAK -> 1.0;
-            case STAIR_STEP -> 0.95;
-        };
+        double dx = to.getX() - from.getX(), dz = to.getZ() - from.getZ();
+        double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+        double verticalDistance = Math.abs(to.getY() - from.getY());
+        double cost = horizontalDistance / effectiveSpeed(type, to) + verticalDistance * 0.12;
+        if (type == MoveType.PLACE) cost += estimatePlaceTimeSeconds(to.getY() > from.getY());
         if (!isPassable(to)) cost += estimateBreakTimeSeconds(to);
         if (!isPassable(to.up())) cost += estimateBreakTimeSeconds(to.up());
         return cost;
+    }
+
+    private double effectiveSpeed(MoveType type, BlockPos destination) {
+        return switch (type) {
+            case WALK, DIAGONAL, BREAK, JUMP, PLACE -> 4.317;
+            case SPRINT_JUMP -> 6.0;
+            case STAIR_STEP -> 5.2;
+            case SWIM -> isWater(destination.down()) ? 3.9 : 1.8;
+        };
     }
 
     public double estimateBreakTimeSeconds(BlockPos pos) {
@@ -297,7 +319,7 @@ public final class AStarPathfinder {
 
     public double estimatePlaceTimeSeconds(boolean pillaring) {
         if (!hasPlaceableBlocks) return Double.POSITIVE_INFINITY;
-        return 0.20 + (pillaring ? 0.50 : 0.0);
+        return pillaring ? 0.50 : 0.35;
     }
 
     public double effectiveMiningSpeed(ItemStack stack, BlockState state) {
@@ -356,7 +378,8 @@ public final class AStarPathfinder {
         int dz = Math.abs(pos.getZ() - target.getZ());
         int min = Math.min(dx, dz);
         double octile = dx + dz + (SQRT_TWO - 2.0) * min;
-        return octile * 0.90 + Math.abs(pos.getY() - target.getY()) * 0.20;
+        // Optimistic travel time at the fastest modeled horizontal speed.
+        return octile / 6.0 + Math.abs(pos.getY() - target.getY()) * 0.12;
     }
 
     private static List<BlockPos> reconstruct(BlockPos end, Map<BlockPos, BlockPos> parents) {

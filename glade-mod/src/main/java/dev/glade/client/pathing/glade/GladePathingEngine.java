@@ -9,6 +9,7 @@ import dev.glade.client.pathing.GoalXZ;
 import dev.glade.client.pathing.PathResult;
 import dev.glade.client.pathing.PathingEngine;
 import dev.glade.client.pathing.PathingOptions;
+import dev.glade.client.task.GladeTask;
 import java.util.Objects;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -88,7 +89,8 @@ public final class GladePathingEngine implements PathingEngine {
             return;
         }
 
-        AStarPathfinder pathfinder = new AStarPathfinder(client.world, client.player);
+        AStarPathfinder pathfinder = new AStarPathfinder(
+                client.world, client.player, run.options.allowMining());
         AStarPathfinder.SearchResult result = pathfinder.find(
                 client.player.getBlockPos(), run.snapshot.test(), run.snapshot.target());
         LOGGER.debug("Native path search attempt {}: {}", run.attempts, result.detail());
@@ -129,8 +131,11 @@ public final class GladePathingEngine implements PathingEngine {
         run.task = task;
         activeTask = task;
         segmentFuture.whenComplete((segment, error) -> {
-            Runnable continuation = () -> segmentCompleted(run, task, result, segment, error);
-            if (client.isOnThread()) continuation.run(); else client.execute(continuation);
+            // Completion occurs in task.body(), before the scheduler removes the old task.
+            // A mutex-free task is absent from the scheduler's current runnable snapshot,
+            // so it executes next tick after the old movement task has been removed.
+            GladeClient.taskScheduler().addTask("native-path-handoff", new OneShotTask(
+                    () -> segmentCompleted(run, task, result, segment, error)));
         });
         try {
             GladeClient.taskScheduler().addTask("native-path-follow", task);
@@ -245,6 +250,17 @@ public final class GladePathingEngine implements PathingEngine {
     }
 
     private record GoalSnapshot(Predicate<BlockPos> test, BlockPos target) { }
+
+    private static final class OneShotTask extends GladeTask {
+        private final Runnable action;
+        private boolean done;
+
+        OneShotTask(Runnable action) { this.action = action; }
+        @Override public void initialize() { }
+        @Override public boolean condition() { return !done; }
+        @Override public void increment() { }
+        @Override public void body() { done = true; action.run(); }
+    }
 
     private static final class NavigationRun {
         final MinecraftClient client;

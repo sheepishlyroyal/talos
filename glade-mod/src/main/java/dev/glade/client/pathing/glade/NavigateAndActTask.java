@@ -44,6 +44,7 @@ public final class NavigateAndActTask extends GladeTask {
     private int index;
     private int ticks;
     private BlockPos breaking;
+    private BlockPos pillarOrigin;
 
     public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
                               Predicate<BlockPos> goal, @Nullable RouteAction action,
@@ -89,8 +90,11 @@ public final class NavigateAndActTask extends GladeTask {
             boolean jumpEdge = horizontalDistance > 1;
             boolean ascending = node.getY() > player.getBlockY();
             boolean stairOrSlab = isStairOrSlab(node.down()) || isStairOrSlab(player.getBlockPos().down());
-            if (player.isTouchingWater()) {
-                // Keep swimming forward; rise for higher nodes and near-level surface transitions.
+            boolean swimEdge = isWater(node) && (isWater(node.down()) || player.isSwimming()
+                    || player.isSubmergedInWater() || player.isTouchingWater());
+            if (swimEdge) {
+                // Sprint is required to enter and maintain the swimming pose.
+                client.options.sprintKey.setPressed(true);
                 client.options.jumpKey.setPressed(ascending || node.getY() >= player.getBlockY());
             } else if (jumpEdge) {
                 client.options.sprintKey.setPressed(true);
@@ -107,6 +111,13 @@ public final class NavigateAndActTask extends GladeTask {
     }
 
     private boolean handleTraversal(ClientPlayerEntity player, BlockPos node) {
+        BlockPos support = node.down();
+        boolean unsupportedUp = node.getX() == player.getBlockX()
+                && node.getZ() == player.getBlockZ() && node.getY() > player.getBlockY()
+                && !isWater(node) && !isWater(support) && isFallRisk(support);
+        // A vertical PLACE edge wins over mining even if a prior failed placement has
+        // temporarily made the destination collide.
+        if (unsupportedUp) return handlePillar(player);
         var state = client.world.getBlockState(node);
         if (!state.getCollisionShape(client.world, node).isEmpty()) {
             releaseInputs();
@@ -130,7 +141,6 @@ public final class NavigateAndActTask extends GladeTask {
             return true;
         }
         breaking = null;
-        BlockPos support = node.down();
         var supportState = client.world.getBlockState(support);
         if (isWater(node) || isWater(support)) return false;
         if (isFallRisk(support)) {
@@ -165,6 +175,35 @@ public final class NavigateAndActTask extends GladeTask {
             return true;
         }
         return false;
+    }
+
+    private boolean handlePillar(ClientPlayerEntity player) {
+        releaseInputs();
+        int blockSlot = findBlockSlot(player);
+        if (blockSlot < 0) { finish(false, "Ran out of pillar blocks"); return true; }
+        if (pillarOrigin == null || player.isOnGround()) pillarOrigin = player.getBlockPos().toImmutable();
+        BlockPos anchor = pillarOrigin.down();
+        Vec3d hit = Vec3d.ofCenter(anchor).add(0.0, 0.5, 0.0);
+        aim.aimAt(hit);
+        aim.tick();
+        player.getInventory().setSelectedSlot(blockSlot);
+        client.options.jumpKey.setPressed(true);
+        // Jump input is applied after this task tick. Place only after the player's feet
+        // clear the target cell; same-tick jump+place is rejected by collision checks.
+        if (player.getY() >= pillarOrigin.getY() + 0.42 && aim.isAimed()
+                && GladeClient.tickBudget().hasBudgetRemaining()) {
+            client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
+                    new BlockHitResult(hit, Direction.UP, anchor, false));
+            player.swingHand(Hand.MAIN_HAND);
+        }
+        return true;
+    }
+
+    private int findBlockSlot(ClientPlayerEntity player) {
+        for (int i = 0; i < 9; i++) {
+            if (player.getInventory().getStack(i).getItem() instanceof BlockItem) return i;
+        }
+        return -1;
     }
 
     private void breakBlock(ClientPlayerEntity player, BlockPos pos, net.minecraft.block.BlockState state) {
