@@ -9,6 +9,7 @@ import dev.glade.client.blockeditor.registry.BlockRegistry;
 import dev.glade.client.blockeditor.util.GladeGuiScale;
 import dev.glade.client.script.ScriptEngine;
 import dev.glade.client.ui.draw.GladeUi;
+import dev.glade.client.ui.screen.PythonEditorScreen;
 import dev.glade.client.ui.theme.Theme;
 import dev.glade.client.ui.widget.Button;
 import java.io.IOException;
@@ -29,11 +30,19 @@ import org.lwjgl.glfw.GLFW;
 public final class BlockEditorScreen extends Screen {
     private static final String PROJECT_NAME = "block-editor";
     private static final String BUILD_NAME = "block_editor_generated";
+    // Item 8: one-way blocks -> Python export. The generated file is written under this name so
+    // the confirmation warning can tell the user exactly what to type/Load in the Python editor.
+    private static final String SWITCH_SCRIPT_NAME = "block_editor_switch";
+    private static final String SWITCH_WARNING =
+            "Switch to Python mode? This converts your blocks to Python one-way. "
+                    + "You cannot convert Python back to blocks. Your saved block project is kept.";
     private final GladeProjectFile projects = new GladeProjectFile();
     private final PythonCodeGenerator generator = new PythonCodeGenerator();
     private Workspace workspace = initialWorkspace();
     private final BlockCanvas canvas = new BlockCanvas(workspace);
     private List<Button> toolbar = List.of();
+    private List<Button> switchWarningButtons = List.of();
+    private boolean switchWarningVisible;
     private volatile String status = "Ready — project: " + PROJECT_NAME + ".glade";
     private volatile boolean statusError;
     // Item 9: at large GUI scales this.width/height shrink below what the toolbar/canvas need to
@@ -52,8 +61,15 @@ public final class BlockEditorScreen extends Screen {
                 new Button(12, buttonY, 54, 20, Text.literal("New"), this::newProject),
                 new Button(72, buttonY, 54, 20, Text.literal("Save"), this::saveProject),
                 new Button(132, buttonY, 54, 20, Text.literal("Load"), this::loadProject),
-                new Button(192, buttonY, 54, 20, Text.literal("Run"), this::runProject));
+                new Button(192, buttonY, 54, 20, Text.literal("Run"), this::runProject),
+                new Button(252, buttonY, 108, 20, Text.literal("Switch to Python"), this::requestSwitchToPython));
         canvas.bounds(8, 38, Math.max(100, vw - 16), Math.max(80, vh - 46));
+
+        int warnCenterX = vw / 2;
+        int warnButtonY = vh / 2 + 46;
+        switchWarningButtons = List.of(
+                new Button(warnCenterX - 116, warnButtonY, 108, 20, Text.literal("Cancel"), this::cancelSwitchToPython),
+                new Button(warnCenterX + 8, warnButtonY, 108, 20, Text.literal("Confirm"), this::confirmSwitchToPython));
     }
 
     @Override
@@ -72,15 +88,54 @@ public final class BlockEditorScreen extends Screen {
         context.drawCenteredTextWithShadow(textRenderer, title, vw / 2, 12, Theme.palette().text());
         for (Button button : toolbar) button.render(context, vMouseX, vMouseY, deltaTicks);
         int statusWidth = textRenderer.getWidth(status);
-        context.drawText(textRenderer, status, Math.max(252, vw - statusWidth - 14), 12,
+        context.drawText(textRenderer, status, Math.max(368, vw - statusWidth - 14), 12,
                 statusError ? 0xFFFF7777 : Theme.palette().description(), false);
         canvas.render(context, vMouseX, vMouseY, deltaTicks);
+        if (switchWarningVisible) renderSwitchWarning(context, vw, vh, vMouseX, vMouseY, deltaTicks);
         context.getMatrices().popMatrix();
+    }
+
+    private void renderSwitchWarning(DrawContext context, int vw, int vh, int vMouseX, int vMouseY, float deltaTicks) {
+        int panelWidth = Math.min(320, vw - 24);
+        int panelHeight = 118;
+        int panelX = (vw - panelWidth) / 2;
+        int panelY = vh / 2 - panelHeight / 2;
+        context.fill(0, 0, vw, vh, 0xC0000000);
+        GladeUi.glassPanel(context, panelX, panelY, panelWidth, panelHeight, 10, Theme.palette().panelHeader());
+        GladeUi.roundedRectBorder(context, panelX, panelY, panelWidth, panelHeight, 10, 1.0f, Theme.palette().outline());
+        int textX = panelX + 12;
+        int textY = panelY + 12;
+        for (String line : wrapText(SWITCH_WARNING, panelWidth - 24)) {
+            context.drawText(textRenderer, line, textX, textY, Theme.palette().text(), false);
+            textY += textRenderer.fontHeight + 2;
+        }
+        for (Button button : switchWarningButtons) button.render(context, vMouseX, vMouseY, deltaTicks);
+    }
+
+    /** Simple greedy word-wrap; the warning text is short/static so this avoids a DrawContext dependency. */
+    private List<String> wrapText(String text, int maxWidth) {
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String word : text.split(" ")) {
+            String candidate = current.isEmpty() ? word : current + " " + word;
+            if (textRenderer.getWidth(candidate) > maxWidth && !current.isEmpty()) {
+                lines.add(current.toString());
+                current = new StringBuilder(word);
+            } else {
+                current = new StringBuilder(candidate);
+            }
+        }
+        if (!current.isEmpty()) lines.add(current.toString());
+        return lines;
     }
 
     @Override
     public boolean mouseClicked(Click click, boolean doubled) {
         double vx = scaleAdjust.toVirtualX(click.x()), vy = scaleAdjust.toVirtualY(click.y());
+        if (switchWarningVisible) {
+            for (Button button : switchWarningButtons) if (button.mouseClicked(vx, vy, click.button())) return true;
+            return true; // swallow clicks on the scrim while the modal warning is up
+        }
         for (Button button : toolbar) if (button.mouseClicked(vx, vy, click.button())) return true;
         if (canvas.mouseClicked(vx, vy, click.button(), doubled)) return true;
         return super.mouseClicked(click, doubled);
@@ -155,6 +210,29 @@ public final class BlockEditorScreen extends Screen {
                     });
         } catch (IOException | RuntimeException error) { setStatus("Run failed: " + error.getMessage(), true); }
     }
+    /** Item 8: block -> Python conversion is intentionally one-way; no code path here (or
+     *  anywhere in this file) reads a .py file back into a Workspace. */
+    private void requestSwitchToPython() { switchWarningVisible = true; }
+    private void cancelSwitchToPython() { switchWarningVisible = false; }
+
+    private void confirmSwitchToPython() {
+        switchWarningVisible = false;
+        try {
+            String source = generator.generate(workspace);
+            Path scripts = FabricLoader.getInstance().getGameDir().resolve("glade").resolve("scripts");
+            Files.createDirectories(scripts);
+            Files.writeString(scripts.resolve(SWITCH_SCRIPT_NAME + ".py"), source, StandardCharsets.UTF_8);
+            setStatus("Converted to Python — load '" + SWITCH_SCRIPT_NAME + "' in the Python editor", false);
+            if (client != null) client.setScreen(new PythonEditorScreen());
+        } catch (IOException | RuntimeException error) {
+            String message = "Switch to Python failed: " + error.getMessage();
+            setStatus(message, true);
+            if (client != null && client.inGameHud != null) {
+                client.inGameHud.getChatHud().addMessage(Text.literal(message));
+            }
+        }
+    }
+
     private void setStatus(String text, boolean error) { status = text; statusError = error; }
 
     private static Workspace initialWorkspace() {
