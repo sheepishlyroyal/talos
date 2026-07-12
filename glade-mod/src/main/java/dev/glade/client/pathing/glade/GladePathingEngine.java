@@ -127,7 +127,8 @@ public final class GladePathingEngine implements PathingEngine {
         currentNodes = nodes.stream().map(Vec3d::ofCenter).toList();
         renderNodes(currentNodes);
         CompletableFuture<PathResult> segmentFuture = new CompletableFuture<>();
-        NavigateAndActTask task = new NavigateAndActTask(client, nodes, run.snapshot.test(), null, segmentFuture);
+        NavigateAndActTask task = new NavigateAndActTask(client, nodes, run.snapshot.test(), null,
+                segmentFuture, run.options.allowMining());
         run.task = task;
         activeTask = task;
         segmentFuture.whenComplete((segment, error) -> {

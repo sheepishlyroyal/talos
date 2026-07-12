@@ -163,9 +163,9 @@ public final class AStarPathfinder {
         // Water is a volume rather than a floor: allow deliberate ascent and descent.
         if (isWater(from) || isWater(from.down())) {
             BlockPos up = from.up();
-            if (isLegalSwimDestination(up)) result.add(new Move(up.toImmutable(), movementCost(from, up, MoveType.SWIM)));
+            if (isLegalSwimDestination(from, up)) result.add(new Move(up.toImmutable(), movementCost(from, up, MoveType.SWIM)));
             BlockPos down = from.down();
-            if (isLegalSwimDestination(down)) result.add(new Move(down.toImmutable(), movementCost(from, down, MoveType.SWIM)));
+            if (isLegalSwimDestination(from, down)) result.add(new Move(down.toImmutable(), movementCost(from, down, MoveType.SWIM)));
         }
         return result;
     }
@@ -204,7 +204,7 @@ public final class AStarPathfinder {
         BlockPos horizontal = from.add(dx, 0, dz);
         if (!isLoaded(horizontal)) return null;
         if (isWater(horizontal)) {
-            return isLegalSwimDestination(horizontal) ? horizontal.toImmutable() : null;
+            return isLegalSwimDestination(from, horizontal) ? horizontal.toImmutable() : null;
         }
         if (isStandable(horizontal)) return horizontal.toImmutable();
 
@@ -254,10 +254,10 @@ public final class AStarPathfinder {
         return isLoaded(pos) && isWater(pos) && isPassable(pos) && isPassable(pos.up());
     }
 
-    private boolean isLegalSwimDestination(BlockPos pos) {
+    private boolean isLegalSwimDestination(BlockPos from, BlockPos pos) {
         if (!isSwimmable(pos)) return false;
         boolean deepEnough = isLoaded(pos.down()) && isWater(pos.down());
-        boolean continuing = player != null && (player.isSwimming()
+        boolean continuing = isWater(from) && player != null && (player.isSwimming()
                 || player.isSubmergedInWater() || player.isTouchingWater());
         return deepEnough || continuing;
     }
@@ -270,7 +270,7 @@ public final class AStarPathfinder {
     }
 
     private MoveType classify(BlockPos from, BlockPos to, boolean diagonal) {
-        if (isWater(to) && isLegalSwimDestination(to)) return MoveType.SWIM;
+        if (isWater(to) && isLegalSwimDestination(from, to)) return MoveType.SWIM;
         if (!isPassable(to) || !isPassable(to.up())) return MoveType.BREAK;
         if (!hasSafeSupport(to.down())) return MoveType.PLACE;
         if (to.getY() > from.getY()) {
@@ -294,9 +294,11 @@ public final class AStarPathfinder {
 
     private double effectiveSpeed(MoveType type, BlockPos destination) {
         return switch (type) {
-            case WALK, DIAGONAL, BREAK, JUMP, PLACE -> 4.317;
+            case WALK, DIAGONAL -> 5.6;
+            case BREAK, JUMP -> 4.317;
             case SPRINT_JUMP -> 6.0;
             case STAIR_STEP -> 5.2;
+            case PLACE -> 1.3;
             case SWIM -> isWater(destination.down()) ? 3.9 : 1.8;
         };
     }

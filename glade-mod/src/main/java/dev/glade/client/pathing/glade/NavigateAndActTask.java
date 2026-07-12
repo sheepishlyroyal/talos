@@ -40,6 +40,7 @@ public final class NavigateAndActTask extends GladeTask {
     private final Predicate<BlockPos> goal;
     private final CompletableFuture<PathResult> future;
     private final @Nullable RouteAction action;
+    private final boolean allowMining;
     private final AimController aim;
     private int index;
     private int ticks;
@@ -49,10 +50,17 @@ public final class NavigateAndActTask extends GladeTask {
     public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
                               Predicate<BlockPos> goal, @Nullable RouteAction action,
                               CompletableFuture<PathResult> future) {
+        this(client, nodes, goal, action, future, true);
+    }
+
+    public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
+                              Predicate<BlockPos> goal, @Nullable RouteAction action,
+                              CompletableFuture<PathResult> future, boolean allowMining) {
         this.client = client;
         this.nodes = List.copyOf(nodes);
         this.goal = goal;
         this.action = action;
+        this.allowMining = allowMining;
         this.future = future;
         this.index = nodes.size() > 1 ? 1 : nodes.size();
         this.aim = new AimController(client, GladeClient.humanizer().rotation(),
@@ -120,6 +128,10 @@ public final class NavigateAndActTask extends GladeTask {
         if (unsupportedUp) return handlePillar(player);
         var state = client.world.getBlockState(node);
         if (!state.getCollisionShape(client.world, node).isEmpty()) {
+            if (!allowMining) {
+                finish(false, "Route became blocked and mining is disabled");
+                return true;
+            }
             releaseInputs();
             aim.aimAt(node); aim.tick();
             if (player.getEyePos().squaredDistanceTo(Vec3d.ofCenter(node))
