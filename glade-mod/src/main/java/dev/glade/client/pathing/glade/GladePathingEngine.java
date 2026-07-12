@@ -124,11 +124,11 @@ public final class GladePathingEngine implements PathingEngine {
         // Mining, bridging, and parkour landing transitions are never sampled away.
         List<BlockPos> nodes = result.path().stream()
                 .filter(pos -> sampledNodes.contains(pos) || mandatoryNodes.contains(pos)).toList();
-        currentNodes = nodes.stream().map(Vec3d::ofCenter).toList();
+        currentNodes = NavigateAndActTask.buildSteeringNodes(client, nodes);
         renderNodes(currentNodes);
         CompletableFuture<PathResult> segmentFuture = new CompletableFuture<>();
-        NavigateAndActTask task = new NavigateAndActTask(client, nodes, run.snapshot.test(), null,
-                segmentFuture, run.options.allowMining());
+        NavigateAndActTask task = new NavigateAndActTask(client, nodes, currentNodes,
+                run.snapshot.test(), null, segmentFuture, run.options.allowMining());
         run.task = task;
         activeTask = task;
         segmentFuture.whenComplete((segment, error) -> {

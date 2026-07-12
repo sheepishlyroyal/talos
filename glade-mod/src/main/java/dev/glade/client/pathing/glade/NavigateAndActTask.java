@@ -42,10 +42,15 @@ public final class NavigateAndActTask extends GladeTask {
     private static final long MAX_SPAM_JUMP_INTERVAL_NANOS = 1_000_000_000L / 7L;
     private static final int PLAN_LOOKAHEAD_NODES = 6;
     private static final int BRAKING_NODES = 3;
+    private static final int PRECISE_GOAL_EDGES = 2;
+    private static final double SHARP_TURN_COSINE = -0.4226182617; // cos(115 degrees)
+    private static final double WALL_CLEARANCE = 0.50;
+    private static final double OPEN_SIDE_LIMIT = 0.70;
     private static final int MIN_MODE_DWELL_TICKS = 8;
     private enum PlannedMode { SPRINT_JUMP, WALK, SPRINT, SPAM_JUMP, SWIM, CRAWL }
     private final MinecraftClient client;
     private final List<BlockPos> nodes;
+    private final List<Vec3d> steeringNodes;
     private final Predicate<BlockPos> goal;
     private final CompletableFuture<PathResult> future;
     private final @Nullable RouteAction action;
@@ -63,7 +68,7 @@ public final class NavigateAndActTask extends GladeTask {
     private BlockPos sprintJumpLanding;
     private boolean sprintJumpWasAirborne;
     private boolean sprintJumpUsesSprint = true;
-    private PlannedMode committedMode = PlannedMode.WALK;
+    private PlannedMode committedMode = PlannedMode.SPRINT_JUMP;
     private int committedModeSinceTick;
     private String lastStatus = "";
 
@@ -85,8 +90,19 @@ public final class NavigateAndActTask extends GladeTask {
     public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
                               Predicate<BlockPos> goal, @Nullable RouteAction action,
                               CompletableFuture<PathResult> future, boolean allowMining) {
+        this(client, nodes, buildSteeringNodes(client, nodes), goal, action, future, allowMining);
+    }
+
+    public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
+                              List<Vec3d> steeringNodes, Predicate<BlockPos> goal,
+                              @Nullable RouteAction action, CompletableFuture<PathResult> future,
+                              boolean allowMining) {
+        if (nodes.size() != steeringNodes.size()) {
+            throw new IllegalArgumentException("Block and steering node counts must match");
+        }
         this.client = client;
         this.nodes = List.copyOf(nodes);
+        this.steeringNodes = List.copyOf(steeringNodes);
         this.goal = goal;
         this.action = action;
         this.allowMining = allowMining;
@@ -152,12 +168,22 @@ public final class NavigateAndActTask extends GladeTask {
             boolean stickyJumpSurface = isStickyJumpSurface(player.getBlockPos().down())
                     || isStickyJumpSurface(node.down());
             boolean headHitStep = isLowCeilingAscent(player.getBlockPos(), node);
+            boolean climbingOut = isConfinedVerticalEscape(player, node);
             if (swimEdge) {
                 // Swimming is driven by view pitch. Jump causes repeated surface
                 // breaches and sinking, so it is deliberately never used here.
                 status(isLava(node) || player.isInLava() ? "swimming (lava)" : "swimming");
                 client.options.jumpKey.setPressed(false);
                 steerSwimming(player, followTarget, node);
+            } else if (climbingOut) {
+                // A boxed ascent is impossible without jumping. This deliberately
+                // precedes WALK and crawl/slow-terrain handling so precision mode can
+                // never pin the player against the wall of a one-wide pit.
+                status("climbing out");
+                client.options.sprintKey.setPressed(false);
+                client.options.jumpKey.setPressed(false);
+                steerToward(player, followTarget, false);
+                pressSpamJumpIfReady(player);
             } else if (inCobweb) {
                 // Sprinting and jumping only waste inputs against cobweb collision.
                 status("slow terrain (cobweb)");
@@ -257,7 +283,10 @@ public final class NavigateAndActTask extends GladeTask {
 
     private PlannedMode brakingMode(PlannedMode upcoming) {
         return switch (upcoming) {
-            case SWIM, CRAWL, SPAM_JUMP, WALK -> PlannedMode.WALK;
+            // Brake a precision boundary without expanding WALK backward onto safe
+            // approach nodes; WALK starts only on the qualifying segment itself.
+            case WALK -> PlannedMode.SPRINT;
+            case SWIM, CRAWL, SPAM_JUMP -> PlannedMode.WALK;
             case SPRINT -> PlannedMode.SPRINT;
             case SPRINT_JUMP -> PlannedMode.SPRINT_JUMP;
         };
@@ -274,37 +303,45 @@ public final class NavigateAndActTask extends GladeTask {
         if (!hasOpenJumpHeadroom(pos)) return PlannedMode.SPAM_JUMP;
         if (isIce(pos.down())) return PlannedMode.SPRINT;
 
-        // The final three nodes, turns/reversals, narrow footing, and exposed edges
-        // are precision segments. They are deliberately identified from the path,
-        // not from transient player position.
-        if (nodes.size() - 1 - at <= BRAKING_NODES || isTurn(at)
-                || isNarrowLanding(pos) || isEdgeBounded(pos) || isTightGap(pos)) {
+        // Precision is intentionally rare: a true two-flank drop, a reversal-like
+        // turn, or the last two edges when the actual goal cell is constrained.
+        int remainingEdges = nodes.size() - 1 - at;
+        BlockPos goalCell = nodes.getLast();
+        boolean constrainedGoalApproach = remainingEdges <= PRECISE_GOAL_EDGES
+                && (isTrueOneWideLanding(goalCell, nodes.size() - 1)
+                || isGoalNarrow(goalCell) || isGoalEdgeBounded(goalCell));
+        if (isTrueOneWideLanding(pos, at) || isSharpTurn(at) || constrainedGoalApproach) {
             return PlannedMode.WALK;
         }
+        // A wide-open goal needs speed control, not precision mode. Stop hopping on
+        // its final edge while retaining sprint speed.
+        if (remainingEdges <= 1) return PlannedMode.SPRINT;
         return PlannedMode.SPRINT_JUMP;
     }
 
-    private boolean isTurn(int at) {
+    private boolean isSharpTurn(int at) {
         if (at <= 0 || at + 1 >= nodes.size()) return false;
         BlockPos before = nodes.get(at - 1), here = nodes.get(at), after = nodes.get(at + 1);
-        int inX = Integer.compare(here.getX(), before.getX());
-        int inZ = Integer.compare(here.getZ(), before.getZ());
-        int outX = Integer.compare(after.getX(), here.getX());
-        int outZ = Integer.compare(after.getZ(), here.getZ());
-        return inX != outX || inZ != outZ;
+        double inX = here.getX() - before.getX(), inZ = here.getZ() - before.getZ();
+        double outX = after.getX() - here.getX(), outZ = after.getZ() - here.getZ();
+        double lengths = Math.hypot(inX, inZ) * Math.hypot(outX, outZ);
+        return lengths > 0.0 && (inX * outX + inZ * outZ) / lengths < SHARP_TURN_COSINE;
     }
 
-    /** A landing with no dependable lateral neighbor is effectively a pillar. */
-    private boolean isNarrowLanding(BlockPos pos) {
-        int safeSides = 0;
-        for (Direction direction : Direction.Type.HORIZONTAL) {
-            if (!isFallRisk(pos.offset(direction).down())) safeSides++;
-        }
-        return safeSides <= 1;
+    /** True only when both flanks of the route are unsupported fall drops. */
+    private boolean isTrueOneWideLanding(BlockPos pos, int at) {
+        if (nodes.size() < 2) return false;
+        BlockPos other = at > 0 ? nodes.get(at - 1) : nodes.get(1);
+        int dx = Integer.compare(pos.getX(), other.getX());
+        int dz = Integer.compare(pos.getZ(), other.getZ());
+        if (dx == 0 && dz == 0) return false;
+        BlockPos left = pos.add(-dz, 0, dx);
+        BlockPos right = pos.add(dz, 0, -dx);
+        return isFallRisk(left.down()) && isFallRisk(right.down());
     }
 
-    /** Two or more exposed sides make momentum beyond this node dangerous. */
-    private boolean isEdgeBounded(BlockPos pos) {
+    /** Goal-only check for cells genuinely bounded by multiple hazardous edges. */
+    private boolean isGoalEdgeBounded(BlockPos pos) {
         int exposed = 0;
         for (Direction direction : Direction.Type.HORIZONTAL) {
             BlockPos side = pos.offset(direction);
@@ -313,8 +350,8 @@ public final class NavigateAndActTask extends GladeTask {
         return exposed >= 2;
     }
 
-    /** Opposing body-height walls identify a one-wide entrance/corridor. */
-    private boolean isTightGap(BlockPos pos) {
+    /** Opposing body walls make the goal itself a genuine one-wide opening. */
+    private boolean isGoalNarrow(BlockPos pos) {
         return (blocksBody(pos.west()) && blocksBody(pos.east()))
                 || (blocksBody(pos.north()) && blocksBody(pos.south()));
     }
@@ -327,8 +364,10 @@ public final class NavigateAndActTask extends GladeTask {
     }
 
     private void continueSprintJump(ClientPlayerEntity player) {
-        Vec3d landingAim = new Vec3d(sprintJumpLanding.getX() + 0.5, player.getEyeY(),
-                sprintJumpLanding.getZ() + 0.5);
+        int landingIndex = nodes.indexOf(sprintJumpLanding);
+        Vec3d waypoint = landingIndex >= 0 ? steeringNodes.get(landingIndex)
+                : clearanceAdjustedCenter(sprintJumpLanding, player.getEyeY());
+        Vec3d landingAim = new Vec3d(waypoint.x, player.getEyeY(), waypoint.z);
         aim.aimAt(landingAim);
         aim.tick();
         releaseDirectionalInputs();
@@ -341,7 +380,8 @@ public final class NavigateAndActTask extends GladeTask {
 
     /** A short look-ahead removes center-to-center yaw snaps without cutting corners. */
     private Vec3d followTarget(ClientPlayerEntity player, BlockPos node) {
-        Vec3d current = clearanceAdjustedCenter(node, player.getEyeY());
+        Vec3d waypoint = steeringNodes.get(index);
+        Vec3d current = new Vec3d(waypoint.x, player.getEyeY(), waypoint.z);
         if (index + 1 >= nodes.size()) return current;
         BlockPos next = nodes.get(index + 1);
         if (next.getY() != node.getY() || isCrawlNode(node) || isCrawlNode(next)) return current;
@@ -353,23 +393,64 @@ public final class NavigateAndActTask extends GladeTask {
             int outZ = Integer.compare(next.getZ(), node.getZ());
             if (inX != outX || inZ != outZ) return current;
         }
-        Vec3d ahead = clearanceAdjustedCenter(next, player.getEyeY());
+        Vec3d nextWaypoint = steeringNodes.get(index + 1);
+        Vec3d ahead = new Vec3d(nextWaypoint.x, player.getEyeY(), nextWaypoint.z);
         return current.lerp(ahead, 0.45);
     }
 
-    /** Bias away from a single nearby wall; balanced one-wide corridors stay centered. */
+    /** Returns the exact precomputed clearance waypoint when this is a path node. */
     private Vec3d clearanceAdjustedCenter(BlockPos pos, double y) {
-        double x = pos.getX() + 0.5, z = pos.getZ() + 0.5;
-        boolean west = blocksBody(pos.west()), east = blocksBody(pos.east());
-        boolean north = blocksBody(pos.north()), south = blocksBody(pos.south());
-        if (west != east) x += west ? 0.12 : -0.12;
-        if (north != south) z += north ? 0.12 : -0.12;
-        return new Vec3d(x, y, z);
+        int at = nodes.indexOf(pos);
+        Vec3d waypoint = at >= 0 ? steeringNodes.get(at) : clearanceWaypoint(client, pos);
+        return new Vec3d(waypoint.x, y, waypoint.z);
+    }
+
+    /**
+     * Centers each axis in its locally usable interval. A solid neighbor constrains
+     * that side to a half-block wall clearance; an open side permits 0.70 blocks,
+     * producing a visible 0.10 offset toward free space beside a single wall while
+     * keeping opposing one-wide walls safely balanced.
+     */
+    public static List<Vec3d> buildSteeringNodes(MinecraftClient client, List<BlockPos> nodes) {
+        return nodes.stream().map(pos -> clearanceWaypoint(client, pos)).toList();
+    }
+
+    private static Vec3d clearanceWaypoint(MinecraftClient client, BlockPos pos) {
+        double centerX = pos.getX() + 0.5;
+        double centerZ = pos.getZ() + 0.5;
+        double minX = pos.getX() + (blocksBody(client, pos.west()) ? WALL_CLEARANCE : 1.0 - OPEN_SIDE_LIMIT);
+        double maxX = pos.getX() + (blocksBody(client, pos.east()) ? 1.0 - WALL_CLEARANCE : OPEN_SIDE_LIMIT);
+        double minZ = pos.getZ() + (blocksBody(client, pos.north()) ? WALL_CLEARANCE : 1.0 - OPEN_SIDE_LIMIT);
+        double maxZ = pos.getZ() + (blocksBody(client, pos.south()) ? 1.0 - WALL_CLEARANCE : OPEN_SIDE_LIMIT);
+        double x = minX <= maxX ? (minX + maxX) * 0.5 : centerX;
+        double z = minZ <= maxZ ? (minZ + maxZ) * 0.5 : centerZ;
+        return new Vec3d(x, pos.getY() + 0.5, z);
     }
 
     private boolean blocksBody(BlockPos pos) {
-        return !client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty()
-                || !client.world.getBlockState(pos.up()).getCollisionShape(client.world, pos.up()).isEmpty();
+        return blocksBody(client, pos);
+    }
+
+    private static boolean blocksBody(MinecraftClient client, BlockPos pos) {
+        return client.world != null
+                && (!client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty()
+                || !client.world.getBlockState(pos.up()).getCollisionShape(client.world, pos.up()).isEmpty());
+    }
+
+    /** A route rising out of a boxed feet cell or over its solid lip requires jump. */
+    private boolean isConfinedVerticalEscape(ClientPlayerEntity player, BlockPos node) {
+        BlockPos feet = player.getBlockPos();
+        if (node.getY() <= feet.getY()) return false;
+        int blockedSides = 0;
+        for (Direction direction : Direction.Type.HORIZONTAL) {
+            if (blocksBody(feet.offset(direction))) blockedSides++;
+        }
+        boolean directlyAbove = node.getX() == feet.getX() && node.getZ() == feet.getZ();
+        int dx = Integer.compare(node.getX(), feet.getX());
+        int dz = Integer.compare(node.getZ(), feet.getZ());
+        boolean solidLip = (dx != 0 || dz != 0) && blocksBody(feet.add(dx, 0, dz));
+        return blockedSides >= 3 || (directlyAbove && blockedSides >= 1)
+                || (solidLip && blockedSides >= 2);
     }
 
     private void steerSwimming(ClientPlayerEntity player, Vec3d target, BlockPos node) {
@@ -486,8 +567,9 @@ public final class NavigateAndActTask extends GladeTask {
         double edgeX = node.getX() - previous.getX();
         double edgeZ = node.getZ() - previous.getZ();
         if (edgeX == 0.0 && edgeZ == 0.0) return player.getY() >= node.getY();
-        double beyondX = player.getX() - (node.getX() + 0.5);
-        double beyondZ = player.getZ() - (node.getZ() + 0.5);
+        Vec3d waypoint = steeringNodes.get(index);
+        double beyondX = player.getX() - waypoint.x;
+        double beyondZ = player.getZ() - waypoint.z;
         return beyondX * edgeX + beyondZ * edgeZ >= 0.0;
     }
 
@@ -684,9 +766,11 @@ public final class NavigateAndActTask extends GladeTask {
 
     private boolean isFluid(BlockPos pos) { return isWater(pos) || isLava(pos); }
 
-    private static boolean reached(ClientPlayerEntity player, BlockPos node) {
-        double dx = player.getX() - node.getX() - 0.5, dz = player.getZ() - node.getZ() - 0.5;
-        return dx * dx + dz * dz < NODE_DISTANCE_SQUARED && Math.abs(player.getY() - node.getY()) <= 0.75;
+    private boolean reached(ClientPlayerEntity player, BlockPos node) {
+        Vec3d waypoint = steeringNodes.get(index);
+        double dx = player.getX() - waypoint.x, dz = player.getZ() - waypoint.z;
+        return dx * dx + dz * dz < NODE_DISTANCE_SQUARED
+                && Math.abs(player.getY() - node.getY()) <= 0.75;
     }
 
     public void cancel() { finish(false, "Pathing cancelled"); _break(); }
