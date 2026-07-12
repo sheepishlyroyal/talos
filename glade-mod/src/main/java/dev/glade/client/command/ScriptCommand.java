@@ -1,0 +1,40 @@
+package dev.glade.client.command;
+
+import com.mojang.brigadier.CommandDispatcher;
+import dev.glade.client.ui.screen.PythonEditorScreen;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import net.minecraft.command.CommandRegistryAccess;
+
+/**
+ * Registers {@code /glade script editor}, opening the in-game Python editor screen.
+ *
+ * <p>Kept as its own registration (instead of a new branch inside {@link GladeCommands})
+ * so this feature ships without touching that file: Brigadier merges sibling
+ * {@code CommandDispatcher.register} calls that share a literal name (see
+ * {@code CommandNode#addChild}), so this simply adds an {@code editor} child alongside
+ * the existing {@code run}/{@code stop} children of {@code /glade script}.
+ */
+public final class ScriptCommand {
+    private ScriptCommand() {
+    }
+
+    public static void register() {
+        ClientCommandRegistrationCallback.EVENT.register(ScriptCommand::registerCommands);
+    }
+
+    private static void registerCommands(
+            CommandDispatcher<FabricClientCommandSource> dispatcher, CommandRegistryAccess registryAccess) {
+        dispatcher.register(ClientCommandManager.literal("glade")
+                .then(ClientCommandManager.literal("script")
+                        .then(ClientCommandManager.literal("editor")
+                                .executes(context -> {
+                                    var client = context.getSource().getClient();
+                                    // Chat closes after command dispatch, so defer opening
+                                    // by one client task (same trick as /glade editor).
+                                    client.send(() -> client.setScreen(new PythonEditorScreen()));
+                                    return 1;
+                                }))));
+    }
+}

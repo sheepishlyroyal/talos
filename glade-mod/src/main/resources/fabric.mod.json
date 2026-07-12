@@ -5,7 +5,7 @@
   "name": "Glade",
   "environment": "client",
   "entrypoints": {
-    "client": ["dev.glade.client.GladeClientMod"],
+    "client": ["dev.glade.client.GladeClientMod", "dev.glade.client.script.ScriptClientInit"],
     "glade:pathing_engine": ["dev.glade.client.pathing.glade.GladePathingEngineProvider"]
   },
   "mixins": ["glade.mixins.json"],
