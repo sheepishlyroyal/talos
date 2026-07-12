@@ -29,11 +29,16 @@ import net.minecraft.registry.Registries;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.screen.slot.SlotActionType;
+import net.minecraft.screen.slot.Slot;
+import net.minecraft.item.ItemStack;
+import net.minecraft.entity.EquipmentSlot;
 import dev.glade.client.render.RenderQueue;
 import org.graalvm.polyglot.HostAccess;
 import org.slf4j.Logger;
@@ -64,6 +69,10 @@ public final class GladeNativeBridge {
     @HostAccess.Export public String gotoXZ(int x, int z) {
         return await(await(game.submit(() -> GladeClient.pathingEngine()
                 .goTo(new GoalXZ(x, z), PathingOptions.DEFAULT)))).toString();
+    }
+
+    @HostAccess.Export public void setNodeCount(int count) {
+        await(game.submit(() -> { GladeClient.pathingEngine().setNodeCount(count); return null; }));
     }
 
     @HostAccess.Export public Pos findBlock(String predicate, int radius) {
@@ -114,6 +123,54 @@ public final class GladeNativeBridge {
     }
     @HostAccess.Export public String breakBlock(int x, int y, int z) {
         return action(new BreakBlockAction(new BlockPos(x, y, z)), "break");
+    }
+
+    @HostAccess.Export public String mineLookingAt() {
+        return awaitBridgeTask("script-mine-looking", new MineLookingTask());
+    }
+
+    @HostAccess.Export public String leftClick() {
+        return awaitBridgeTask("script-left-click", new ClickTask(false));
+    }
+
+    @HostAccess.Export public String rightClick() {
+        return awaitBridgeTask("script-right-click", new ClickTask(true));
+    }
+
+    @HostAccess.Export public void hotbarSelect(int slot) {
+        if (slot < 0 || slot > 8) throw new IllegalArgumentException("hotbar slot must be 0..8");
+        await(game.submit(() -> { requireWorld().player.getInventory().setSelectedSlot(slot); return null; }));
+    }
+
+    @HostAccess.Export public String clickSlot(int slot, boolean isRight) {
+        return awaitBridgeTask("script-click-slot", new SlotClickTask(slot, isRight ? 1 : 0));
+    }
+
+    @HostAccess.Export public int containerSlotCount() {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            return (int) client.player.currentScreenHandler.slots.stream()
+                    .filter(slot -> slot.inventory != client.player.getInventory()).count();
+        }));
+    }
+
+    @HostAccess.Export public String moveStack(int fromSlot, int toSlot) {
+        return awaitBridgeTask("script-move-stack", new MoveStackTask(fromSlot, toSlot));
+    }
+
+    @HostAccess.Export public String takeStack(int containerSlot, int playerSlot) {
+        return moveStack(containerSlot, playerSlot);
+    }
+
+    @HostAccess.Export public String armorItem(String armorSlot) {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            return Registries.ITEM.getId(client.player.getEquippedStack(parseArmorSlot(armorSlot)).getItem()).toString();
+        }));
+    }
+
+    @HostAccess.Export public String equipArmor(int fromSlot, String armorSlot) {
+        return awaitBridgeTask("script-equip-armor", new EquipArmorTask(fromSlot, parseArmorSlot(armorSlot)));
     }
     @HostAccess.Export public String killNearest(double radius) {
         CompletableFuture<ActionResult> result = await(game.submit(() -> {
@@ -172,6 +229,25 @@ public final class GladeNativeBridge {
             return f;
         }));
         return requireSuccess(await(future));
+    }
+
+    private String awaitBridgeTask(String name, BridgeTask task) {
+        CompletableFuture<String> future = await(game.submit(() -> {
+            requireWorld();
+            GladeClient.taskScheduler().addTask(name, task);
+            return task.future;
+        }));
+        return await(future);
+    }
+
+    private static EquipmentSlot parseArmorSlot(String name) {
+        return switch (name.toLowerCase(Locale.ROOT)) {
+            case "helmet", "head" -> EquipmentSlot.HEAD;
+            case "chestplate", "chest" -> EquipmentSlot.CHEST;
+            case "leggings", "legs" -> EquipmentSlot.LEGS;
+            case "boots", "feet" -> EquipmentSlot.FEET;
+            default -> throw new IllegalArgumentException("armor slot must be helmet/chestplate/leggings/boots");
+        };
     }
 
     private CompletableFuture<Pos> scheduleBlockScan(String text, int radius) {
@@ -258,5 +334,116 @@ public final class GladeNativeBridge {
         }
         @Override public void onCompleted() { if (!future.isDone()) future.complete(null); }
         @Override public java.util.Set<Object> getMutexKeys() { return java.util.Set.of(ScanTask.INTENSIVE_MUTEX); }
+    }
+
+    private abstract static class BridgeTask extends SimpleTask {
+        final CompletableFuture<String> future = new CompletableFuture<>();
+        void finish(String value) { future.complete(value); _break(); }
+        void fail(String value) { future.completeExceptionally(new IllegalStateException(value)); _break(); }
+        @Override public void onCompleted() { if (!future.isDone()) fail("Action cancelled"); }
+        @Override public java.util.Set<Object> getMutexKeys() { return java.util.Set.of("glade-player-action"); }
+        @Override public boolean condition() { return !future.isDone(); }
+    }
+
+    private static final class ClickTask extends BridgeTask {
+        private final boolean right;
+        private ClickTask(boolean right) { this.right = right; }
+        @Override protected void onTick() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player == null || client.interactionManager == null) { fail("No active player"); return; }
+            HitResult hit = client.crosshairTarget;
+            if (hit == null || hit.getType() == HitResult.Type.MISS) { fail("Crosshair did not hit anything"); return; }
+            if (hit instanceof EntityHitResult entityHit) {
+                if (right) client.interactionManager.interactEntity(client.player, entityHit.getEntity(), Hand.MAIN_HAND);
+                else client.interactionManager.attackEntity(client.player, entityHit.getEntity());
+            } else if (hit instanceof BlockHitResult blockHit) {
+                if (right) client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
+                else client.interactionManager.attackBlock(blockHit.getBlockPos(), blockHit.getSide());
+            }
+            client.player.swingHand(Hand.MAIN_HAND);
+            finish(right ? "Right-clicked crosshair target" : "Left-clicked crosshair target");
+        }
+    }
+
+    private static final class MineLookingTask extends BridgeTask {
+        private BlockPos target;
+        private Direction side;
+        private net.minecraft.block.BlockState original;
+        @Override protected void onTick() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player == null || client.world == null || client.interactionManager == null) { fail("No active player"); return; }
+            if (!(client.crosshairTarget instanceof BlockHitResult hit) || hit.getType() != HitResult.Type.BLOCK) {
+                fail(target == null ? "Not looking at a block" : "Crosshair left the mining target"); return;
+            }
+            if (target == null) {
+                target = hit.getBlockPos().toImmutable(); side = hit.getSide(); original = client.world.getBlockState(target);
+                int best = client.player.getInventory().getSelectedSlot();
+                float speed = client.player.getInventory().getStack(best).getMiningSpeedMultiplier(original);
+                for (int i = 0; i < 9; i++) {
+                    float candidate = client.player.getInventory().getStack(i).getMiningSpeedMultiplier(original);
+                    if (candidate > speed) { best = i; speed = candidate; }
+                }
+                client.player.getInventory().setSelectedSlot(best);
+                client.interactionManager.attackBlock(target, side);
+            } else if (!target.equals(hit.getBlockPos())) { fail("Crosshair target changed while mining"); return; }
+            var state = client.world.getBlockState(target);
+            if (state.isAir()) { finish("Broke " + target.toShortString()); return; }
+            if (!state.equals(original)) { fail("Mining target changed unexpectedly"); return; }
+            if (GladeClient.tickBudget().hasBudgetRemaining()) {
+                client.interactionManager.updateBlockBreakingProgress(target, side);
+                client.player.swingHand(Hand.MAIN_HAND);
+            }
+        }
+    }
+
+    private static final class SlotClickTask extends BridgeTask {
+        private final int slot, button;
+        private SlotClickTask(int slot, int button) { this.slot = slot; this.button = button; }
+        @Override protected void onTick() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player == null || client.interactionManager == null) { fail("No active player"); return; }
+            var handler = client.player.currentScreenHandler;
+            if (slot < 0 || slot >= handler.slots.size()) { fail("screen slot out of range: " + slot); return; }
+            client.interactionManager.clickSlot(handler.syncId, slot, button, SlotActionType.PICKUP, client.player);
+            finish("Clicked screen slot " + slot);
+        }
+    }
+
+    private static class MoveStackTask extends BridgeTask {
+        final int from, to;
+        private MoveStackTask(int from, int to) { this.from = from; this.to = to; }
+        @Override protected void onTick() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player == null || client.interactionManager == null) { fail("No active player"); return; }
+            var handler = client.player.currentScreenHandler;
+            if (from < 0 || to < 0 || from >= handler.slots.size() || to >= handler.slots.size()) { fail("screen slot out of range"); return; }
+            client.interactionManager.clickSlot(handler.syncId, from, 0, SlotActionType.PICKUP, client.player);
+            client.interactionManager.clickSlot(handler.syncId, to, 0, SlotActionType.PICKUP, client.player);
+            if (!handler.getCursorStack().isEmpty()) client.interactionManager.clickSlot(handler.syncId, from, 0, SlotActionType.PICKUP, client.player);
+            finish("Moved stack from " + from + " to " + to);
+        }
+    }
+
+    private static final class EquipArmorTask extends BridgeTask {
+        private final int from;
+        private final EquipmentSlot armor;
+        private EquipArmorTask(int from, EquipmentSlot armor) { this.from = from; this.armor = armor; }
+        @Override protected void onTick() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player == null || client.interactionManager == null) { fail("No active player"); return; }
+            var handler = client.player.currentScreenHandler;
+            int inventoryIndex = switch (armor) { case FEET -> 36; case LEGS -> 37; case CHEST -> 38; case HEAD -> 39; default -> -1; };
+            int destination = -1;
+            for (int i = 0; i < handler.slots.size(); i++) {
+                Slot slot = handler.slots.get(i);
+                if (slot.inventory == client.player.getInventory() && slot.getIndex() == inventoryIndex) { destination = i; break; }
+            }
+            if (destination < 0) { fail("The open screen does not expose armor slots"); return; }
+            if (from < 0 || from >= handler.slots.size()) { fail("screen slot out of range: " + from); return; }
+            client.interactionManager.clickSlot(handler.syncId, from, 0, SlotActionType.PICKUP, client.player);
+            client.interactionManager.clickSlot(handler.syncId, destination, 0, SlotActionType.PICKUP, client.player);
+            if (!handler.getCursorStack().isEmpty()) client.interactionManager.clickSlot(handler.syncId, from, 0, SlotActionType.PICKUP, client.player);
+            finish("Equipped " + armor.getName());
+        }
     }
 }

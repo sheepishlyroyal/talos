@@ -10,18 +10,24 @@ import dev.glade.client.pathing.PathResult;
 import dev.glade.client.pathing.PathingEngine;
 import dev.glade.client.pathing.PathingOptions;
 import java.util.Objects;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
+import dev.glade.client.render.RenderQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Always-available built-in client-side pathing engine. */
 public final class GladePathingEngine implements PathingEngine {
     private static final Logger LOGGER = LoggerFactory.getLogger(GladePathingEngine.class);
-    private volatile PathFollowTask activeTask;
+    private volatile NavigateAndActTask activeTask;
+    private volatile int nodeCount;
+    private volatile List<Vec3d> currentNodes = List.of();
 
     @Override public boolean isAvailable() { return true; }
 
@@ -31,12 +37,12 @@ public final class GladePathingEngine implements PathingEngine {
         Objects.requireNonNull(options, "options");
         CompletableFuture<PathResult> future = new CompletableFuture<>();
         MinecraftClient client = MinecraftClient.getInstance();
-        Runnable start = () -> startOnClientThread(client, goal, future);
+        Runnable start = () -> startOnClientThread(client, goal, options, future);
         if (client.isOnThread()) start.run(); else client.execute(start);
         return future;
     }
 
-    private void startOnClientThread(MinecraftClient client, Goal goal,
+    private void startOnClientThread(MinecraftClient client, Goal goal, PathingOptions options,
                                      CompletableFuture<PathResult> future) {
         if (activeTask != null && !activeTask.condition()) activeTask = null;
         if (activeTask != null) {
@@ -56,7 +62,7 @@ public final class GladePathingEngine implements PathingEngine {
             return;
         }
 
-        AStarPathfinder pathfinder = new AStarPathfinder(client.world);
+        AStarPathfinder pathfinder = new AStarPathfinder(client.world, client.player);
         AStarPathfinder.SearchResult result = pathfinder.find(
                 client.player.getBlockPos(), snapshot.test(), snapshot.target());
         LOGGER.debug("Native path search: {}", result.detail());
@@ -65,9 +71,14 @@ public final class GladePathingEngine implements PathingEngine {
             return;
         }
 
-        PathFollowTask task = new PathFollowTask(client, result.path(), result.reachesGoal(),
-                result.detail(), snapshot.test(), start -> pathfinder.find(
-                        start, snapshot.test(), snapshot.target()), future);
+        int requestedNodes = options.nodeCount() > 0 ? options.nodeCount() : nodeCount;
+        List<BlockPos> sampledNodes = createNodes(result.path(), requestedNodes);
+        // Mining/bridging transitions are never sampled away: they are mandatory action nodes.
+        List<BlockPos> nodes = result.path().stream()
+                .filter(pos -> sampledNodes.contains(pos) || !pathfinder.isStandable(pos)).toList();
+        currentNodes = nodes.stream().map(Vec3d::ofCenter).toList();
+        renderNodes(currentNodes);
+        NavigateAndActTask task = new NavigateAndActTask(client, nodes, snapshot.test(), null, future);
         activeTask = task;
         future.whenComplete((ignored, error) -> {
             if (activeTask == task) activeTask = null;
@@ -84,7 +95,7 @@ public final class GladePathingEngine implements PathingEngine {
     public void cancel() {
         MinecraftClient client = MinecraftClient.getInstance();
         Runnable cancel = () -> {
-            PathFollowTask task = activeTask;
+            NavigateAndActTask task = activeTask;
             if (task != null) task.cancel();
             activeTask = null;
         };
@@ -92,6 +103,41 @@ public final class GladePathingEngine implements PathingEngine {
     }
 
     @Override public boolean isPathing() { return activeTask != null && activeTask.condition(); }
+
+    @Override public void setNodeCount(int count) {
+        if (count < 0 || count > 4096) throw new IllegalArgumentException("node count must be 0..4096");
+        nodeCount = count;
+    }
+
+    @Override public List<Vec3d> getCurrentNodes() { return currentNodes; }
+
+    public static List<BlockPos> createNodes(List<BlockPos> path, int requestedCount) {
+        if (path.size() <= 2) return List.copyOf(path);
+        int desired = requestedCount > 0 ? Math.min(requestedCount, path.size())
+                : Math.max(2, Math.min(path.size(), 2 + path.size() / 6));
+        java.util.LinkedHashSet<BlockPos> selected = new java.util.LinkedHashSet<>();
+        selected.add(path.getFirst());
+        for (int i = 1; i + 1 < path.size(); i++) {
+            BlockPos a = path.get(i - 1), b = path.get(i), c = path.get(i + 1);
+            if (b.getX() - a.getX() != c.getX() - b.getX()
+                    || b.getY() - a.getY() != c.getY() - b.getY()
+                    || b.getZ() - a.getZ() != c.getZ() - b.getZ()) selected.add(b);
+        }
+        for (int i = 1; i < desired - 1; i++) {
+            selected.add(path.get((int) Math.round(i * (path.size() - 1.0) / (desired - 1.0))));
+        }
+        selected.add(path.getLast());
+        return path.stream().filter(selected::contains).toList();
+    }
+
+    private static void renderNodes(List<Vec3d> nodes) {
+        for (int i = 0; i < nodes.size(); i++) {
+            Vec3d node = nodes.get(i);
+            RenderQueue.add("glade-path-node:" + i,
+                    new Box(node.x - 0.16, node.y - 0.16, node.z - 0.16,
+                            node.x + 0.16, node.y + 0.16, node.z + 0.16), 0x66CCFF, 20 * 30);
+        }
+    }
 
     private static GoalSnapshot snapshotGoal(Goal goal, MinecraftClient client) {
         return switch (goal) {
