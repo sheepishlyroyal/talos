@@ -93,6 +93,9 @@ public final class SimPathfinder {
                 int edgeHeading = heading(edge.state().velocity(), edge.fallbackHeading());
                 double g = node.g() + edge.cost();
                 double h = heuristic(edgeCell, goal, profile);
+                // edgeCell/edgeHeading are only the A* identity. The child retains the exact
+                // rollout endpoint (including sub-block position and velocity), and its next
+                // primitive starts directly from that MotionState.
                 Node next = new Node(edge.state(), edgeCell, edgeHeading, node,
                         edge.primitive(), edge.ticks(), g, h, sequence++);
                 Key key = key(next);

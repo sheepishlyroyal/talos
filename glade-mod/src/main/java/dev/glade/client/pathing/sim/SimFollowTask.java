@@ -29,7 +29,11 @@ public final class SimFollowTask extends GladeTask {
     private static final double REACHED_SQUARED = 0.36;
     private static final int ROLLOUT_TICKS = 6;
     private static final int LANDING_ROLLOUT_TICKS = 40;
-    private static final double OVERSHOOT_SLOP = 0.05;
+    private static final double OVERSHOOT_SLOP = 0.03;
+    private static final double GROUND_DRAG = 0.6 * 0.91;
+    private static final double WAYPOINT_BRAKE_BUFFER = 0.12;
+    private static final double FINAL_BRAKE_BUFFER = 0.35;
+    private static final double BRAKE_RELEASE_SPEED = 0.075;
     private static final int STUCK_TICKS = 100;
 
     private final MinecraftClient client;
@@ -104,7 +108,10 @@ public final class SimFollowTask extends GladeTask {
         float yaw = yawTo(new Vec3d(player.getX(), player.getY(), player.getZ()), waypoint.position());
         Input selected = chooseInput(live, profile, waypoint, yaw);
         apply(player, selected);
-        status(label(waypoint.via()));
+        status(isBrake(selected) ? "braking"
+                : selected.sprint() && selected.jump() ? "sprint-jumping"
+                : selected.jump() ? "jumping"
+                : selected.sprint() ? "sprinting" : label(waypoint.via()));
         scheduleDelay();
     }
 
@@ -145,40 +152,58 @@ public final class SimFollowTask extends GladeTask {
                 : live.position();
         boolean approachingFinal = index + 1 == route.waypoints().size();
 
-        // Preserve the held sprint-jump through open runs, but predict its actual landing on
-        // every control tick. A landing beyond the active mark is the one reason to release
-        // jump mid-commitment and offer forward/sneak braking controls.
-        MotionState heldLanding = continuousRun ? predictLanding(live,
-                new Input(1, 0, true, true, false, yaw), profile) : null;
-        boolean brakeForOvershoot = heldLanding != null
+        // Evaluate the control the primitive would hold, on every tick and for every primitive.
+        // The geometric tail is v + v*d + ... = v/(1-d), with vanilla ground drag d=.6*.91.
+        Input held = new Input(1, 0, wantsJump, wantsSprint, wantsSneak, yaw);
+        MotionState heldLanding = predictLanding(live, held, profile);
+        double speed = Math.hypot(live.velocity().x, live.velocity().z);
+        double stoppingDistance = speed / (1.0 - GROUND_DRAG);
+        double targetDistance = horizontalDistance(live.position(), waypoint.position());
+        double landingTravel = heldLanding == null ? 0.0
+                : horizontalDistance(live.position(), heldLanding.position());
+        double brakeBuffer = approachingFinal ? FINAL_BRAKE_BUFFER : WAYPOINT_BRAKE_BUFFER;
+        boolean landingOvershoots = heldLanding != null
                 && (overshoot(heldLanding.position(), from, waypoint.position()) > OVERSHOOT_SLOP
                 || approachingFinal && overshoot(heldLanding.position(), finalFrom, finalTarget)
                         > OVERSHOOT_SLOP);
+        boolean insideStoppingEnvelope = targetDistance
+                <= Math.max(stoppingDistance, landingTravel) + brakeBuffer;
+        boolean brakeNeeded = !live.inFluid() && (landingOvershoots || insideStoppingEnvelope);
+        boolean hardBrake = brakeNeeded && (!live.onGround() || speed > BRAKE_RELEASE_SPEED);
+        Input brake = new Input(0, 0, false, false, true, yaw);
         if (primitive != committedPrimitive) {
             committedPrimitive = primitive;
             committedStrafe = 0;
             strafeCommitUntil = ticks;
         }
         List<Input> candidates = new ArrayList<>();
-        candidates.add(new Input(1, 0, wantsJump && !brakeForOvershoot,
-                wantsSprint, wantsSneak || brakeForOvershoot, yaw));
+        // The brake is first so equal scores deterministically favor deceleration. It is always
+        // present, including ordinary walking and the final approach.
+        candidates.add(brake);
+        boolean precisionLaunch = brakeNeeded && live.onGround()
+                && speed <= BRAKE_RELEASE_SPEED;
+        candidates.add(new Input(1, 0, wantsJump,
+                wantsSprint && (!brakeNeeded || precisionLaunch), wantsSneak, yaw));
         // Never offer a one-tick jump release during a committed sprint-jump or ledge climb.
-        if ((!continuousRun || brakeForOvershoot) && primitive != Primitive.STEP_UP) {
-            candidates.add(new Input(1, 0, false, wantsSprint, wantsSneak, yaw));
+        if ((!continuousRun || brakeNeeded) && primitive != Primitive.STEP_UP) {
+            candidates.add(new Input(1, 0, false, false, wantsSneak, yaw));
         }
         if (committedStrafe != 0 && ticks < strafeCommitUntil) {
             candidates.add(new Input(1, committedStrafe * .35F,
-                    wantsJump && !brakeForOvershoot,
-                    wantsSprint, wantsSneak, yaw));
+                    wantsJump, wantsSprint && (!brakeNeeded || precisionLaunch), wantsSneak, yaw));
         } else {
-            candidates.add(new Input(1, .35F, wantsJump && !brakeForOvershoot,
-                    wantsSprint, wantsSneak, yaw));
-            candidates.add(new Input(1, -.35F, wantsJump && !brakeForOvershoot,
-                    wantsSprint, wantsSneak, yaw));
+            candidates.add(new Input(1, .35F, wantsJump,
+                    wantsSprint && (!brakeNeeded || precisionLaunch), wantsSneak, yaw));
+            candidates.add(new Input(1, -.35F, wantsJump,
+                    wantsSprint && (!brakeNeeded || precisionLaunch), wantsSneak, yaw));
         }
-        candidates.add(new Input(1, 0, false, false, true, yaw));
         candidates.add(new Input(0, 0, false, false, false, yaw));
         if (live.inFluid()) candidates.add(new Input(1, 0, true, false, false, yaw));
+
+        // Once an unsafe landing is imminent, scoring cannot trade the mark for short-term
+        // progress. First bleed momentum; at release speed the non-sprint jump candidate above
+        // can make a required final gap crossing without restoring sprint impulse.
+        if (hardBrake) return brake;
 
         Input best = candidates.getFirst();
         double bestScore = Double.NEGATIVE_INFINITY;
@@ -202,19 +227,24 @@ public final class SimFollowTask extends GladeTask {
                     break;
                 }
                 if (state.position().y < Math.min(from.y, waypoint.position().y) - 2.5) score -= 80.0;
-                score -= overshoot(state.position(), from, waypoint.position()) * 24.0;
+                score -= overshoot(state.position(), from, waypoint.position()) * 80.0;
                 if (approachingFinal) {
-                    score -= overshoot(state.position(), finalFrom, finalTarget) * 32.0;
+                    score -= overshoot(state.position(), finalFrom, finalTarget) * 140.0;
                 }
                 oldDistance = distance;
             }
             MotionState landing = (!live.onGround() || candidate.jump())
                     ? predictLanding(live, candidate, profile) : null;
             if (landing != null) {
-                score -= overshoot(landing.position(), from, waypoint.position()) * 40.0;
+                score -= overshoot(landing.position(), from, waypoint.position()) * 120.0;
                 if (approachingFinal) {
-                    score -= overshoot(landing.position(), finalFrom, finalTarget) * 55.0;
+                    score -= overshoot(landing.position(), finalFrom, finalTarget) * 220.0;
                 }
+            }
+            if (brakeNeeded) {
+                if (isBrake(candidate)) score += 18.0;
+                if (candidate.sprint() && !precisionLaunch) score -= 40.0;
+                if (candidate.jump() && !precisionLaunch) score -= 40.0;
             }
             // Precision endpoints prefer braking over flying through the waypoint.
             boolean precise = index + 1 == route.waypoints().size()
@@ -237,6 +267,10 @@ public final class SimFollowTask extends GladeTask {
             committedStrafe = 0;
         }
         return best;
+    }
+
+    private static boolean isBrake(Input input) {
+        return !input.jump() && !input.sprint() && input.sneak();
     }
 
     private boolean isHazard(BlockPos pos) {
@@ -405,6 +439,9 @@ public final class SimFollowTask extends GladeTask {
             if (!PlayerMotion.hitboxFits(client.world, state.pose(), state.position())) return null;
             airborne |= !state.onGround();
             if (airborne && state.onGround()) return state;
+            // A non-jumping grounded control is already at its next grounded sample. Its
+            // longer deceleration tail is represented separately by stoppingDistance.
+            if (tick == 0 && start.onGround() && !input.jump() && state.onGround()) return state;
         }
         return null;
     }
