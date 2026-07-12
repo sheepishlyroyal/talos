@@ -529,6 +529,19 @@ public final class NavigateAndActTask extends GladeTask {
         breaking = null;
         var supportState = client.world.getBlockState(support);
         if (isFluid(node) || isFluid(support)) return false;
+        // Confirm placement from world state, then walk onto the new support before
+        // handling the next PLACE edge. Sneak permits forward movement but catches us
+        // at the far lip if the following placement is delayed by the server.
+        if (support.equals(lastBridgeTarget) && !isFallRisk(support)) {
+            status("bridging");
+            releaseDirectionalInputs();
+            client.options.forwardKey.setPressed(true);
+            client.options.sneakKey.setPressed(true);
+            client.options.sprintKey.setPressed(false);
+            client.options.jumpKey.setPressed(false);
+            steerToward(player, clearanceAdjustedCenter(node, player.getEyeY()), false);
+            return true;
+        }
         if (isFallRisk(support)) {
             // Never approach an unsupported edge at walking speed.  Keeping sneak held
             // also makes a delayed server placement safe: the player stops at the lip.
@@ -580,6 +593,9 @@ public final class NavigateAndActTask extends GladeTask {
         // Never attempt to replace either of the two cells occupied by the player.
         BlockPos feet = player.getBlockPos();
         if (placementTarget.equals(feet) || placementTarget.equals(feet.up())) return;
+        // The hit must describe a fresh, existing anchor face adjacent to this exact
+        // target. Invalid/stale faces otherwise silently no-op on every later retry.
+        if (isFallRisk(anchor) || !anchor.offset(side).equals(placementTarget)) return;
         Vec3d hit = Vec3d.ofCenter(anchor).add(side.getOffsetX() * 0.5,
                 side.getOffsetY() * 0.5, side.getOffsetZ() * 0.5);
         aim.aimAt(hit);
