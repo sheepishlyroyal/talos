@@ -11,6 +11,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import dev.glade.client.script.ScriptEngine;
 import dev.glade.client.blockeditor.screen.BlockEditorScreen;
 import net.minecraft.text.Text;
+import net.minecraft.util.math.Vec3d;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.minecraft.command.CommandRegistryAccess;
@@ -41,37 +42,46 @@ public final class GladeCommands {
                                                         IntegerArgumentType.getInteger(context, "radius")))))))
                 .then(ClientCommandManager.literal("goto")
                         .then(ClientCommandManager.literal("near")
-                                .then(integer("x")
-                                        .then(integer("y")
-                                                .then(integer("z")
+                                .then(coordinate("x")
+                                        .then(coordinate("y")
+                                                .then(coordinate("z")
                                                         .then(ClientCommandManager.argument(
                                                                         "range", IntegerArgumentType.integer(0))
                                                                 .executes(context -> GotoCommand.execute(
                                                                         context,
                                                                         new GoalNear(
-                                                                                value(context, "x"),
-                                                                                value(context, "y"),
-                                                                                value(context, "z"),
+                                                                                coordValue(context, "x", eyePos(context).x),
+                                                                                coordValue(context, "y", eyePos(context).y),
+                                                                                coordValue(context, "z", eyePos(context).z),
                                                                                 value(context, "range")))))))))
                         .then(ClientCommandManager.literal("xz")
-                                .then(integer("x")
-                                        .then(integer("z")
+                                .then(coordinate("x")
+                                        .then(coordinate("z")
                                                 .executes(context -> GotoCommand.execute(
-                                                        context,
-                                                        new GoalXZ(value(context, "x"), value(context, "z")))))))
-                        .then(integer("x")
-                                .then(integer("y")
-                                        .then(integer("z")
+                                                        context, xzGoal(context))))))
+                        .then(coordinate("x")
+                                .then(coordinate("y")
+                                        .then(coordinate("z")
                                                 .executes(context -> GotoCommand.execute(
                                                         context,
                                                         new GoalBlock(
-                                                                value(context, "x"),
-                                                                value(context, "y"),
-                                                                value(context, "z"))))))))
+                                                                coordValue(context, "x", eyePos(context).x),
+                                                                coordValue(context, "y", eyePos(context).y),
+                                                                coordValue(context, "z", eyePos(context).z))))))))
+                // Top-level shorthand for `glade goto xz <x> <z>`.
+                .then(ClientCommandManager.literal("xz")
+                        .then(coordinate("x")
+                                .then(coordinate("z")
+                                        .executes(context -> GotoCommand.execute(
+                                                context, xzGoal(context))))))
+                .then(ClientCommandManager.literal("look")
+                        .then(ClientCommandManager.argument("yaw", RelativeAngleArgumentType.angle())
+                                .then(ClientCommandManager.argument("pitch", RelativeAngleArgumentType.angle())
+                                        .executes(LookCommand::execute))))
                 .then(ClientCommandManager.literal("glow")
-                        .then(integer("x")
-                                .then(integer("y")
-                                        .then(integer("z")
+                        .then(coordinate("x")
+                                .then(coordinate("y")
+                                        .then(coordinate("z")
                                                 .executes(context -> GlowCommand.execute(
                                                         context, blockPos(context), GlowCommand.DEFAULT_SECONDS))
                                                 .then(ClientCommandManager.argument(
@@ -135,10 +145,18 @@ public final class GladeCommands {
                                                 DoubleArgumentType.getDouble(context, "radius")))))));
     }
 
+    private static GoalXZ xzGoal(
+            com.mojang.brigadier.context.CommandContext<
+                            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context) {
+        Vec3d eye = eyePos(context);
+        return new GoalXZ(coordValue(context, "x", eye.x), coordValue(context, "z", eye.z));
+    }
+
     private static com.mojang.brigadier.builder.RequiredArgumentBuilder<
-            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource, Integer> coordinates(
+            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource,
+            RelativeCoordinateArgumentType.Coordinate> coordinates(
                     CoordinateExecutor executor) {
-        return integer("x").then(integer("y").then(integer("z").executes(context ->
+        return coordinate("x").then(coordinate("y").then(coordinate("z").executes(context ->
                 executor.execute(context, blockPos(context)))));
     }
 
@@ -149,16 +167,39 @@ public final class GladeCommands {
                     net.minecraft.util.math.BlockPos pos);
     }
 
+    /**
+     * Builds a coordinate argument node ({@code x}, {@code y} or {@code z}) that accepts either an
+     * absolute number or Minecraft-style {@code ~}-relative syntax (e.g. {@code ~}, {@code ~5}, {@code ~-3}).
+     */
     private static com.mojang.brigadier.builder.RequiredArgumentBuilder<
-            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource, Integer> integer(String name) {
-        return ClientCommandManager.argument(name, IntegerArgumentType.integer());
+            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource,
+            RelativeCoordinateArgumentType.Coordinate> coordinate(String name) {
+        return ClientCommandManager.argument(name, RelativeCoordinateArgumentType.coordinate());
+    }
+
+    /** The player's current eye position, used as the base for {@code ~}-relative coordinate args. */
+    private static Vec3d eyePos(
+            com.mojang.brigadier.context.CommandContext<
+                            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context) {
+        return context.getSource().getPlayer().getEyePos();
     }
 
     private static net.minecraft.util.math.BlockPos blockPos(
             com.mojang.brigadier.context.CommandContext<
                             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context) {
+        Vec3d eye = eyePos(context);
         return new net.minecraft.util.math.BlockPos(
-                value(context, "x"), value(context, "y"), value(context, "z"));
+                coordValue(context, "x", eye.x),
+                coordValue(context, "y", eye.y),
+                coordValue(context, "z", eye.z));
+    }
+
+    /** Resolves a coordinate argument (absolute or {@code ~}-relative) to a block coordinate. */
+    private static int coordValue(
+            com.mojang.brigadier.context.CommandContext<
+                            net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context,
+            String name, double base) {
+        return RelativeCoordinateArgumentType.resolveBlock(context, name, base);
     }
 
     private static int value(
