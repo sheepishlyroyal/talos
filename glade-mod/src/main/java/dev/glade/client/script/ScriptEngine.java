@@ -16,11 +16,16 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.text.MutableText;
+import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.EnvironmentAccess;
 import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.PolyglotAccess;
+import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.io.IOAccess;
 
@@ -45,6 +50,15 @@ public final class ScriptEngine {
         thread.start();
     }
 
+    /**
+     * Default sink used whenever a caller doesn't supply its own: forwards every
+     * stdout/stderr line (and, transitively, {@code glade.log(...)}, which the Python
+     * API prints to stdout) to the in-game chat, prefixed {@code [Glade]}. This is what
+     * makes {@code /glade script run <name>} and the in-game editor's Run button show
+     * live output instead of silently vanishing into the server log.
+     */
+    public static final LogSink CHAT = ScriptEngine::sendToChat;
+
     private final Object lock = new Object();
     private volatile Session session;
 
@@ -52,7 +66,7 @@ public final class ScriptEngine {
     public static ScriptEngine instance() { return INSTANCE; }
 
     public CompletableFuture<Void> run(String scriptName) {
-        return run(scriptName, null);
+        return run(scriptName, CHAT);
     }
 
     public CompletableFuture<Void> run(String scriptName, LogSink logSink) {
@@ -98,6 +112,24 @@ public final class ScriptEngine {
 
     public State state() { Session current = session; return current == null ? State.STOPPED : current.state.get(); }
 
+    /**
+     * {@link LogSink#log} fires on the GraalPy worker thread (from {@code LineOutput}
+     * writes or {@link #reportError}); the client tick thread must never be touched from
+     * there directly, so this hops onto it via {@link GameThreadExecutor} before it goes
+     * anywhere near {@code ChatHud}.
+     */
+    private static void sendToChat(String level, String text) {
+        GameThreadExecutor.instance().submit(() -> {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client == null || client.inGameHud == null) return null;
+            Formatting color = "error".equals(level) ? Formatting.RED : Formatting.GRAY;
+            MutableText message = Text.literal("[Glade] ").formatted(Formatting.AQUA, Formatting.BOLD)
+                    .append(Text.literal(text).formatted(color));
+            client.inGameHud.getChatHud().addMessage(message);
+            return null;
+        });
+    }
+
     private static final class Session {
         private final AtomicReference<State> state = new AtomicReference<>(State.RUNNING);
         private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -130,11 +162,30 @@ public final class ScriptEngine {
         }
 
         private void enqueueEvent(Runnable event) {
-            submit(() -> { ensureContext(); event.run(); return null; });
+            submit(() -> {
+                ensureContext();
+                try {
+                    event.run();
+                    stdout.flushLine();
+                    stderr.flushLine();
+                } catch (RuntimeException error) {
+                    stdout.flushLine();
+                    stderr.flushLine();
+                    // event handlers (glade.on("tick", ...) etc.) run detached from any
+                    // caller's future, so without this an exception in one would vanish
+                    // silently instead of reaching the console/chat.
+                    reportError(error, stdout.sink);
+                    throw error;
+                }
+                return null;
+            });
         }
 
         private void evaluate(Path file, LogSink logSink) throws IOException {
             if (!Files.isRegularFile(file)) throw new IOException("Script not found: " + file);
+            // Left wired after this call returns (not reset to null) so output/errors from
+            // event handlers the script registers via glade.on(...) keep streaming to the
+            // same sink for the rest of the session.
             stdout.sink = logSink;
             stderr.sink = logSink;
             try {
@@ -150,10 +201,29 @@ public final class ScriptEngine {
                 context.eval(Source.newBuilder("python", file.toFile()).build());
                 stdout.flushLine();
                 stderr.flushLine();
-            } finally {
-                stdout.sink = null;
-                stderr.sink = null;
+            } catch (RuntimeException error) {
+                stdout.flushLine();
+                stderr.flushLine();
+                reportError(error, logSink);
+                throw error;
             }
+        }
+
+        /**
+         * Uncaught Python exceptions surface as a {@link PolyglotException} from
+         * {@code context.eval(...)} and never touch {@link LineOutput} (there's no Python
+         * REPL printing a traceback here), so without this they'd only ever reach the
+         * command's own {@code whenComplete} handler — invisible for event-handler errors
+         * and easy to miss even for direct runs. Push the guest traceback through the same
+         * sink used for stdout/stderr so every failure mode ends up in one place (chat, by
+         * default).
+         */
+        private static void reportError(Throwable error, LogSink logSink) {
+            if (logSink == null) return;
+            String message = error instanceof PolyglotException poly && poly.getMessage() != null
+                    ? poly.getMessage()
+                    : String.valueOf(error.getMessage() != null ? error.getMessage() : error);
+            for (String line : message.split("\n")) logSink.log("error", line);
         }
 
         private void ensureContext() {
