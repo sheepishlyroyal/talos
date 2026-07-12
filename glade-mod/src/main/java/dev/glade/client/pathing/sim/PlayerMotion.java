@@ -21,14 +21,19 @@ import net.minecraft.world.World;
  */
 public final class PlayerMotion {
     private static final double EPSILON = 1.0E-7;
-    private static final double GRAVITY = 0.08;
-    private static final double JUMP_VELOCITY = 0.42;
-
+    // Stage A intentionally uses a smaller planner-only sprint-jump impulse than vanilla.
+    private static final double SPRINT_JUMP_IMPULSE = 0.1;
     private PlayerMotion() {}
 
-    /** Advances one tick and records this tick's resolved ground/bump collision outcome. */
+    /** Baseline-compatible overload for callers that do not yet have a live snapshot. */
     public static MotionState step(World world, MotionState state, Input input) {
-        if (world == null || state == null || input == null) {
+        return step(world, state, input, MovementProfile.vanilla());
+    }
+
+    /** Advances one tick and records this tick's resolved ground/bump collision outcome. */
+    public static MotionState step(World world, MotionState state, Input input,
+            MovementProfile profile) {
+        if (world == null || state == null || input == null || profile == null) {
             throw new IllegalArgumentException("step arguments must not be null");
         }
 
@@ -43,23 +48,26 @@ public final class PlayerMotion {
         if (fluid != MotionState.Fluid.NONE) {
             acceleration = 0.02;
         } else if (state.onGround()) {
-            acceleration = 0.1 * Math.pow(0.6 / slipperiness, 3.0);
+            acceleration = profile.movementSpeed() * Math.pow(0.6 / slipperiness, 3.0);
         } else {
             acceleration = 0.02;
         }
         if (input.sprint()) acceleration *= 1.3;
+        if (input.sneak() || state.pose() == MotionState.Pose.CRAWL) {
+            acceleration *= profile.sneakSlowFactor();
+        }
 
         Vec3d velocity = state.velocity().add(inputVelocity(input, acceleration));
 
         // Vanilla LivingEntity jump velocity is 0.42 for an unmodified player. Entity's
         // sprint jump impulse is (-sin(yaw)*0.2, 0, cos(yaw)*0.2); Stage A intentionally
-        // uses the requested smaller 0.1 planner impulse.
+        // uses the requested smaller planner impulse.
         if (input.jump() && state.onGround() && fluid == MotionState.Fluid.NONE) {
-            velocity = new Vec3d(velocity.x, JUMP_VELOCITY, velocity.z);
+            velocity = new Vec3d(velocity.x, profile.jumpVelocity(), velocity.z);
             if (input.sprint()) {
                 double radians = input.yaw() * (Math.PI / 180.0);
-                velocity = velocity.add(-MathHelper.sin(radians) * 0.1, 0.0,
-                        MathHelper.cos(radians) * 0.1);
+                velocity = velocity.add(-MathHelper.sin(radians) * SPRINT_JUMP_IMPULSE, 0.0,
+                        MathHelper.cos(radians) * SPRINT_JUMP_IMPULSE);
             }
         } else if (input.jump() && fluid != MotionState.Fluid.NONE) {
             // Approximation of LivingEntity swimming ascent: the vanilla helper adds 0.04.
@@ -83,19 +91,25 @@ public final class PlayerMotion {
         // block's Block.getSlipperiness() times 0.91; air uses 0.91. Water/lava are documented
         // Stage A approximations, with reduced gravity and their characteristic drag.
         if (fluid == MotionState.Fluid.WATER) {
-            vx *= 0.8;
-            vz *= 0.8;
-            vy = (vy - 0.02) * 0.8;
+            vx *= profile.waterHorizontalDrag();
+            vz *= profile.waterHorizontalDrag();
+            vy = (vy - 0.02) * profile.waterHorizontalDrag();
         } else if (fluid == MotionState.Fluid.LAVA) {
-            vx *= 0.5;
-            vz *= 0.5;
-            vy = (vy - 0.02) * 0.5;
+            vx *= profile.lavaDrag();
+            vz *= profile.lavaDrag();
+            vy = (vy - 0.02) * profile.lavaDrag();
         } else {
             double horizontalDrag = (onGround ? slipperiness : 1.0) * 0.91;
             vx *= horizontalDrag;
             vz *= horizontalDrag;
-            // Vanilla's ordinary gravity/vertical drag constants: (y - 0.08) * 0.98.
-            vy = (vy - GRAVITY) * 0.98;
+            if (profile.levitationLevel() > 0) {
+                double target = 0.05 * profile.levitationLevel();
+                vy += (target - vy) * 0.2;
+            } else {
+                double gravity = profile.gravity();
+                if (profile.slowFalling() && vy <= 0.0) gravity = Math.min(gravity, 0.01);
+                vy = (vy - gravity) * 0.98;
+            }
         }
 
         MotionState.Fluid resultingFluid = fluidAt(world, state.box(newPosition));
