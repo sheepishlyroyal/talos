@@ -2,6 +2,7 @@ package dev.glade.client.blockeditor.canvas;
 
 import dev.glade.client.blockeditor.model.BlockDef;
 import dev.glade.client.blockeditor.model.BlockDef.Category;
+import dev.glade.client.blockeditor.model.BlockDef.FieldWidget;
 import dev.glade.client.blockeditor.model.BlockDef.Shape;
 import dev.glade.client.blockeditor.model.BlockDef.Socket;
 import dev.glade.client.blockeditor.model.BlockDef.SocketKind;
@@ -11,11 +12,16 @@ import dev.glade.client.blockeditor.model.Workspace;
 import dev.glade.client.blockeditor.registry.BlockRegistry;
 import dev.glade.client.ui.draw.GladeUi;
 import dev.glade.client.ui.theme.Theme;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import net.minecraft.block.Block;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
+import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
 
 /** Immediate-mode Blockly-like canvas: palette, grid, graph rendering, dragging, panning and snapping. */
 public final class BlockCanvas {
@@ -26,6 +32,9 @@ public final class BlockCanvas {
     private static final float REPORTER_WIDTH = 160;
     private static final double SNAP_RADIUS = 28.0;
     private static final float FIELD_CHIP_HEIGHT = 18;
+    private static final float CHIP_GAP = 4;
+    private static final float CHIP_ROW_HEIGHT = FIELD_CHIP_HEIGHT + 6;
+    private static final int PICKER_CELL = 34;
 
     private Workspace workspace;
     private int x, y, width, height;
@@ -39,11 +48,19 @@ public final class BlockCanvas {
     private double lastMouseX, lastMouseY;
     private Candidate previewSnap;
 
+    // Block-texture picker modal (item 2): opened by clicking a BLOCK_PICKER field chip.
+    private String pickerNodeId;
+    private String pickerSocket;
+    private String pickerFilter = "";
+    private double pickerScroll;
+    private static List<Block> allBlocksCache;
+
     public BlockCanvas(Workspace workspace) { this.workspace = workspace; }
     public Workspace workspace() { return workspace; }
     public void workspace(Workspace value) {
         workspace = value; dragging = null; spawnDrag = false;
         editingLiteral = null; editingSocket = null; previewSnap = null;
+        closePicker();
     }
     public void bounds(int x, int y, int width, int height) { this.x = x; this.y = y; this.width = width; this.height = height; }
 
@@ -64,6 +81,7 @@ public final class BlockCanvas {
         context.disableScissor();
         drawPalette(context, mouseX, mouseY);
         GladeUi.roundedRectBorder(context, x, y, width, height, 12, 1, palette.outline());
+        if (pickerOpen()) drawPicker(context, mouseX, mouseY);
     }
 
     private void drawGrid(DrawContext context) {
@@ -104,34 +122,32 @@ public final class BlockCanvas {
                 node.definition().shape() == Shape.REPORTER ? 14 : 7, 1, (dragging != null && dragging.equals(node.id()))
                         || node.id().equals(editingLiteral)
                         ? 0xFFFFFFFF : 0x55FFFFFF);
-        FieldChip chip = fieldChip(node);
-        String label = displayLabel(node);
-        if (chip != null) label = clipToWidth(label, (int) (chip.x() - node.x()) - 12);
+        String label = clipToWidth(displayLabel(node), (int) w - 16);
         context.drawText(MinecraftClient.getInstance().textRenderer, label,
                 (int) node.x() + 9, (int) node.y() + 10, 0xFFFFFFFF, false);
         if (node.definition().shape() == Shape.C_BLOCK) {
             context.drawText(MinecraftClient.getInstance().textRenderer, "do", (int) node.x() + 10,
                     (int) node.y() + 34, 0xCCFFFFFF, false);
         }
-        if (chip != null) drawFieldChip(context, node, chip);
+        for (FieldChip chip : fieldChips(node)) drawChip(context, node, chip);
         for (String child : node.valueInputs().values()) drawTree(context, workspace.get(child), drawn);
         for (List<String> roots : node.statementInputs().values()) for (String child : roots) drawTree(context, workspace.get(child), drawn);
         drawTree(context, workspace.get(node.next()), drawn);
     }
 
+    /** Base label plus a marker for each VALUE socket wired to a reporter child (those render as sub-blocks). */
     private String displayLabel(BlockNode node) {
         StringBuilder label = new StringBuilder(node.definition().label());
         for (Socket socket : node.definition().sockets()) {
-            if (socket.kind() == SocketKind.STATEMENT || socket.kind() == SocketKind.FIELD) continue;
-            String child = node.valueInputs().get(socket.name());
-            String value = child == null ? node.fields().getOrDefault(socket.name(), socket.defaultValue()) : "◆";
-            label.append(' ').append(socket.name()).append('=').append(value);
+            if (socket.kind() != SocketKind.VALUE) continue;
+            if (node.valueInputs().containsKey(socket.name())) label.append(" ◆");
         }
         return label.toString();
     }
 
     public boolean mouseClicked(double mouseX, double mouseY, int button, boolean doubled) {
         lastMouseX = mouseX; lastMouseY = mouseY;
+        if (pickerOpen()) { if (button == 0) handlePickerClick(mouseX, mouseY); return true; }
         if (!contains(mouseX, mouseY)) return false;
         if (button == 1 || button == 2) { panning = true; return true; }
         if (button != 0) return false;
@@ -155,19 +171,27 @@ public final class BlockCanvas {
         Point world = toWorld(mouseX, mouseY);
         BlockNode hit = hitNode(world.x, world.y);
         if (hit != null) {
-            FieldChip chip = fieldChip(hit);
-            if (chip != null && chip.contains(world.x, world.y)) {
-                editingLiteral = hit.id(); editingSocket = chip.socket(); replaceLiteral = true; return true;
+            for (FieldChip chip : fieldChips(hit)) {
+                if (!chip.contains(world.x, world.y)) continue;
+                Socket socket = editableSocket(hit, chip.socket());
+                if (socket != null && socket.widget() == FieldWidget.BLOCK_PICKER) {
+                    openPicker(hit, chip.socket());
+                } else {
+                    editingLiteral = hit.id(); editingSocket = chip.socket(); replaceLiteral = true;
+                }
+                return true;
             }
             editingLiteral = null; editingSocket = null;
             workspace.checkpoint(); workspace.makeTopLevel(hit.id()); dragging = hit.id(); spawnDrag = false;
             return true;
         }
+        editingLiteral = null; editingSocket = null;
         panning = true;
         return true;
     }
 
     public boolean mouseDragged(double mouseX, double mouseY, double deltaX, double deltaY) {
+        if (pickerOpen()) return true;
         if (dragging != null) {
             BlockNode node = workspace.get(dragging);
             if (node != null) {
@@ -186,6 +210,7 @@ public final class BlockCanvas {
     }
 
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (pickerOpen()) return true;
         if (dragging != null) {
             snap(workspace.get(dragging));
             dragging = null; spawnDrag = false; previewSnap = null;
@@ -196,6 +221,7 @@ public final class BlockCanvas {
     }
 
     public boolean mouseScrolled(double mouseX, double mouseY, double amount) {
+        if (pickerOpen()) { pickerScroll = Math.max(0, pickerScroll - amount * PICKER_CELL); return true; }
         if (!contains(mouseX, mouseY) || mouseX < x + PALETTE_WIDTH) return false;
         Point before = toWorld(mouseX, mouseY);
         zoom = Math.clamp(zoom * Math.pow(1.1, amount), 0.55, 1.8);
@@ -206,9 +232,13 @@ public final class BlockCanvas {
 
     /** Click a field chip (number/text/identifier), then type. Backspace is forwarded by the screen. */
     public boolean charTyped(String text) {
+        if (pickerOpen()) {
+            if (text == null || text.isEmpty()) return false;
+            pickerFilter += text; pickerScroll = 0; return true;
+        }
         BlockNode node = workspace.get(editingLiteral);
         if (node == null || editingSocket == null || text == null || text.isEmpty()) return false;
-        Socket socket = fieldSocket(node, editingSocket);
+        Socket socket = editableSocket(node, editingSocket);
         if (socket == null) return false;
         String old = node.fields().getOrDefault(editingSocket, "");
         if (replaceLiteral) { workspace.checkpoint(); old = ""; replaceLiteral = false; }
@@ -218,6 +248,10 @@ public final class BlockCanvas {
     }
 
     public boolean backspace() {
+        if (pickerOpen()) {
+            if (!pickerFilter.isEmpty()) pickerFilter = pickerFilter.substring(0, pickerFilter.length() - 1);
+            pickerScroll = 0; return true;
+        }
         BlockNode node = workspace.get(editingLiteral);
         if (node == null || editingSocket == null) return false;
         String value = node.fields().getOrDefault(editingSocket, "");
@@ -225,10 +259,247 @@ public final class BlockCanvas {
         replaceLiteral = false; return true;
     }
 
-    private static Socket fieldSocket(BlockNode node, String name) {
-        for (Socket socket : node.definition().sockets())
-            if (socket.kind() == SocketKind.FIELD && socket.name().equals(name)) return socket;
+    /** Escape cancels the block-texture picker instead of falling through to closing the whole screen. */
+    public boolean escapePressed() {
+        if (pickerOpen()) { closePicker(); return true; }
+        if (editingLiteral != null) { editingLiteral = null; editingSocket = null; return true; }
+        return false;
+    }
+
+    /** FIELD sockets and unconnected VALUE sockets are both editable inline; STATEMENT and connected
+     *  VALUE sockets (wired to a reporter sub-block) are not. */
+    private static List<Socket> editableSockets(BlockNode node) {
+        List<Socket> result = new ArrayList<>();
+        for (Socket socket : node.definition().sockets()) {
+            if (socket.kind() == SocketKind.FIELD) { result.add(socket); continue; }
+            if (socket.kind() == SocketKind.VALUE && !node.valueInputs().containsKey(socket.name())) result.add(socket);
+        }
+        return result;
+    }
+
+    private static Socket editableSocket(BlockNode node, String name) {
+        for (Socket socket : editableSockets(node)) if (socket.name().equals(name)) return socket;
         return null;
+    }
+
+    private static String fieldValue(BlockNode node, Socket socket) {
+        return node.fields().getOrDefault(socket.name(), socket.defaultValue());
+    }
+
+    /** Lays out one clickable chip per editable socket, flowing left-to-right and wrapping onto new
+     *  rows below the header when a block has more fields than fit on one line (e.g. goto's x/y/z). */
+    private List<FieldChip> fieldChips(BlockNode node) {
+        List<Socket> editable = editableSockets(node);
+        List<FieldChip> chips = new ArrayList<>();
+        if (editable.isEmpty()) return chips;
+        boolean cBlock = node.definition().shape() == Shape.C_BLOCK;
+        float w = node.definition().shape() == Shape.REPORTER ? REPORTER_WIDTH : BLOCK_WIDTH;
+        var renderer = MinecraftClient.getInstance().textRenderer;
+        double marginX = 8;
+        double maxWidth = w - marginX * 2;
+        double cursorX = marginX;
+        int row = 0;
+        for (Socket socket : editable) {
+            String value = fieldValue(node, socket);
+            boolean picker = socket.widget() == FieldWidget.BLOCK_PICKER;
+            double chipW = picker ? FIELD_CHIP_HEIGHT + 4
+                    : Math.max(30, Math.min(maxWidth, renderer.getWidth(chipLabel(socket, value)) + 10));
+            if (!cBlock && cursorX + chipW > marginX + maxWidth && cursorX > marginX) { cursorX = marginX; row++; }
+            double chipY = cBlock ? node.y() + 6 : node.y() + 34 + row * CHIP_ROW_HEIGHT;
+            chips.add(new FieldChip(node.x() + cursorX, chipY, chipW, FIELD_CHIP_HEIGHT, socket.name()));
+            cursorX += chipW + CHIP_GAP;
+            if (cBlock) break; // v1: C_BLOCK header row keeps its fixed height, only its first chip fits inline.
+        }
+        return chips;
+    }
+
+    private static String chipLabel(Socket socket, String value) {
+        return value.isEmpty() ? "(empty)" : value;
+    }
+
+    private void drawChip(DrawContext context, BlockNode node, FieldChip chip) {
+        Socket socket = editableSocket(node, chip.socket());
+        if (socket != null && socket.widget() == FieldWidget.BLOCK_PICKER) {
+            drawBlockPickerChip(context, node, chip, socket);
+            return;
+        }
+        boolean editingThis = node.id().equals(editingLiteral) && chip.socket().equals(editingSocket);
+        GladeUi.roundedRect(context, (float) chip.x(), (float) chip.y(), (float) chip.w(), (float) chip.h(), 4,
+                editingThis ? 0xFF2C2C2C : 0x99101010);
+        GladeUi.roundedRectBorder(context, (float) chip.x(), (float) chip.y(), (float) chip.w(), (float) chip.h(), 4, 1,
+                editingThis ? 0xFFFFD34D : 0xAAFFFFFF);
+        String value = node.fields().getOrDefault(chip.socket(), socket == null ? "" : socket.defaultValue());
+        String shown = editingThis ? value + "_" : (value.isEmpty() ? "(empty)" : value);
+        String clipped = clipToWidth(shown, (int) chip.w() - 6);
+        context.drawText(MinecraftClient.getInstance().textRenderer, clipped,
+                (int) chip.x() + 3, (int) chip.y() + 5, 0xFFFFFFFF, false);
+    }
+
+    private void drawBlockPickerChip(DrawContext context, BlockNode node, FieldChip chip, Socket socket) {
+        GladeUi.roundedRect(context, (float) chip.x(), (float) chip.y(), (float) chip.w(), (float) chip.h(), 4, 0x99101010);
+        GladeUi.roundedRectBorder(context, (float) chip.x(), (float) chip.y(), (float) chip.w(), (float) chip.h(), 4, 1, 0xAAFFFFFF);
+        ItemStack stack = stackFor(fieldValue(node, socket));
+        if (!stack.isEmpty()) {
+            context.getMatrices().pushMatrix();
+            float scale = (float) (chip.h() / 16.0);
+            context.getMatrices().translate((float) chip.x() + 1, (float) chip.y() + 1);
+            context.getMatrices().scale(scale);
+            context.drawItem(stack, 0, 0);
+            context.getMatrices().popMatrix();
+        }
+    }
+
+    private static String clipToWidth(String text, int maxWidth) {
+        if (maxWidth <= 0) return "";
+        var renderer = MinecraftClient.getInstance().textRenderer;
+        if (renderer.getWidth(text) <= maxWidth) return text;
+        String ellipsis = "...";
+        int ellipsisWidth = renderer.getWidth(ellipsis);
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            if (renderer.getWidth(result.toString() + text.charAt(i)) + ellipsisWidth > maxWidth) break;
+            result.append(text.charAt(i));
+        }
+        return result + ellipsis;
+    }
+
+    private void layoutConnections() {
+        for (BlockNode node : workspace.nodes()) {
+            BlockNode next = workspace.get(node.next());
+            if (next != null) next.position(node.x(), node.y() + blockHeight(node));
+            for (Socket socket : node.definition().sockets()) {
+                if (socket.kind() == SocketKind.STATEMENT) {
+                    double sy = node.y() + BLOCK_HEIGHT;
+                    for (String id : node.statementInputs().getOrDefault(socket.name(), List.of())) {
+                        BlockNode child = workspace.get(id); if (child != null) { child.position(node.x() + 22, sy); sy += blockHeight(child); }
+                    }
+                } else if (socket.kind() == SocketKind.VALUE) {
+                    BlockNode child = workspace.get(node.valueInputs().get(socket.name()));
+                    if (child != null) child.position(node.x() + 55, node.y() - BLOCK_HEIGHT + 4);
+                }
+            }
+        }
+    }
+
+    private float blockHeight(BlockNode node) {
+        if (node.definition().shape() == Shape.C_BLOCK) return 58;
+        List<FieldChip> chips = fieldChips(node);
+        if (chips.isEmpty()) return BLOCK_HEIGHT;
+        double maxBottom = 0;
+        for (FieldChip chip : chips) maxBottom = Math.max(maxBottom, chip.y() + chip.h() - node.y());
+        return (float) Math.max(BLOCK_HEIGHT, maxBottom + 6);
+    }
+
+    // ---- Block-texture picker (item 2) ----------------------------------------------------
+
+    private boolean pickerOpen() { return pickerNodeId != null; }
+
+    private void openPicker(BlockNode node, String socket) {
+        pickerNodeId = node.id(); pickerSocket = socket; pickerFilter = ""; pickerScroll = 0;
+        editingLiteral = null; editingSocket = null;
+    }
+
+    private void closePicker() { pickerNodeId = null; pickerSocket = null; pickerFilter = ""; pickerScroll = 0; }
+
+    private static List<Block> allBlocks() {
+        if (allBlocksCache == null) {
+            allBlocksCache = Registries.BLOCK.stream()
+                    .sorted(Comparator.comparing(b -> Registries.BLOCK.getId(b).toString()))
+                    .toList();
+        }
+        return allBlocksCache;
+    }
+
+    private List<Block> filteredBlocks() {
+        String needle = pickerFilter.toLowerCase(java.util.Locale.ROOT);
+        if (needle.isBlank()) return allBlocks();
+        return allBlocks().stream().filter(b -> Registries.BLOCK.getId(b).toString().contains(needle)).toList();
+    }
+
+    private static ItemStack stackFor(String blockId) {
+        net.minecraft.util.Identifier id = net.minecraft.util.Identifier.tryParse(blockId);
+        if (id == null || !Registries.BLOCK.containsId(id)) return ItemStack.EMPTY;
+        return new ItemStack(Registries.BLOCK.get(id).asItem());
+    }
+
+    private PickerLayout pickerLayout() {
+        int panelW = Math.min(width - 40, 420);
+        int panelH = Math.min(height - 40, 320);
+        int panelX = x + (width - panelW) / 2;
+        int panelY = y + (height - panelH) / 2;
+        int gridY = panelY + 40;
+        int gridH = panelH - 48;
+        int cols = Math.max(1, (panelW - 16) / PICKER_CELL);
+        return new PickerLayout(panelX, panelY, panelW, panelH, gridY, gridH, cols);
+    }
+
+    private void drawPicker(DrawContext context, int mouseX, int mouseY) {
+        var theme = Theme.palette();
+        context.fill(x, y, x + width, y + height, 0xB0000000);
+        PickerLayout layout = pickerLayout();
+        GladeUi.glassPanel(context, layout.x, layout.y, layout.w, layout.h, 10, theme.panel());
+        GladeUi.roundedRectBorder(context, layout.x, layout.y, layout.w, layout.h, 10, 1, theme.outline());
+        var renderer = MinecraftClient.getInstance().textRenderer;
+        context.drawText(renderer, "Pick a block", layout.x + 12, layout.y + 8, 0xFFFFFFFF, false);
+        String close = "[x]";
+        context.drawText(renderer, close, layout.x + layout.w - renderer.getWidth(close) - 10, layout.y + 8, 0xFFFFAAAA, false);
+        String filterShown = pickerFilter.isEmpty() ? "type to search..." : pickerFilter + "_";
+        context.drawText(renderer, filterShown, layout.x + 12, layout.y + 22,
+                pickerFilter.isEmpty() ? 0xFF888888 : 0xFFFFFFFF, false);
+
+        List<Block> blocks = filteredBlocks();
+        context.enableScissor(layout.x, layout.gridY, layout.x + layout.w, layout.gridY + layout.gridH);
+        int startRow = (int) (pickerScroll / PICKER_CELL);
+        int visibleRows = layout.gridH / PICKER_CELL + 2;
+        for (int row = startRow; row < startRow + visibleRows; row++) {
+            for (int col = 0; col < layout.cols; col++) {
+                int index = row * layout.cols + col;
+                if (index >= blocks.size()) continue;
+                int cx = layout.x + 8 + col * PICKER_CELL;
+                int cy = (int) (layout.gridY - pickerScroll + row * PICKER_CELL);
+                if (cy + PICKER_CELL < layout.gridY || cy > layout.gridY + layout.gridH) continue;
+                boolean hovered = mouseX >= cx && mouseX < cx + PICKER_CELL - 2 && mouseY >= cy && mouseY < cy + PICKER_CELL - 2;
+                if (hovered) GladeUi.roundedRect(context, cx, cy, PICKER_CELL - 2, PICKER_CELL - 2, 4, 0x40FFFFFF);
+                ItemStack stack = new ItemStack(blocks.get(index).asItem());
+                context.drawItem(stack, cx + 9, cy + 9);
+            }
+        }
+        context.disableScissor();
+    }
+
+    private void handlePickerClick(double mouseX, double mouseY) {
+        PickerLayout layout = pickerLayout();
+        String closeLabel = "[x]";
+        var renderer = MinecraftClient.getInstance().textRenderer;
+        int closeX = layout.x + layout.w - renderer.getWidth(closeLabel) - 10;
+        if (mouseY >= layout.y + 6 && mouseY < layout.y + 18 && mouseX >= closeX - 4 && mouseX < layout.x + layout.w) {
+            closePicker(); return;
+        }
+        if (mouseX < layout.x || mouseX >= layout.x + layout.w || mouseY < layout.y || mouseY >= layout.y + layout.h) {
+            closePicker(); return; // click-away cancels, matching the "commit on click-away" spec for chip edits.
+        }
+        if (mouseY < layout.gridY || mouseY >= layout.gridY + layout.gridH) return;
+        List<Block> blocks = filteredBlocks();
+        int col = (int) ((mouseX - (layout.x + 8)) / PICKER_CELL);
+        int row = (int) ((mouseY - layout.gridY + pickerScroll) / PICKER_CELL);
+        if (col < 0 || col >= layout.cols || row < 0) return;
+        int index = row * layout.cols + col;
+        if (index < 0 || index >= blocks.size()) return;
+        BlockNode node = workspace.get(pickerNodeId);
+        if (node != null && pickerSocket != null) {
+            workspace.checkpoint();
+            node.fields().put(pickerSocket, Registries.BLOCK.getId(blocks.get(index)).toString());
+        }
+        closePicker();
+    }
+
+    private void drawSnapHighlight(DrawContext context, Candidate candidate) {
+        BlockNode target = candidate.target;
+        float w = target.definition().shape() == Shape.REPORTER ? REPORTER_WIDTH : BLOCK_WIDTH;
+        float h = blockHeight(target);
+        float radius = target.definition().shape() == Shape.REPORTER ? 14 : 7;
+        GladeUi.roundedRectBorder(context, (float) target.x() - 2, (float) target.y() - 2, w + 4, h + 4,
+                radius, 2, 0xFFFFD34D);
     }
 
     private void snap(BlockNode dragged) {
@@ -277,76 +548,6 @@ public final class BlockCanvas {
         return best != null && best.distance <= SNAP_RADIUS ? best : null;
     }
 
-    private void drawSnapHighlight(DrawContext context, Candidate candidate) {
-        BlockNode target = candidate.target;
-        float w = target.definition().shape() == Shape.REPORTER ? REPORTER_WIDTH : BLOCK_WIDTH;
-        float h = blockHeight(target);
-        float radius = target.definition().shape() == Shape.REPORTER ? 14 : 7;
-        GladeUi.roundedRectBorder(context, (float) target.x() - 2, (float) target.y() - 2, w + 4, h + 4,
-                radius, 2, 0xFFFFD34D);
-    }
-
-    private FieldChip fieldChip(BlockNode node) {
-        Socket only = null;
-        for (Socket socket : node.definition().sockets()) {
-            if (socket.kind() != SocketKind.FIELD) continue;
-            if (only != null) return null; // more than one field: v1 keeps chip editing to single-field blocks.
-            only = socket;
-        }
-        if (only == null) return null;
-        float w = node.definition().shape() == Shape.REPORTER ? REPORTER_WIDTH : BLOCK_WIDTH;
-        double chipW = Math.min(96, w - 40);
-        double chipX = node.x() + w - chipW - 6;
-        double chipY = node.y() + 6;
-        return new FieldChip(chipX, chipY, chipW, FIELD_CHIP_HEIGHT, only.name());
-    }
-
-    private void drawFieldChip(DrawContext context, BlockNode node, FieldChip chip) {
-        boolean editingThis = node.id().equals(editingLiteral) && chip.socket().equals(editingSocket);
-        GladeUi.roundedRect(context, (float) chip.x(), (float) chip.y(), (float) chip.w(), (float) chip.h(), 4,
-                editingThis ? 0xFF2C2C2C : 0x99101010);
-        GladeUi.roundedRectBorder(context, (float) chip.x(), (float) chip.y(), (float) chip.w(), (float) chip.h(), 4, 1,
-                editingThis ? 0xFFFFD34D : 0xAAFFFFFF);
-        String value = node.fields().getOrDefault(chip.socket(), "");
-        String shown = editingThis ? value + "_" : (value.isEmpty() ? "(empty)" : value);
-        String clipped = clipToWidth(shown, (int) chip.w() - 6);
-        context.drawText(MinecraftClient.getInstance().textRenderer, clipped,
-                (int) chip.x() + 3, (int) chip.y() + 5, 0xFFFFFFFF, false);
-    }
-
-    private static String clipToWidth(String text, int maxWidth) {
-        if (maxWidth <= 0) return "";
-        var renderer = MinecraftClient.getInstance().textRenderer;
-        if (renderer.getWidth(text) <= maxWidth) return text;
-        String ellipsis = "...";
-        int ellipsisWidth = renderer.getWidth(ellipsis);
-        StringBuilder result = new StringBuilder();
-        for (int i = 0; i < text.length(); i++) {
-            if (renderer.getWidth(result.toString() + text.charAt(i)) + ellipsisWidth > maxWidth) break;
-            result.append(text.charAt(i));
-        }
-        return result + ellipsis;
-    }
-
-    private void layoutConnections() {
-        for (BlockNode node : workspace.nodes()) {
-            BlockNode next = workspace.get(node.next());
-            if (next != null) next.position(node.x(), node.y() + blockHeight(node));
-            for (Socket socket : node.definition().sockets()) {
-                if (socket.kind() == SocketKind.STATEMENT) {
-                    double sy = node.y() + BLOCK_HEIGHT;
-                    for (String id : node.statementInputs().getOrDefault(socket.name(), List.of())) {
-                        BlockNode child = workspace.get(id); if (child != null) { child.position(node.x() + 22, sy); sy += blockHeight(child); }
-                    }
-                } else if (socket.kind() == SocketKind.VALUE) {
-                    BlockNode child = workspace.get(node.valueInputs().get(socket.name()));
-                    if (child != null) child.position(node.x() + 55, node.y() - BLOCK_HEIGHT + 4);
-                }
-            }
-        }
-    }
-
-    private float blockHeight(BlockNode node) { return node.definition().shape() == Shape.C_BLOCK ? 58 : BLOCK_HEIGHT; }
     private BlockNode hitNode(double wx, double wy) {
         BlockNode result = null;
         for (BlockNode node : workspace.nodes()) {
@@ -383,4 +584,5 @@ public final class BlockCanvas {
     private record FieldChip(double x, double y, double w, double h, String socket) {
         boolean contains(double px, double py) { return px >= x && px < x + w && py >= y && py < y + h; }
     }
+    private record PickerLayout(int x, int y, int w, int h, int gridY, int gridH, int cols) {}
 }

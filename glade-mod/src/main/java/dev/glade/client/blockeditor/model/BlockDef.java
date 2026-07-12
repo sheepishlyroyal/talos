@@ -14,13 +14,20 @@ public record BlockDef(String id, String label, Category category, Shape shape, 
     public enum SocketKind { FIELD, VALUE, STATEMENT }
     /** IDENTIFIER fields are emitted as raw (unquoted) Python identifiers, e.g. variable names. */
     public enum ValueType { ANY, NUMBER, TEXT, BOOLEAN, POSITION, IDENTIFIER }
+    /** How an inline (unconnected) socket chip should be rendered/edited on the canvas. */
+    public enum FieldWidget { TEXT, BLOCK_PICKER }
 
-    public record Socket(String name, SocketKind kind, ValueType type, String defaultValue) {
+    public record Socket(String name, SocketKind kind, ValueType type, String defaultValue, FieldWidget widget) {
         public Socket {
             Objects.requireNonNull(name);
             Objects.requireNonNull(kind);
             Objects.requireNonNull(type);
             defaultValue = defaultValue == null ? "" : defaultValue;
+            widget = widget == null ? FieldWidget.TEXT : widget;
+        }
+
+        public Socket(String name, SocketKind kind, ValueType type, String defaultValue) {
+            this(name, kind, type, defaultValue, FieldWidget.TEXT);
         }
     }
 
