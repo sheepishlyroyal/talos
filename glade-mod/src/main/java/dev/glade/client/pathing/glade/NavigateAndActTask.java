@@ -5,6 +5,7 @@ import dev.glade.client.action.AimController;
 import dev.glade.client.pathing.PathResult;
 import dev.glade.client.task.GladeTask;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
@@ -35,6 +36,8 @@ public final class NavigateAndActTask extends GladeTask {
     }
 
     private static final double NODE_DISTANCE_SQUARED = 0.36;
+    private static final long MIN_SPAM_JUMP_INTERVAL_NANOS = 1_000_000_000L / 11L;
+    private static final long MAX_SPAM_JUMP_INTERVAL_NANOS = 1_000_000_000L / 7L;
     private final MinecraftClient client;
     private final List<BlockPos> nodes;
     private final Predicate<BlockPos> goal;
@@ -48,6 +51,10 @@ public final class NavigateAndActTask extends GladeTask {
     private BlockPos pillarOrigin;
     private BlockPos lastBridgeTarget;
     private int lastBridgePlaceTick = Integer.MIN_VALUE;
+    private final Random jumpRandom = new Random();
+    private long nextSpamJumpNanos;
+    private BlockPos sprintJumpLanding;
+    private boolean sprintJumpWasAirborne;
 
     public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
                               Predicate<BlockPos> goal, @Nullable RouteAction action,
@@ -76,8 +83,19 @@ public final class NavigateAndActTask extends GladeTask {
     @Override public void body() {
         ClientPlayerEntity player = client.player;
         if (player == null || client.world == null) { finish(false, "World unloaded while navigating"); return; }
-        if (goal.test(player.getBlockPos())) { finish(true, "Arrived"); return; }
         if (ticks >= 60 * 20) { finish(false, "Navigation timed out after 60 seconds"); return; }
+        if (sprintJumpLanding != null) {
+            sprintJumpWasAirborne |= !player.isOnGround();
+            if (!(sprintJumpWasAirborne && player.isOnGround()
+                    && reached(player, sprintJumpLanding))) {
+                continueSprintJump(player);
+                scheduleDelay();
+                return;
+            }
+            sprintJumpLanding = null;
+            sprintJumpWasAirborne = false;
+        }
+        if (goal.test(player.getBlockPos())) { finish(true, "Arrived"); return; }
         while (index < nodes.size() && reached(player, nodes.get(index))) index++;
         if (index >= nodes.size()) { finish(false, "Nodes ended before the goal was reached"); return; }
 
@@ -107,17 +125,43 @@ public final class NavigateAndActTask extends GladeTask {
                 client.options.sprintKey.setPressed(true);
                 client.options.jumpKey.setPressed(ascending || node.getY() >= player.getBlockY());
             } else if (jumpEdge) {
+                // A gap edge is one indivisible movement: never let waypoint advancement
+                // turn the player back toward a passed node during the airborne arc.
+                sprintJumpLanding = node.toImmutable();
+                sprintJumpWasAirborne = !player.isOnGround();
                 client.options.sprintKey.setPressed(true);
                 client.options.jumpKey.setPressed(true);
             } else if (ascending || stairOrSlab) {
-                // Reassert every tick: stairs, slabs, and head-hit ascents benefit from space spam.
-                client.options.jumpKey.setPressed(true);
+                pressSpamJumpIfReady(player);
             }
             if (!player.isTouchingWater() && index + 1 < nodes.size()
                     && node.getY() == nodes.get(index + 1).getY())
                 client.options.sprintKey.setPressed(true);
         }
         scheduleDelay();
+    }
+
+    private void continueSprintJump(ClientPlayerEntity player) {
+        Vec3d landingAim = new Vec3d(sprintJumpLanding.getX() + 0.5, player.getEyeY(),
+                sprintJumpLanding.getZ() + 0.5);
+        aim.aimAt(landingAim);
+        aim.tick();
+        releaseInputs();
+        client.options.forwardKey.setPressed(true);
+        client.options.sprintKey.setPressed(true);
+        // Holding jump is intentional for a single gap-crossing arc; randomized pulses
+        // are reserved for repeated grounded stair/step/head-bump jumps.
+        client.options.jumpKey.setPressed(true);
+    }
+
+    private void pressSpamJumpIfReady(ClientPlayerEntity player) {
+        if (!player.isOnGround()) return;
+        long now = System.nanoTime();
+        if (now < nextSpamJumpNanos) return;
+        client.options.jumpKey.setPressed(true);
+        long range = MAX_SPAM_JUMP_INTERVAL_NANOS - MIN_SPAM_JUMP_INTERVAL_NANOS;
+        nextSpamJumpNanos = now + MIN_SPAM_JUMP_INTERVAL_NANOS
+                + (long) (jumpRandom.nextDouble() * (range + 1L));
     }
 
     private boolean handleTraversal(ClientPlayerEntity player, BlockPos node) {
@@ -232,7 +276,7 @@ public final class NavigateAndActTask extends GladeTask {
         aim.aimAt(hit);
         aim.tick();
         player.getInventory().setSelectedSlot(blockSlot);
-        client.options.jumpKey.setPressed(true);
+        pressSpamJumpIfReady(player);
         // Jump input is applied after this task tick. Place only after the player's feet
         // clear the target cell; same-tick jump+place is rejected by collision checks.
         if (player.getY() >= pillarOrigin.getY() + 0.42 && aim.isAimed()

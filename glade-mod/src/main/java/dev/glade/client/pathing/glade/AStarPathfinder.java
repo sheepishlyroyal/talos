@@ -280,9 +280,9 @@ public final class AStarPathfinder {
         if (!isPassable(to) || !isPassable(to.up())) return MoveType.BREAK;
         if (!hasSafeSupport(to.down())) return MoveType.PLACE;
         if (to.getY() > from.getY()) {
-            BlockState support = world.getBlockState(to.down());
-            return support.getBlock() instanceof StairsBlock || support.getBlock() instanceof SlabBlock
-                    ? MoveType.STAIR_STEP : MoveType.JUMP;
+            // Supported one-block ascents are continuous spam-jump/step movement, not
+            // discrete gap jumps with takeoff and landing recovery.
+            return MoveType.STAIR_STEP;
         }
         return diagonal ? MoveType.DIAGONAL : MoveType.WALK;
     }
@@ -292,6 +292,10 @@ public final class AStarPathfinder {
         double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
         double verticalDistance = Math.abs(to.getY() - from.getY());
         double cost = horizontalDistance / effectiveSpeed(type, to) + verticalDistance * 0.12;
+        // Gap jumps include alignment/takeoff and landing recovery. Raw airborne speed
+        // alone otherwise makes them look cheaper than an equally quick ground route.
+        if (type == MoveType.JUMP) cost += 0.30;
+        if (type == MoveType.SPRINT_JUMP) cost += 0.45;
         if (type == MoveType.PLACE) cost += estimatePlaceTimeSeconds(to.getY() > from.getY());
         if (!isPassable(to)) cost += estimateBreakTimeSeconds(to);
         if (!isPassable(to.up())) cost += estimateBreakTimeSeconds(to.up());
