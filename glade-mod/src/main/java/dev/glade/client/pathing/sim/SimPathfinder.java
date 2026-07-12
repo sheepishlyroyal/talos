@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
 import net.minecraft.block.BlockState;
@@ -40,7 +41,7 @@ public final class SimPathfinder {
         }
 
         public static Options defaults() {
-            return new Options(false, false, 8_000, 10_000_000L, 14);
+            return new Options(false, false, 40_000, 300_000_000L, 20);
         }
     }
 
@@ -50,66 +51,103 @@ public final class SimPathfinder {
      */
     public static PlannedRoute find(World world, MotionState start, MovementProfile profile,
             BlockPos goal, Predicate<BlockPos> isGoal, Options opts) {
-        if (world == null || start == null || profile == null || goal == null
-                || isGoal == null || opts == null) {
-            throw new IllegalArgumentException("find arguments must not be null");
+        Search search = begin(world, start, profile, goal, isGoal, opts);
+        while (!search.isFinished()) search.advance(opts.timeBudgetNanos(), () -> true);
+        return search.route();
+    }
+
+    /** Creates resumable deterministic A*. Call {@link Search#advance} from successive ticks. */
+    public static Search begin(World world, MotionState start, MovementProfile profile,
+            BlockPos goal, Predicate<BlockPos> isGoal, Options opts) {
+        return new Search(world, start, profile, goal, isGoal, opts);
+    }
+
+    public static final class Search {
+        private final World world;
+        private final MovementProfile profile;
+        private final BlockPos goal;
+        private final Predicate<BlockPos> isGoal;
+        private final Options opts;
+        private final PriorityQueue<Node> open = new PriorityQueue<>(Comparator
+                .comparingDouble(Node::f).thenComparingDouble(Node::h)
+                .thenComparingLong(Node::sequence));
+        private final Map<Key, Double> bestCost = new HashMap<>();
+        private Node closest;
+        private Node result;
+        private long sequence;
+        private long spentNanos;
+        private int expanded;
+        private String reason;
+
+        private Search(World world, MotionState start, MovementProfile profile, BlockPos goal,
+                Predicate<BlockPos> isGoal, Options opts) {
+            if (world == null || start == null || profile == null || goal == null
+                    || isGoal == null || opts == null) {
+                throw new IllegalArgumentException("search arguments must not be null");
+            }
+            this.world = world;
+            this.profile = profile;
+            this.goal = goal;
+            this.isGoal = isGoal;
+            this.opts = opts;
+            BlockPos startCell = cell(start.position());
+            Node root = new Node(start, startCell, heading(start.velocity(), 0), null, null,
+                    0, 0.0, heuristic(startCell, goal, profile), sequence++);
+            open.add(root);
+            bestCost.put(key(root), 0.0);
+            closest = root;
         }
 
-        long began = System.nanoTime();
-        long deadline = saturatingAdd(began, opts.timeBudgetNanos());
-        long sequence = 0L;
-        BlockPos startCell = cell(start.position());
-        Node root = new Node(start, startCell, heading(start.velocity(), 0), null, null,
-                0, 0.0, heuristic(startCell, goal, profile), sequence++);
-
-        PriorityQueue<Node> open = new PriorityQueue<>(Comparator
-                .comparingDouble(Node::f)
-                .thenComparingDouble(Node::h)
-                .thenComparingLong(Node::sequence));
-        Map<Key, Double> bestCost = new HashMap<>();
-        open.add(root);
-        bestCost.put(key(root), 0.0);
-        Node closest = root;
-        int expanded = 0;
-        boolean timedOut = false;
-
-        while (!open.isEmpty() && expanded < opts.nodeCap()) {
-            if (System.nanoTime() >= deadline) {
-                timedOut = true;
-                break;
-            }
-            Node node = open.poll();
-            if (node.g() > bestCost.getOrDefault(key(node), Double.POSITIVE_INFINITY) + EPSILON) {
-                continue;
-            }
-            if (isGoal.test(node.cell())) {
-                return route(node, true, "goal reached; expanded " + expanded + " nodes");
-            }
-            expanded++;
-            if (closer(node, closest)) closest = node;
-
-            for (Edge edge : edges(world, node, profile, opts)) {
-                BlockPos edgeCell = cell(edge.state().position());
-                int edgeHeading = heading(edge.state().velocity(), edge.fallbackHeading());
-                double g = node.g() + edge.cost();
-                double h = heuristic(edgeCell, goal, profile);
-                // edgeCell/edgeHeading are only the A* identity. The child retains the exact
-                // rollout endpoint (including sub-block position and velocity), and its next
-                // primitive starts directly from that MotionState.
-                Node next = new Node(edge.state(), edgeCell, edgeHeading, node,
-                        edge.primitive(), edge.ticks(), g, h, sequence++);
-                Key key = key(next);
-                if (g + EPSILON < bestCost.getOrDefault(key, Double.POSITIVE_INFINITY)) {
-                    bestCost.put(key, g);
-                    open.add(next);
-                    if (closer(next, closest)) closest = next;
+        /** Expands until this slice, the global search budget, or the client's tick budget ends. */
+        public void advance(long sliceNanos, BooleanSupplier hasTickBudget) {
+            if (isFinished() || sliceNanos <= 0L || !hasTickBudget.getAsBoolean()) return;
+            long began = System.nanoTime();
+            long sliceDeadline = saturatingAdd(began, sliceNanos);
+            while (!open.isEmpty() && expanded < opts.nodeCap()
+                    && spentNanos + (System.nanoTime() - began) < opts.timeBudgetNanos()
+                    && System.nanoTime() < sliceDeadline && hasTickBudget.getAsBoolean()) {
+                Node node = open.poll();
+                if (node.g() > bestCost.getOrDefault(key(node), Double.POSITIVE_INFINITY) + EPSILON) continue;
+                if (isGoal.test(node.cell())) {
+                    result = node;
+                    reason = "goal reached";
+                    break;
+                }
+                expanded++;
+                if (closer(node, closest)) closest = node;
+                for (Edge edge : edges(world, node, profile, opts)) {
+                    BlockPos edgeCell = cell(edge.state().position());
+                    int edgeHeading = heading(edge.state().velocity(), edge.fallbackHeading());
+                    double g = node.g() + edge.cost();
+                    Node next = new Node(edge.state(), edgeCell, edgeHeading, node,
+                            edge.primitive(), edge.ticks(), g,
+                            heuristic(edgeCell, goal, profile), sequence++);
+                    Key key = key(next);
+                    if (g + EPSILON < bestCost.getOrDefault(key, Double.POSITIVE_INFINITY)) {
+                        bestCost.put(key, g);
+                        open.add(next);
+                        if (closer(next, closest)) closest = next;
+                    }
                 }
             }
+            spentNanos = Math.min(Long.MAX_VALUE, spentNanos + (System.nanoTime() - began));
+            if (result == null) {
+                if (open.isEmpty()) reason = "search frontier exhausted";
+                else if (expanded >= opts.nodeCap()) reason = "node cap exhausted";
+                else if (spentNanos >= opts.timeBudgetNanos()) reason = "time budget exhausted";
+            }
         }
 
-        String reason = timedOut ? "time budget exhausted"
-                : expanded >= opts.nodeCap() ? "node cap exhausted" : "search frontier exhausted";
-        return route(closest, false, reason + "; returning best partial after " + expanded + " nodes");
+        public boolean isFinished() { return result != null || reason != null; }
+        public int expandedNodes() { return expanded; }
+
+        public PlannedRoute route() {
+            if (!isFinished()) throw new IllegalStateException("search is still running");
+            boolean reached = result != null;
+            Node end = reached ? result : closest;
+            return SimPathfinder.route(end, reached, reason + "; expanded " + expanded
+                    + (reached ? " nodes" : " nodes; returning best partial"));
+        }
     }
 
     private static List<Edge> edges(World world, Node node, MovementProfile profile,
@@ -311,8 +349,10 @@ public final class SimPathfinder {
                 profile.movementSpeed() * 40.0 + profile.jumpVelocity() * 4.0);
         double maxVerticalPerTick = Math.max(20.0,
                 profile.jumpVelocity() * 2.0 + profile.gravity() * 14.0);
-        return octile / maxBlocksPerTick
-                + Math.abs(goal.getY() - from.getY()) / maxVerticalPerTick;
+        // Horizontal and vertical progress can occur in the same tick. Taking their maximum,
+        // rather than their sum, is an admissible lower bound and avoids greedy cave traps.
+        return Math.max(octile / maxBlocksPerTick,
+                Math.abs(goal.getY() - from.getY()) / maxVerticalPerTick);
     }
 
     private static Key key(Node node) {

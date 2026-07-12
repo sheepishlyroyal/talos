@@ -34,7 +34,9 @@ public final class SimFollowTask extends GladeTask {
     private static final double GROUND_DRAG = 0.6 * 0.91;
     private static final double FINAL_BRAKE_BUFFER = 0.35;
     private static final double BRAKE_RELEASE_SPEED = 0.075;
-    private static final float SWIM_SURFACE_PITCH = -25.0F;
+    // Vanilla pitch is positive down and negative up.
+    private static final float SWIM_DIVE_PITCH = 35.0F;
+    private static final float SWIM_SURFACE_PITCH = -35.0F;
     private static final int PREDICTION_COLOR = 0xFF9F1C;
     private static final int PREDICTION_TTL = 3;
     private static final int STUCK_TICKS = 100;
@@ -54,6 +56,7 @@ public final class SimFollowTask extends GladeTask {
     private Primitive committedPrimitive;
     private int committedStrafe;
     private int strafeCommitUntil;
+    private boolean surfacingForAir;
 
     public SimFollowTask(MinecraftClient client, PlannedRoute route, Predicate<BlockPos> goal,
             CompletableFuture<PathResult> future) {
@@ -111,7 +114,10 @@ public final class SimFollowTask extends GladeTask {
         float yaw = yawTo(new Vec3d(player.getX(), player.getY(), player.getZ()), waypoint.position());
         Input selected = chooseInput(live, profile, waypoint, yaw);
         renderPrediction(live, selected, profile);
-        if (live.inFluid()) player.setPitch(SWIM_SURFACE_PITCH);
+        if (live.fluid() == MotionState.Fluid.WATER) {
+            updateAirMode(player);
+            player.setPitch(surfacingForAir ? SWIM_SURFACE_PITCH : SWIM_DIVE_PITCH);
+        }
         apply(player, selected);
         status(live.inFluid()
                 ? live.fluid() == MotionState.Fluid.LAVA ? "swimming (lava)" : "swimming"
@@ -148,9 +154,18 @@ public final class SimFollowTask extends GladeTask {
             PlannedRoute.Waypoint waypoint, float yaw) {
         // Fluid movement deliberately has one committed control mode. Mixing land walk,
         // jump-release, brake, and strafe candidates made the selected keys thrash each tick.
-        // Held jump supplies the simulator's gentle ascent while the live pitch aims forward
-        // motion toward the surface for air.
-        if (live.inFluid()) return new Input(1, 0, true, true, false, yaw);
+        // Sprint-swim is driven by view pitch. Holding jump continuously prevents a clean dive;
+        // emit only a short upward impulse at genuinely low air, while pitch remains upward
+        // until breathing has restored a safe reserve.
+        if (live.fluid() == MotionState.Fluid.WATER) {
+            ClientPlayerEntity player = client.player;
+            boolean lowAirImpulse = player != null
+                    && player.getAir() <= Math.max(20, player.getMaxAir() / 5);
+            return new Input(1, 0, lowAirImpulse, true, false, yaw);
+        }
+        if (live.fluid() == MotionState.Fluid.LAVA) {
+            return new Input(1, 0, false, true, false, yaw);
+        }
 
         Primitive primitive = waypoint.via();
         boolean wantsSprint = primitive == Primitive.SPRINT || primitive == Primitive.SPRINT_JUMP;
@@ -406,6 +421,12 @@ public final class SimFollowTask extends GladeTask {
         player.setYaw(input.yaw());
         player.setHeadYaw(input.yaw());
         player.setBodyYaw(input.yaw());
+    }
+
+    private void updateAirMode(ClientPlayerEntity player) {
+        int maxAir = player.getMaxAir();
+        if (player.getAir() <= Math.max(20, maxAir / 5)) surfacingForAir = true;
+        else if (player.getAir() >= maxAir * 3 / 4) surfacingForAir = false;
     }
 
     private boolean blocking(BlockPos pos) {
