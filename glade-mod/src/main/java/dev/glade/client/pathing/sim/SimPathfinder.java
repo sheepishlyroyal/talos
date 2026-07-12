@@ -158,10 +158,15 @@ public final class SimPathfinder {
             int dz = DIRECTIONS[direction][1];
             float yaw = yaw(dx, dz);
 
-            add(result, rollout(world, node, profile, opts, Primitive.WALK, direction,
-                    new Input(1.0F, 0.0F, false, false, false, yaw), false, false));
-            add(result, rollout(world, node, profile, opts, Primitive.SPRINT, direction,
-                    new Input(1.0F, 0.0F, false, true, false, yaw), false, false));
+            // Sprint dominates walk on cost whenever both controls realize the same edge, so
+            // the slower walk rollout runs only where sprinting failed (tight ledges, drops).
+            Edge sprint = rollout(world, node, profile, opts, Primitive.SPRINT, direction,
+                    new Input(1.0F, 0.0F, false, true, false, yaw), false, false);
+            add(result, sprint);
+            if (sprint == null) {
+                add(result, rollout(world, node, profile, opts, Primitive.WALK, direction,
+                        new Input(1.0F, 0.0F, false, false, false, yaw), false, false));
+            }
             add(result, rollout(world, node, profile, opts, Primitive.SPRINT_JUMP, direction,
                     new Input(1.0F, 0.0F, true, true, false, yaw), true, false));
 
@@ -177,8 +182,12 @@ public final class SimPathfinder {
                         new Input(1.0F, 0.0F, true, false, false, yaw), false, true));
             }
 
+            // Crawling only matters where standing is impossible: continuing an existing
+            // compact pose or escaping a sub-1.8 ceiling. Open terrain skips 8 rollouts/node.
             MotionState crawlStart = withPose(node.state(), MotionState.Pose.CRAWL);
-            if (PlayerMotion.hitboxFits(world, MotionState.Pose.CRAWL, crawlStart.position())) {
+            if ((continuingCompactPose
+                    || !PlayerMotion.hitboxFits(world, MotionState.Pose.STAND, node.state().position()))
+                    && PlayerMotion.hitboxFits(world, MotionState.Pose.CRAWL, crawlStart.position())) {
                 add(result, rollout(world, node.withState(crawlStart), profile, opts,
                         Primitive.CRAWL, direction,
                         new Input(1.0F, 0.0F, false, false, true, yaw), false, false));
@@ -198,6 +207,9 @@ public final class SimPathfinder {
             Primitive primitive, int direction, Input input, boolean arc, boolean swimming) {
         MotionState state = node.state();
         BlockPos origin = cell(state.position());
+        // Collision resolution inside step() cannot push the box into a block, so a fitting
+        // start implies every subsequent tick fits. One check validates pose changes only.
+        if (!PlayerMotion.hitboxFits(world, state.pose(), state.position())) return null;
         int bumps = 0;
         boolean airborne = !state.onGround();
         for (int tick = 1; tick <= opts.maxRolloutTicks(); tick++) {
@@ -211,8 +223,6 @@ public final class SimPathfinder {
                     || primitive == Primitive.CRAWL) && reached.getY() < origin.getY()) {
                 return null;
             }
-            if (!PlayerMotion.hitboxFits(world, state.pose(), state.position())) return null;
-
             boolean newCell = !reached.equals(origin);
             boolean stable = swimming ? state.inFluid() : state.onGround() || state.inFluid();
             if (newCell && stable && (!arc || airborne)) {
@@ -238,7 +248,6 @@ public final class SimPathfinder {
             state = PlayerMotion.step(world, state, jump, profile);
             if (state.bumpedHorizontally()) bumps++;
             if (state.fluid() == MotionState.Fluid.LAVA) return null;
-            if (!PlayerMotion.hitboxFits(world, state.pose(), state.position())) return null;
             BlockPos reached = cell(state.position());
             if (state.onGround() && reached.equals(target)) {
                 return new Edge(state, Primitive.STEP_UP, tick,

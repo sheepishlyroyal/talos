@@ -33,8 +33,11 @@ public final class GladePathingEngine implements PathingEngine {
     public static boolean USE_SIM = true;
     private static final Logger LOGGER = LoggerFactory.getLogger(GladePathingEngine.class);
     private static final int SIM_NODE_CAP = 40_000;
-    private static final long SIM_SEARCH_NANOS = 300_000_000L;
-    private static final long SIM_TICK_SLICE_NANOS = 2_000_000L;
+    private static final long SIM_SEARCH_NANOS = 150_000_000L;
+    // Planning gets a dedicated per-tick slice rather than the shared 1-3ms action budget:
+    // a pending plan means the player is (or will be) idle, which costs far more than 15ms
+    // of one 50ms tick. Worst-case plan latency is therefore ~10 ticks (0.5s), usually 1-3.
+    private static final long SIM_TICK_SLICE_NANOS = 15_000_000L;
     private static final int SIM_MAX_ROLLOUT_TICKS = 20;
     private volatile GladeTask activeTask;
     private volatile NavigationRun activeRun;
@@ -146,9 +149,14 @@ public final class GladePathingEngine implements PathingEngine {
         }
     }
 
-    /** Plan from a fresh live snapshot; partial frontiers are followed and re-planned next tick. */
+    /**
+     * Plan from a fresh live snapshot. While a follower is active on a partial route, this
+     * runs as a background extension whose result is hot-swapped into the moving follower;
+     * only with no follower (start of run, or a stuck restart) does the player wait for it.
+     */
     private void launchSimSegment(NavigationRun run) {
         MinecraftClient client = run.client;
+        if (run.planner != null) return; // one background search at a time
         MotionState start = SimFollowTask.liveState(client.player);
         MovementProfile profile = MovementProfile.capture(client.player);
         SimPathfinder.Options simOptions = new SimPathfinder.Options(
@@ -157,20 +165,26 @@ public final class GladePathingEngine implements PathingEngine {
         SimPathfinder.Search search = SimPathfinder.begin(client.world, start, profile,
                 run.snapshot.target(), run.snapshot.test(), simOptions);
         PlanningTask task = new PlanningTask(run, search);
-        run.task = task;
-        activeTask = task;
-        if (client.player != null) client.player.sendMessage(
-                net.minecraft.text.Text.literal("§bGlade §7» §freplanning"), true);
+        run.planner = task;
+        boolean followerActive = run.follower != null && run.follower.isActive();
+        if (!followerActive) {
+            run.task = task;
+            activeTask = task;
+            if (client.player != null) client.player.sendMessage(
+                    net.minecraft.text.Text.literal("§bGlade §7» §fplanning"), true);
+        }
         try {
             GladeClient.taskScheduler().addTask("native-path-plan", task);
         } catch (RuntimeException exception) {
-            activeTask = null;
+            run.planner = null;
+            if (!followerActive) activeTask = null;
             run.future.completeExceptionally(exception);
         }
     }
 
     private void simPlanCompleted(NavigationRun run, PlanningTask planningTask,
             PlannedRoute route) {
+        if (run.planner == planningTask) run.planner = null;
         if (activeTask == planningTask) activeTask = null;
         if (run.task == planningTask) run.task = null;
         if (run.cancelled || run.future.isDone()) return;
@@ -198,8 +212,19 @@ public final class GladePathingEngine implements PathingEngine {
         currentNodes = List.copyOf(waypoints);
         renderRouteNodes(route);
 
+        // Pipelined extension: the follower is still moving on the previous partial route, so
+        // splice the fresher plan in without dropping keys or standing still.
+        if (run.follower != null && run.follower.isActive()) {
+            run.follower.swapRoute(route);
+            return;
+        }
+
         CompletableFuture<PathResult> segmentFuture = new CompletableFuture<>();
         SimFollowTask task = new SimFollowTask(run.client, route, run.snapshot.test(), segmentFuture);
+        task.setReplanRequest(() -> {
+            if (!run.cancelled && !run.future.isDone()) launchSimSegment(run);
+        });
+        run.follower = task;
         run.task = task;
         activeTask = task;
         segmentFuture.whenComplete((segment, error) ->
@@ -209,12 +234,14 @@ public final class GladePathingEngine implements PathingEngine {
             GladeClient.taskScheduler().addTask("native-path-follow", task);
         } catch (RuntimeException exception) {
             activeTask = null;
+            run.follower = null;
             run.future.completeExceptionally(exception);
         }
     }
 
     private void simSegmentCompleted(NavigationRun run, SimFollowTask task, PathResult segment,
             Throwable error) {
+        if (run.follower == task) run.follower = null;
         if (activeTask == task) activeTask = null;
         if (run.task == task) run.task = null;
         if (run.cancelled || run.future.isDone()) return;
@@ -260,6 +287,8 @@ public final class GladePathingEngine implements PathingEngine {
             }
             if (task instanceof NavigateAndActTask oldTask) oldTask.cancel();
             if (task instanceof SimFollowTask simTask) simTask.cancel();
+            // A pipelined follower may not be the captured activeTask; release its keys too.
+            if (run != null && run.follower != null) run.follower.cancel();
             activeTask = null;
             activeRun = null;
         };
@@ -356,7 +385,7 @@ public final class GladePathingEngine implements PathingEngine {
         @Override public void body() { done = true; action.run(); }
     }
 
-    /** Owns persistent A* state and advances it only while this client tick has budget. */
+    /** Owns persistent A* state and advances it a fixed dedicated slice per client tick. */
     private final class PlanningTask extends GladeTask {
         private final NavigationRun run;
         private final SimPathfinder.Search search;
@@ -373,9 +402,10 @@ public final class GladePathingEngine implements PathingEngine {
         }
         @Override public void increment() { }
         @Override public void body() {
-            if (!GladeClient.tickBudget().hasBudgetRemaining()) { scheduleDelay(); return; }
-            search.advance(SIM_TICK_SLICE_NANOS,
-                    () -> GladeClient.tickBudget().hasBudgetRemaining());
+            // Deliberately NOT gated on the shared action tick budget: that 1-3ms allowance
+            // throttled a 150ms search to many seconds of standing still. The fixed slice
+            // itself is the freeze guard (15ms of a 50ms tick).
+            search.advance(SIM_TICK_SLICE_NANOS, () -> true);
             if (search.isFinished()) {
                 done = true;
                 PlannedRoute route = search.route();
@@ -397,6 +427,8 @@ public final class GladePathingEngine implements PathingEngine {
         double bestDistance = Double.POSITIVE_INFINITY;
         boolean cancelled;
         GladeTask task;
+        SimFollowTask follower;
+        PlanningTask planner;
 
         NavigationRun(MinecraftClient client, GoalSnapshot snapshot, PathingOptions options,
                       CompletableFuture<PathResult> future) {

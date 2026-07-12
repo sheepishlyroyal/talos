@@ -34,17 +34,19 @@ public final class SimFollowTask extends GladeTask {
     private static final double GROUND_DRAG = 0.6 * 0.91;
     private static final double FINAL_BRAKE_BUFFER = 0.35;
     private static final double BRAKE_RELEASE_SPEED = 0.075;
-    // Vanilla pitch is positive down and negative up.
-    private static final float SWIM_DIVE_PITCH = 35.0F;
-    private static final float SWIM_SURFACE_PITCH = -35.0F;
+    // The swim hitbox is 0.6 tall; holding the feet this far under the surface keeps the
+    // top of the box in air (breathing) while the rest stays in water (sprint-swimming).
+    private static final double SURFACE_FEET_DEPTH = 0.45;
     private static final int PREDICTION_COLOR = 0xFF9F1C;
     private static final int PREDICTION_TTL = 3;
     private static final int STUCK_TICKS = 100;
 
     private final MinecraftClient client;
-    private final PlannedRoute route;
+    private PlannedRoute route;
     private final Predicate<BlockPos> goal;
     private final CompletableFuture<PathResult> future;
+    private Runnable replanRequest;
+    private boolean replanRequested;
     private int index;
     private int ticks;
     private int lastProgressTick;
@@ -67,6 +69,22 @@ public final class SimFollowTask extends GladeTask {
         this.index = route.waypoints().size() > 1 ? 1 : route.waypoints().size();
     }
 
+    /** Engine callback fired once per route when the remaining partial route runs short. */
+    public void setReplanRequest(Runnable request) { this.replanRequest = request; }
+
+    public boolean isActive() { return !future.isDone(); }
+
+    /** Hot-swap in a fresher plan without releasing keys; passed waypoints self-advance. */
+    public void swapRoute(PlannedRoute replacement) {
+        if (replacement == null || replacement.waypoints().size() <= 1) return;
+        this.route = replacement;
+        this.index = 1;
+        this.bestRemaining = Double.POSITIVE_INFINITY;
+        this.lastProgressTick = ticks;
+        this.replanRequested = false;
+        this.committedPrimitive = null;
+    }
+
     @Override public void initialize() { }
     @Override public boolean condition() { return !future.isDone(); }
     @Override public void increment() { ticks++; }
@@ -87,6 +105,13 @@ public final class SimFollowTask extends GladeTask {
         if (goal.test(player.getBlockPos())) {
             finish(true, "Arrived");
             return;
+        }
+        // A partial route is extended in the background well before it runs out, so the
+        // follower keeps moving on the old plan while the next one is computed and swapped in.
+        if (!route.reachedGoal() && replanRequest != null && !replanRequested
+                && route.waypoints().size() - index <= Math.max(10, route.waypoints().size() / 3)) {
+            replanRequested = true;
+            replanRequest.run();
         }
         if (index >= route.waypoints().size()) {
             finish(false, "Nodes ended before the goal was reached");
@@ -116,7 +141,7 @@ public final class SimFollowTask extends GladeTask {
         renderPrediction(live, selected, profile);
         if (live.fluid() == MotionState.Fluid.WATER) {
             updateAirMode(player);
-            player.setPitch(surfacingForAir ? SWIM_SURFACE_PITCH : SWIM_DIVE_PITCH);
+            player.setPitch(swimPitch(player, waypoint));
         }
         apply(player, selected);
         status(live.inFluid()
@@ -154,14 +179,14 @@ public final class SimFollowTask extends GladeTask {
             PlannedRoute.Waypoint waypoint, float yaw) {
         // Fluid movement deliberately has one committed control mode. Mixing land walk,
         // jump-release, brake, and strafe candidates made the selected keys thrash each tick.
-        // Sprint-swim is driven by view pitch. Holding jump continuously prevents a clean dive;
-        // emit only a short upward impulse at genuinely low air, while pitch remains upward
-        // until breathing has restored a safe reserve.
+        // Vertical position in water is owned entirely by the pitch controller (swimPitch);
+        // jump is reserved for climbing out onto a bank at the end of the swim.
         if (live.fluid() == MotionState.Fluid.WATER) {
             ClientPlayerEntity player = client.player;
-            boolean lowAirImpulse = player != null
-                    && player.getAir() <= Math.max(20, player.getMaxAir() / 5);
-            return new Input(1, 0, lowAirImpulse, true, false, yaw);
+            boolean exitClimb = player != null
+                    && waypoint.position().y >= waterSurfaceY(player) - 0.25
+                    && horizontalDistance(live.position(), waypoint.position()) < 2.5;
+            return new Input(1, 0, exitClimb, true, false, yaw);
         }
         if (live.fluid() == MotionState.Fluid.LAVA) {
             return new Input(1, 0, false, true, false, yaw);
@@ -427,6 +452,39 @@ public final class SimFollowTask extends GladeTask {
         int maxAir = player.getMaxAir();
         if (player.getAir() <= Math.max(20, maxAir / 5)) surfacingForAir = true;
         else if (player.getAir() >= maxAir * 3 / 4) surfacingForAir = false;
+    }
+
+    /**
+     * Swimming is held AT the water/air interface: a proportional pitch controller keeps the
+     * compact hitbox straddling the surface (in water, head in air) so it breathes while
+     * sprint-swimming. Only a genuinely deep waypoint — with air to spare — dives off it.
+     */
+    private float swimPitch(ClientPlayerEntity player, PlannedRoute.Waypoint waypoint) {
+        double surface = waterSurfaceY(player);
+        Vec3d target = waypoint.position();
+        Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
+        if (!surfacingForAir && target.y < surface - 2.0) {
+            double horizontal = Math.max(horizontalDistance(feet, target), 0.001);
+            return (float) Math.max(-60.0, Math.min(60.0,
+                    Math.toDegrees(Math.atan2(feet.y - target.y, horizontal))));
+        }
+        double error = feet.y - (surface - SURFACE_FEET_DEPTH);
+        return (float) Math.max(-45.0, Math.min(45.0, error * 120.0));
+    }
+
+    /** Y of the top of the water column at the player's position. */
+    private double waterSurfaceY(ClientPlayerEntity player) {
+        int x = player.getBlockX(), z = player.getBlockZ();
+        int y = player.getBlockY();
+        int limit = y + 64;
+        while (y < limit
+                && client.world.getFluidState(new BlockPos(x, y + 1, z)).isIn(FluidTags.WATER)) {
+            y++;
+        }
+        BlockPos top = new BlockPos(x, y, z);
+        var fluid = client.world.getFluidState(top);
+        double height = fluid.isIn(FluidTags.WATER) ? fluid.getHeight(client.world, top) : 0.9;
+        return y + height;
     }
 
     private boolean blocking(BlockPos pos) {
