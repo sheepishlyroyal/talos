@@ -14,6 +14,7 @@ import net.minecraft.entity.EntityType;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.registry.Registries;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
@@ -94,6 +95,25 @@ final class LookCommand {
         }
         source.sendFeedback(Text.literal("Scanning loaded chunks..."));
         return 1;
+    }
+
+    /** {@code /glade look coords <x> <y> <z>} — aims at the center of the given block position. */
+    static int executeCoords(CommandContext<FabricClientCommandSource> context, BlockPos pos) {
+        FabricClientCommandSource source = context.getSource();
+        ClientPlayerEntity player = source.getPlayer();
+        aimAt(player, Vec3d.ofCenter(pos));
+        source.sendFeedback(Text.literal("Looking at %d, %d, %d"
+                .formatted(pos.getX(), pos.getY(), pos.getZ())));
+        return 1;
+    }
+
+    /**
+     * {@code /glade look direction <yaw> <pitch>} — aims at the center of the block hit by a
+     * raycast along the given (possibly {@code ^}-relative) direction. The raycast itself is
+     * performed by {@code GladeCommands}' shared {@code directionNode} helper.
+     */
+    static int executeDirection(CommandContext<FabricClientCommandSource> context, BlockPos pos) {
+        return executeCoords(context, pos);
     }
 
     static int executeEntity(
