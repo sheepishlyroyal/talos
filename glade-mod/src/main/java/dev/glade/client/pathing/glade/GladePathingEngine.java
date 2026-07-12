@@ -113,8 +113,11 @@ public final class GladePathingEngine implements PathingEngine {
 
     public static List<BlockPos> createNodes(List<BlockPos> path, int requestedCount) {
         if (path.size() <= 2) return List.copyOf(path);
-        int desired = requestedCount > 0 ? Math.min(requestedCount, path.size())
-                : Math.max(2, Math.min(path.size(), 2 + path.size() / 6));
+        // Default (requestedCount <= 0): keep EVERY path cell — movement then follows the
+        // route turn-for-turn (no straight-line "hold W" between sparse waypoints) and the
+        // whole path is visualised. A positive count thins the route to that many waypoints.
+        if (requestedCount <= 0 || requestedCount >= path.size()) return List.copyOf(path);
+        int desired = Math.min(requestedCount, path.size());
         java.util.LinkedHashSet<BlockPos> selected = new java.util.LinkedHashSet<>();
         selected.add(path.getFirst());
         for (int i = 1; i + 1 < path.size(); i++) {
