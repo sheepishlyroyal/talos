@@ -1,0 +1,365 @@
+package dev.glade.client.pathing.sim;
+
+import dev.glade.client.GladeClient;
+import dev.glade.client.pathing.PathResult;
+import dev.glade.client.task.GladeTask;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Predicate;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.item.BlockItem;
+import net.minecraft.registry.tag.FluidTags;
+import net.minecraft.text.Text;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
+
+/**
+ * Closed-loop route follower. The route contains geometric intent, never a recorded input
+ * schedule: every client tick starts from the real player state and runs fresh short rollouts.
+ */
+public final class SimFollowTask extends GladeTask {
+    private static final double REACHED_SQUARED = 0.36;
+    private static final int ROLLOUT_TICKS = 6;
+    private static final int STUCK_TICKS = 100;
+
+    private final MinecraftClient client;
+    private final PlannedRoute route;
+    private final Predicate<BlockPos> goal;
+    private final CompletableFuture<PathResult> future;
+    private int index;
+    private int ticks;
+    private int lastProgressTick;
+    private double bestRemaining = Double.POSITIVE_INFINITY;
+    private BlockPos breaking;
+    private BlockPos lastPlacement;
+    private int lastPlacementTick = Integer.MIN_VALUE;
+    private String lastStatus = "";
+
+    public SimFollowTask(MinecraftClient client, PlannedRoute route, Predicate<BlockPos> goal,
+            CompletableFuture<PathResult> future) {
+        this.client = client;
+        this.route = route;
+        this.goal = goal;
+        this.future = future;
+        this.index = route.waypoints().size() > 1 ? 1 : route.waypoints().size();
+    }
+
+    @Override public void initialize() { }
+    @Override public boolean condition() { return !future.isDone(); }
+    @Override public void increment() { ticks++; }
+
+    @Override
+    public void body() {
+        ClientPlayerEntity player = client.player;
+        if (player == null || client.world == null) {
+            finish(false, "World unloaded while navigating");
+            return;
+        }
+        if (!GladeClient.tickBudget().hasBudgetRemaining()) {
+            scheduleDelay();
+            return;
+        }
+
+        advance(player);
+        if (goal.test(player.getBlockPos())) {
+            finish(true, "Arrived");
+            return;
+        }
+        if (index >= route.waypoints().size()) {
+            finish(false, "Nodes ended before the goal was reached");
+            return;
+        }
+
+        PlannedRoute.Waypoint waypoint = route.waypoints().get(index);
+        updateProgress(new Vec3d(player.getX(), player.getY(), player.getZ()), waypoint.position());
+        if (ticks - lastProgressTick > STUCK_TICKS) {
+            finish(false, "Pathing is stuck near route waypoint " + index);
+            return;
+        }
+
+        if (waypoint.via() == Primitive.MINE && mine(player, waypoint.position())) {
+            scheduleDelay();
+            return;
+        }
+        if (waypoint.via() == Primitive.PLACE && place(player, waypoint.position())) {
+            scheduleDelay();
+            return;
+        }
+
+        MotionState live = liveState(player);
+        MovementProfile profile = MovementProfile.capture(player); // Effects/attributes are live.
+        float yaw = yawTo(new Vec3d(player.getX(), player.getY(), player.getZ()), waypoint.position());
+        Input selected = chooseInput(live, profile, waypoint, yaw);
+        apply(player, selected);
+        status(label(waypoint.via()));
+        scheduleDelay();
+    }
+
+    /** Player getPos() is already feet/bottom-center, exactly the origin MotionState.box uses. */
+    public static MotionState liveState(ClientPlayerEntity player) {
+        MotionState.Pose pose = player.isCrawling() ? MotionState.Pose.CRAWL
+                : (player.isSwimming() || player.isInSwimmingPose())
+                        ? MotionState.Pose.SWIM : MotionState.Pose.STAND;
+        // Classify fluid from the same exact AABB used by simulation, rather than trusting
+        // entity flags whose update may trail the current client-world collision state.
+        MotionState.Fluid fluid = MotionState.Fluid.NONE;
+        var box = MotionState.box(pose, new Vec3d(player.getX(), player.getY(), player.getZ()));
+        for (BlockPos cell : BlockPos.iterate(
+                BlockPos.ofFloored(box.minX, box.minY, box.minZ),
+                BlockPos.ofFloored(box.maxX - 1.0E-7, box.maxY - 1.0E-7, box.maxZ - 1.0E-7))) {
+            var state = player.getEntityWorld().getFluidState(cell);
+            if (state.isIn(FluidTags.LAVA)) { fluid = MotionState.Fluid.LAVA; break; }
+            if (state.isIn(FluidTags.WATER)) fluid = MotionState.Fluid.WATER;
+        }
+        return new MotionState(new Vec3d(player.getX(), player.getY(), player.getZ()), player.getVelocity(), player.isOnGround(), pose,
+                fluid, false);
+    }
+
+    /** Enumerate compact controls, simulate each from reality, and keep the safest progress. */
+    private Input chooseInput(MotionState live, MovementProfile profile,
+            PlannedRoute.Waypoint waypoint, float yaw) {
+        Primitive primitive = waypoint.via();
+        boolean wantsSprint = primitive == Primitive.SPRINT || primitive == Primitive.SPRINT_JUMP;
+        boolean wantsJump = primitive == Primitive.SPRINT_JUMP || primitive == Primitive.STEP_UP
+                || primitive == Primitive.SWIM;
+        boolean wantsSneak = primitive == Primitive.CRAWL || primitive == Primitive.PLACE;
+        List<Input> candidates = new ArrayList<>();
+        candidates.add(new Input(1, 0, wantsJump, wantsSprint, wantsSneak, yaw));
+        candidates.add(new Input(1, 0, false, wantsSprint, wantsSneak, yaw));
+        candidates.add(new Input(1, .35F, wantsJump, wantsSprint, wantsSneak, yaw));
+        candidates.add(new Input(1, -.35F, wantsJump, wantsSprint, wantsSneak, yaw));
+        candidates.add(new Input(1, 0, false, false, true, yaw));
+        candidates.add(new Input(0, 0, false, false, false, yaw));
+        if (live.inFluid()) candidates.add(new Input(1, 0, true, false, false, yaw));
+
+        Vec3d from = index > 0 ? route.waypoints().get(index - 1).position() : live.position();
+        Input best = candidates.getFirst();
+        double bestScore = Double.NEGATIVE_INFINITY;
+        for (Input candidate : candidates) {
+            if (!GladeClient.tickBudget().hasBudgetRemaining() && bestScore > Double.NEGATIVE_INFINITY) {
+                break;
+            }
+            MotionState state = live;
+            double score = 0.0;
+            double oldDistance = horizontalDistance(state.position(), waypoint.position());
+            for (int tick = 0; tick < ROLLOUT_TICKS; tick++) {
+                state = PlayerMotion.step(client.world, state, candidate, profile);
+                double distance = horizontalDistance(state.position(), waypoint.position());
+                score += (oldDistance - distance) * 12.0; // primary route progress
+                score -= distanceToSegment(state.position(), from, waypoint.position()) * 1.8;
+                if (state.bumpedHorizontally()) score -= 7.0;
+                if (state.fluid() == MotionState.Fluid.LAVA) score -= 100.0;
+                if (isHazard(BlockPos.ofFloored(state.position()))) score -= 60.0;
+                if (!PlayerMotion.hitboxFits(client.world, state.pose(), state.position())) score -= 100.0;
+                if (state.position().y < Math.min(from.y, waypoint.position().y) - 2.5) score -= 80.0;
+                oldDistance = distance;
+            }
+            // Precision endpoints prefer braking over flying through the waypoint.
+            boolean precise = index + 1 == route.waypoints().size()
+                    || primitive == Primitive.PLACE || primitive == Primitive.MINE;
+            if (precise) score -= horizontalDistance(state.position(), waypoint.position()) * 3.0;
+            if (score > bestScore) { bestScore = score; best = candidate; }
+        }
+        return best;
+    }
+
+    private boolean isHazard(BlockPos pos) {
+        BlockState state = client.world.getBlockState(pos);
+        return state.isOf(Blocks.FIRE) || state.isOf(Blocks.SOUL_FIRE)
+                || state.isOf(Blocks.CACTUS) || state.isOf(Blocks.MAGMA_BLOCK)
+                || state.isOf(Blocks.CAMPFIRE) || state.isOf(Blocks.SOUL_CAMPFIRE);
+    }
+
+    private boolean mine(ClientPlayerEntity player, Vec3d target) {
+        BlockPos origin = player.getBlockPos();
+        BlockPos destination = BlockPos.ofFloored(target);
+        int dx = Integer.compare(destination.getX(), origin.getX());
+        int dz = Integer.compare(destination.getZ(), origin.getZ());
+        BlockPos block = null;
+        // MINE waypoints describe the post-edit cell, so inspect the intervening tunnel.
+        for (int step = 1; step <= 3 && block == null; step++) {
+            BlockPos feet = origin.add(dx * step, 0, dz * step);
+            if (blocking(feet)) block = feet;
+            else if (blocking(feet.up())) block = feet.up();
+            if (feet.getX() == destination.getX() && feet.getZ() == destination.getZ()) break;
+        }
+        if (block == null) { breaking = null; return false; }
+        status("mining");
+        releaseInputs();
+        BlockState state = client.world.getBlockState(block);
+        int best = player.getInventory().getSelectedSlot();
+        float speed = player.getInventory().getStack(best).getMiningSpeedMultiplier(state);
+        for (int slot = 0; slot < 9; slot++) {
+            float candidate = player.getInventory().getStack(slot).getMiningSpeedMultiplier(state);
+            if (candidate > speed) { best = slot; speed = candidate; }
+        }
+        player.getInventory().setSelectedSlot(best);
+        if (!block.equals(breaking)) {
+            client.interactionManager.attackBlock(block, Direction.UP);
+            breaking = block.toImmutable();
+        } else {
+            client.interactionManager.updateBlockBreakingProgress(block, Direction.UP);
+        }
+        player.swingHand(Hand.MAIN_HAND);
+        return true;
+    }
+
+    /** Place the missing support from an existing solid neighbor while sneak-guarding the lip. */
+    private boolean place(ClientPlayerEntity player, Vec3d target) {
+        BlockPos destination = BlockPos.ofFloored(target);
+        BlockPos feet = player.getBlockPos();
+        int dx = Integer.compare(destination.getX(), feet.getX());
+        int dz = Integer.compare(destination.getZ(), feet.getZ());
+        // PLACE waypoints are normally the far-side landing; the missing support is the
+        // first cell across the lip, not necessarily destination.down().
+        BlockPos support = feet.add(dx, 0, dz).down();
+        if (!client.world.getBlockState(support).getCollisionShape(client.world, support).isEmpty()) {
+            support = destination.down();
+        }
+        if (!client.world.getBlockState(support).getCollisionShape(client.world, support).isEmpty()) {
+            return false;
+        }
+        status("bridging");
+        releaseInputs();
+        client.options.sneakKey.setPressed(true);
+        int slot = findBlockSlot(player);
+        if (slot < 0) { finish(false, "Ran out of bridge blocks"); return true; }
+        for (Direction side : Direction.values()) {
+            BlockPos anchor = support.offset(side.getOpposite());
+            if (client.world.getBlockState(anchor).getCollisionShape(client.world, anchor).isEmpty()) continue;
+            if (support.equals(lastPlacement) && ticks - lastPlacementTick < 2) return true;
+            Vec3d hit = Vec3d.ofCenter(anchor).add(side.getOffsetX() * .5,
+                    side.getOffsetY() * .5, side.getOffsetZ() * .5);
+            player.getInventory().setSelectedSlot(slot);
+            client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
+                    new BlockHitResult(hit, side, anchor, false));
+            player.swingHand(Hand.MAIN_HAND);
+            lastPlacement = support.toImmutable();
+            lastPlacementTick = ticks;
+            return true;
+        }
+        finish(false, "No solid face is available for bridging");
+        return true;
+    }
+
+    private void advance(ClientPlayerEntity player) {
+        while (index < route.waypoints().size()) {
+            Vec3d target = route.waypoints().get(index).position();
+            double dx = player.getX() - target.x, dz = player.getZ() - target.z;
+            boolean reached = dx * dx + dz * dz < REACHED_SQUARED
+                    && Math.abs(player.getY() - target.y) <= .75;
+            Vec3d previous = route.waypoints().get(index - 1).position();
+            double edgeX = target.x - previous.x, edgeZ = target.z - previous.z;
+            boolean passed = (player.getX() - target.x) * edgeX
+                    + (player.getZ() - target.z) * edgeZ >= 0.0;
+            if (!reached && !passed) break;
+            index++;
+            bestRemaining = Double.POSITIVE_INFINITY;
+            lastProgressTick = ticks;
+        }
+    }
+
+    private void updateProgress(Vec3d position, Vec3d target) {
+        double remaining = position.squaredDistanceTo(target);
+        if (remaining + .04 < bestRemaining) {
+            bestRemaining = remaining;
+            lastProgressTick = ticks;
+        }
+    }
+
+    private void apply(ClientPlayerEntity player, Input input) {
+        releaseInputs();
+        client.options.forwardKey.setPressed(input.forward() > .1F);
+        client.options.backKey.setPressed(input.forward() < -.1F);
+        client.options.leftKey.setPressed(input.strafe() > .1F);
+        client.options.rightKey.setPressed(input.strafe() < -.1F);
+        client.options.jumpKey.setPressed(input.jump());
+        client.options.sprintKey.setPressed(input.sprint());
+        client.options.sneakKey.setPressed(input.sneak());
+        player.setYaw(input.yaw());
+        player.setHeadYaw(input.yaw());
+        player.setBodyYaw(input.yaw());
+    }
+
+    private boolean blocking(BlockPos pos) {
+        return !client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty();
+    }
+
+    private static int findBlockSlot(ClientPlayerEntity player) {
+        for (int slot = 0; slot < 9; slot++) {
+            if (player.getInventory().getStack(slot).getItem() instanceof BlockItem) return slot;
+        }
+        return -1;
+    }
+
+    private static float yawTo(Vec3d from, Vec3d to) {
+        return (float) Math.toDegrees(Math.atan2(-(to.x - from.x), to.z - from.z));
+    }
+
+    private static double horizontalDistance(Vec3d a, Vec3d b) {
+        return Math.hypot(a.x - b.x, a.z - b.z);
+    }
+
+    private static double distanceToSegment(Vec3d point, Vec3d a, Vec3d b) {
+        double dx = b.x - a.x, dz = b.z - a.z;
+        double length = dx * dx + dz * dz;
+        if (length < 1.0E-8) return horizontalDistance(point, b);
+        double t = Math.max(0.0, Math.min(1.0,
+                ((point.x - a.x) * dx + (point.z - a.z) * dz) / length));
+        return Math.hypot(point.x - (a.x + dx * t), point.z - (a.z + dz * t));
+    }
+
+    private static String label(Primitive primitive) {
+        if (primitive == null) return "walking";
+        return switch (primitive) {
+            case WALK, DROP, STEP_UP -> "walking";
+            case SPRINT -> "sprinting";
+            case SPRINT_JUMP -> "sprint-jump";
+            case SWIM -> "swimming";
+            case CRAWL -> "crawling";
+            case MINE -> "mining";
+            case PLACE -> "bridging";
+        };
+    }
+
+    private void status(String mode) {
+        if (mode.equals(lastStatus)) return;
+        lastStatus = mode;
+        if (client.player != null) client.player.sendMessage(
+                Text.literal("§bGlade §7» §f" + mode), true);
+    }
+
+    public void cancel() { finish(false, "Pathing cancelled"); _break(); }
+
+    private void finish(boolean success, String detail) {
+        releaseInputs();
+        if (client.player != null) client.player.sendMessage(Text.literal(
+                (success ? "§aGlade §7» §f" : "§cGlade §7» §f") + detail), true);
+        future.complete(new PathResult(success, detail));
+    }
+
+    private void releaseInputs() {
+        client.options.forwardKey.setPressed(false);
+        client.options.backKey.setPressed(false);
+        client.options.leftKey.setPressed(false);
+        client.options.rightKey.setPressed(false);
+        client.options.jumpKey.setPressed(false);
+        client.options.sprintKey.setPressed(false);
+        client.options.sneakKey.setPressed(false);
+    }
+
+    @Override public void onCompleted() {
+        releaseInputs();
+        if (!future.isDone()) future.complete(new PathResult(false, "Navigation was interrupted"));
+    }
+
+    @Override public Set<Object> getMutexKeys() { return Set.of("glade-player-movement"); }
+}

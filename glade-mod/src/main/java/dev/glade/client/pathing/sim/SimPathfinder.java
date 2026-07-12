@@ -30,7 +30,7 @@ public final class SimPathfinder {
 
     private SimPathfinder() {}
 
-    /** Search limits. A non-positive time budget disables expansion rather than being unbounded. */
+    /** Search limits. A zero time budget disables expansion rather than being unbounded. */
     public record Options(boolean allowMining, boolean allowPlacing, int nodeCap,
             long timeBudgetNanos, int maxRolloutTicks) {
         public Options {
@@ -173,6 +173,7 @@ public final class SimPathfinder {
                 int horizontal = Math.max(Math.abs(reached.getX() - origin.getX()),
                         Math.abs(reached.getZ() - origin.getZ()));
                 if (arc && (horizontal < 1 || horizontal > 4)) return null;
+                if (!arc && primitive != Primitive.PLACE && horizontal > 1) return null;
                 return new Edge(state, primitive, tick, tick + bumps * BUMP_PENALTY, direction);
             }
         }
@@ -277,15 +278,18 @@ public final class SimPathfinder {
         return new PlannedRoute(forward, reachedGoal, detail);
     }
 
-    /* Octile distance is divided by an intentionally generous profile-derived speed ceiling.
-       The vertical coefficient is below the cheapest bounded DROP/STEP progress per tick. */
+    /* Both distances use intentionally generous profile-derived speed ceilings. They exceed
+       the progress of the bounded primitives, keeping this estimate below their tick cost. */
     private static double heuristic(BlockPos from, BlockPos goal, MovementProfile profile) {
         int dx = Math.abs(goal.getX() - from.getX());
         int dz = Math.abs(goal.getZ() - from.getZ());
         double octile = Math.max(dx, dz) + (Math.sqrt(2.0) - 1.0) * Math.min(dx, dz);
-        double maxBlocksPerTick = Math.max(1.0,
+        double maxBlocksPerTick = Math.max(8.0,
                 profile.movementSpeed() * 40.0 + profile.jumpVelocity() * 4.0);
-        return octile / maxBlocksPerTick + Math.abs(goal.getY() - from.getY()) * 0.05;
+        double maxVerticalPerTick = Math.max(20.0,
+                profile.jumpVelocity() * 2.0 + profile.gravity() * 14.0);
+        return octile / maxBlocksPerTick
+                + Math.abs(goal.getY() - from.getY()) / maxVerticalPerTick;
     }
 
     private static Key key(Node node) {

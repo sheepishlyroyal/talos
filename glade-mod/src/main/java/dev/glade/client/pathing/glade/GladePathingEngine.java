@@ -10,6 +10,11 @@ import dev.glade.client.pathing.PathResult;
 import dev.glade.client.pathing.PathingEngine;
 import dev.glade.client.pathing.PathingOptions;
 import dev.glade.client.task.GladeTask;
+import dev.glade.client.pathing.sim.MovementProfile;
+import dev.glade.client.pathing.sim.MotionState;
+import dev.glade.client.pathing.sim.PlannedRoute;
+import dev.glade.client.pathing.sim.SimFollowTask;
+import dev.glade.client.pathing.sim.SimPathfinder;
 import java.util.Objects;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -25,11 +30,13 @@ import org.slf4j.LoggerFactory;
 
 /** Always-available built-in client-side pathing engine. */
 public final class GladePathingEngine implements PathingEngine {
+    /** Runtime escape hatch for the retained AStar/NavigateAndActTask implementation. */
+    public static boolean USE_SIM = true;
     private static final Logger LOGGER = LoggerFactory.getLogger(GladePathingEngine.class);
     private static final int MAX_REPATH_ATTEMPTS = 20;
     private static final int MAX_STALLED_ATTEMPTS = 3;
     private static final long MAX_ROUTE_NANOS = 5L * 60L * 1_000_000_000L;
-    private volatile NavigateAndActTask activeTask;
+    private volatile GladeTask activeTask;
     private volatile NavigationRun activeRun;
     private volatile int nodeCount;
     private volatile List<Vec3d> currentNodes = List.of();
@@ -86,6 +93,11 @@ public final class GladePathingEngine implements PathingEngine {
         if (++run.attempts > MAX_REPATH_ATTEMPTS
                 || System.nanoTime() - run.startedNanos > MAX_ROUTE_NANOS) {
             run.future.complete(new PathResult(false, "Pathing stopped after the incremental re-path limit"));
+            return;
+        }
+
+        if (USE_SIM) {
+            launchSimSegment(run);
             return;
         }
 
@@ -146,6 +158,74 @@ public final class GladePathingEngine implements PathingEngine {
         }
     }
 
+    /** Plan from a fresh live snapshot; partial frontiers are followed and re-planned next tick. */
+    private void launchSimSegment(NavigationRun run) {
+        MinecraftClient client = run.client;
+        MotionState start = SimFollowTask.liveState(client.player);
+        MovementProfile profile = MovementProfile.capture(client.player);
+        SimPathfinder.Options simOptions = new SimPathfinder.Options(
+                run.options.allowMining(), run.options.allowMining(), 8_000,
+                10_000_000L, 14);
+        PlannedRoute route = SimPathfinder.find(client.world, start, profile,
+                run.snapshot.target(), run.snapshot.test(), simOptions);
+        LOGGER.debug("Simulation path search attempt {}: {}", run.attempts, route.detail());
+        if (route.waypoints().size() <= 1) {
+            run.future.complete(new PathResult(false, route.detail()));
+            return;
+        }
+
+        double distance = squaredDistance(client.player.getBlockPos(), run.snapshot.target());
+        if (distance + 0.25 < run.bestDistance) {
+            run.bestDistance = distance;
+            run.stalledAttempts = 0;
+        } else if (run.attempts > 1) {
+            run.stalledAttempts++;
+        }
+        if (run.stalledAttempts >= MAX_STALLED_ATTEMPTS) {
+            run.future.complete(new PathResult(false,
+                    "Pathing is stuck: no progress across " + run.stalledAttempts
+                            + " re-path attempts"));
+            return;
+        }
+
+        List<Vec3d> waypoints = route.waypoints().stream()
+                .map(PlannedRoute.Waypoint::position).toList();
+        int requested = run.options.nodeCount() > 0 ? run.options.nodeCount() : nodeCount;
+        currentNodes = sampleWaypoints(waypoints, requested);
+        renderNodes(currentNodes);
+
+        CompletableFuture<PathResult> segmentFuture = new CompletableFuture<>();
+        SimFollowTask task = new SimFollowTask(client, route, run.snapshot.test(), segmentFuture);
+        run.task = task;
+        activeTask = task;
+        segmentFuture.whenComplete((segment, error) ->
+                GladeClient.taskScheduler().addTask("native-path-handoff", new OneShotTask(
+                        () -> simSegmentCompleted(run, task, segment, error))));
+        try {
+            GladeClient.taskScheduler().addTask("native-path-follow", task);
+        } catch (RuntimeException exception) {
+            activeTask = null;
+            run.future.completeExceptionally(exception);
+        }
+    }
+
+    private void simSegmentCompleted(NavigationRun run, SimFollowTask task, PathResult segment,
+            Throwable error) {
+        if (activeTask == task) activeTask = null;
+        if (run.task == task) run.task = null;
+        if (run.cancelled || run.future.isDone()) return;
+        if (error != null) { run.future.completeExceptionally(error); return; }
+        if (segment.successful()) { run.future.complete(segment); return; }
+        // A partial frontier, model drift past a nominal goal route, or a locally stuck
+        // follower all get a fresh live-state plan. The outer progress counters bound retries.
+        if (segment.detail().startsWith("Nodes ended")
+                || segment.detail().startsWith("Pathing is stuck")) {
+            launchSegment(run);
+            return;
+        }
+        run.future.complete(segment);
+    }
+
     private void segmentCompleted(NavigationRun run, NavigateAndActTask task,
                                   AStarPathfinder.SearchResult search, PathResult segment,
                                   Throwable error) {
@@ -172,12 +252,15 @@ public final class GladePathingEngine implements PathingEngine {
         MinecraftClient client = MinecraftClient.getInstance();
         Runnable cancel = () -> {
             NavigationRun run = activeRun;
+            // Capture the task before completing the run: CompletableFuture callbacks execute
+            // synchronously and clear activeTask.
+            GladeTask task = activeTask;
             if (run != null) {
                 run.cancelled = true;
                 run.future.complete(new PathResult(false, "Pathing cancelled"));
             }
-            NavigateAndActTask task = activeTask;
-            if (task != null) task.cancel();
+            if (task instanceof NavigateAndActTask oldTask) oldTask.cancel();
+            if (task instanceof SimFollowTask simTask) simTask.cancel();
             activeTask = null;
             activeRun = null;
         };
@@ -213,6 +296,19 @@ public final class GladePathingEngine implements PathingEngine {
         }
         selected.add(path.getLast());
         return path.stream().filter(selected::contains).toList();
+    }
+
+    private static List<Vec3d> sampleWaypoints(List<Vec3d> route, int requestedCount) {
+        if (requestedCount <= 0 || requestedCount >= route.size() || route.size() <= 2) {
+            return List.copyOf(route);
+        }
+        java.util.LinkedHashSet<Integer> selected = new java.util.LinkedHashSet<>();
+        selected.add(0);
+        for (int i = 1; i < requestedCount - 1; i++) {
+            selected.add((int) Math.round(i * (route.size() - 1.0) / (requestedCount - 1.0)));
+        }
+        selected.add(route.size() - 1);
+        return selected.stream().sorted().map(route::get).toList();
     }
 
     private static void renderNodes(List<Vec3d> nodes) {
@@ -273,7 +369,7 @@ public final class GladePathingEngine implements PathingEngine {
         int stalledAttempts;
         double bestDistance = Double.POSITIVE_INFINITY;
         boolean cancelled;
-        NavigateAndActTask task;
+        GladeTask task;
 
         NavigationRun(MinecraftClient client, GoalSnapshot snapshot, PathingOptions options,
                       CompletableFuture<PathResult> future) {
