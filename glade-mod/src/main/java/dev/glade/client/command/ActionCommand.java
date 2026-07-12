@@ -1,21 +1,20 @@
 package dev.glade.client.command;
 
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import dev.glade.client.GladeClient;
 import dev.glade.client.action.ActionResult;
 import dev.glade.client.action.BreakBlockAction;
 import dev.glade.client.action.KillEntityAction;
 import dev.glade.client.action.PlaceBlockAction;
+import dev.glade.client.scan.BlockStatePredicate;
 import java.util.Comparator;
 import java.util.concurrent.CompletableFuture;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.block.Block;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.mob.HostileEntity;
-import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 
 final class ActionCommand {
@@ -30,28 +29,24 @@ final class ActionCommand {
     /**
      * {@code /glade mine block <id> [n]} — mines the Nth-closest block matching {@code id}
      * (default {@code n} = 1), mirroring {@code /glade look block <id> [n]}'s targeting via
-     * {@link NthClosestBlockTask}.
+     * {@link NthClosestBlockTask}. The block id argument suggests real block ids (e.g.
+     * {@code minecraft:stone}) via {@link BlockStatePredicate#argument}.
      */
-    static int mineBlock(CommandContext<FabricClientCommandSource> context, int n) {
+    static int mineBlock(CommandContext<FabricClientCommandSource> context, int n) throws CommandSyntaxException {
         FabricClientCommandSource source = context.getSource();
-        Identifier blockId = context.getArgument("blockId", Identifier.class);
-        if (!Registries.BLOCK.containsId(blockId)) {
-            source.sendError(Text.literal("Unknown block: " + blockId));
-            return 0;
-        }
+        BlockStatePredicate predicate = BlockStatePredicate.fromArgument(context, "blockPredicate");
         if (n < 1) {
             source.sendError(Text.literal("n must be >= 1"));
             return 0;
         }
 
-        Block block = Registries.BLOCK.get(blockId);
         int radius = MinecraftClient.getInstance().options.getViewDistance().getValue();
         NthClosestBlockTask task = new NthClosestBlockTask(
-                state -> state.isOf(block), radius, n, (found, pos) ->
+                predicate, radius, n, (found, pos) ->
                         source.getClient().execute(() -> {
                             if (pos == null) {
-                                source.sendError(Text.literal("Only found %d match(es) of %s, need at least %d"
-                                        .formatted(found, blockId, n)));
+                                source.sendError(Text.literal("Only found %d match(es), need at least %d"
+                                        .formatted(found, n)));
                                 return;
                             }
                             mine(context, pos);

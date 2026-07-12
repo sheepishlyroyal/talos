@@ -1,11 +1,12 @@
 package dev.glade.client.command;
 
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import dev.glade.client.GladeClient;
+import dev.glade.client.scan.BlockStatePredicate;
 import java.util.Comparator;
 import java.util.List;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.block.Block;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -60,32 +61,27 @@ final class LookCommand {
         return 1;
     }
 
-    static int executeBlock(CommandContext<FabricClientCommandSource> context, int n) {
+    static int executeBlock(CommandContext<FabricClientCommandSource> context, int n) throws CommandSyntaxException {
         FabricClientCommandSource source = context.getSource();
-        Identifier blockId = context.getArgument("blockId", Identifier.class);
-        if (!Registries.BLOCK.containsId(blockId)) {
-            source.sendError(Text.literal("Unknown block: " + blockId));
-            return 0;
-        }
+        BlockStatePredicate predicate = BlockStatePredicate.fromArgument(context, "blockPredicate");
         if (n < 1) {
             source.sendError(Text.literal("n must be >= 1"));
             return 0;
         }
 
-        Block block = Registries.BLOCK.get(blockId);
         NthClosestBlockTask task = new NthClosestBlockTask(
-                state -> state.isOf(block), defaultBlockRadius(), n, (found, pos) ->
+                predicate, defaultBlockRadius(), n, (found, pos) ->
                         source.getClient().execute(() -> {
                             if (pos == null) {
-                                source.sendError(Text.literal("Only found %d match(es) of %s, need at least %d"
-                                        .formatted(found, blockId, n)));
+                                source.sendError(Text.literal("Only found %d match(es), need at least %d"
+                                        .formatted(found, n)));
                                 return;
                             }
                             ClientPlayerEntity player = source.getPlayer();
                             Vec3d center = Vec3d.ofCenter(pos);
                             aimAt(player, center);
-                            source.sendFeedback(Text.literal("Looking at %s #%d at %d, %d, %d"
-                                    .formatted(blockId, n, pos.getX(), pos.getY(), pos.getZ())));
+                            source.sendFeedback(Text.literal("Looking at block #%d at %d, %d, %d"
+                                    .formatted(n, pos.getX(), pos.getY(), pos.getZ())));
                         }));
         try {
             GladeClient.taskScheduler().addTask("look-block", task);

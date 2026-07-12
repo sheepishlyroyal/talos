@@ -83,7 +83,7 @@ public final class GladeCommands {
                                 .then(coordinate("z")
                                         .executes(context -> GotoCommand.execute(
                                                 context, xzGoal(context))))))
-                .then(lookNode())
+                .then(lookNode(registryAccess))
                 .then(ClientCommandManager.literal("glow")
                         .then(coordinate("x")
                                 .then(coordinate("y")
@@ -101,7 +101,8 @@ public final class GladeCommands {
                         .then(ClientCommandManager.literal("direction")
                                 .then(directionNode((context, pos) -> ActionCommand.mine(context, pos))))
                         .then(ClientCommandManager.literal("block")
-                                .then(ClientCommandManager.argument("blockId", IdentifierArgumentType.identifier())
+                                .then(ClientCommandManager.argument(
+                                                "blockPredicate", BlockStatePredicate.argument(registryAccess))
                                         .executes(context -> ActionCommand.mineBlock(context, 1))
                                         .then(nArgument(n -> ActionCommand.mineBlock(n.context(), n.n()))))))
                 .then(ClientCommandManager.literal("place")
@@ -182,13 +183,14 @@ public final class GladeCommands {
      *       {@link EntitySelector} for the supported bracket arguments.</li>
      * </ul>
      */
-    private static LiteralArgumentBuilder<FabricClientCommandSource> lookNode() {
+    private static LiteralArgumentBuilder<FabricClientCommandSource> lookNode(CommandRegistryAccess registryAccess) {
         return ClientCommandManager.literal("look")
                 .then(ClientCommandManager.argument("yaw", RelativeAngleArgumentType.angle())
                         .then(ClientCommandManager.argument("pitch", RelativeAngleArgumentType.angle())
                                 .executes(LookCommand::execute)))
                 .then(ClientCommandManager.literal("block")
-                        .then(ClientCommandManager.argument("blockId", IdentifierArgumentType.identifier())
+                        .then(ClientCommandManager.argument(
+                                        "blockPredicate", BlockStatePredicate.argument(registryAccess))
                                 .executes(context -> LookCommand.executeBlock(context, 1))
                                 .then(nArgument(n -> LookCommand.executeBlock(n.context(), n.n())))))
                 .then(ClientCommandManager.literal("coords")
@@ -221,11 +223,16 @@ public final class GladeCommands {
     private record NArg(com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context, int n) {
     }
 
+    @FunctionalInterface
+    private interface NArgExecutor {
+        int execute(NArg n) throws com.mojang.brigadier.exceptions.CommandSyntaxException;
+    }
+
     /** Builds the trailing optional {@code n} (rank, default 1) argument node for {@code /glade look} selectors. */
     private static RequiredArgumentBuilder<FabricClientCommandSource, Integer> nArgument(
-            java.util.function.ToIntFunction<NArg> executor) {
+            NArgExecutor executor) {
         return ClientCommandManager.argument("n", IntegerArgumentType.integer(1))
-                .executes(context -> executor.applyAsInt(new NArg(context, value(context, "n"))));
+                .executes(context -> executor.execute(new NArg(context, value(context, "n"))));
     }
 
     private static Identifier entityTypeArg(
