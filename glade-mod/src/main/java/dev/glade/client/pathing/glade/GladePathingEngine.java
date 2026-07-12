@@ -311,20 +311,22 @@ public final class GladePathingEngine implements PathingEngine {
     }
 
     private static void renderNodes(List<Vec3d> nodes) {
+        final int waypointColor = 0x66CCFF; // Cyan; live SimFollowTask predictions are orange.
         for (int i = 0; i < nodes.size(); i++) {
             Vec3d node = nodes.get(i);
             RenderQueue.add("glade-path-node:" + i,
-                    MotionState.box(MotionState.Pose.STAND, node), 0x66CCFF, 20 * 30);
+                    MotionState.box(MotionState.Pose.STAND, node), waypointColor, 20 * 30);
         }
     }
 
     /** Render every simulation waypoint as the exact player AABB for its planned pose. */
     private static void renderRouteNodes(PlannedRoute route) {
+        final int waypointColor = 0x66CCFF; // Keep route boxes distinct from orange predictions.
         for (int i = 0; i < route.waypoints().size(); i++) {
             PlannedRoute.Waypoint waypoint = route.waypoints().get(i);
             RenderQueue.add("glade-path-node:" + i,
                     MotionState.box(waypoint.pose(), waypoint.position()),
-                    0x66CCFF, 20 * 30);
+                    waypointColor, 20 * 30);
         }
     }
 

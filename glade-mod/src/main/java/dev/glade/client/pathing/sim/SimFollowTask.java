@@ -2,6 +2,7 @@ package dev.glade.client.pathing.sim;
 
 import dev.glade.client.GladeClient;
 import dev.glade.client.pathing.PathResult;
+import dev.glade.client.render.RenderQueue;
 import dev.glade.client.task.GladeTask;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,9 +32,11 @@ public final class SimFollowTask extends GladeTask {
     private static final int LANDING_ROLLOUT_TICKS = 40;
     private static final double OVERSHOOT_SLOP = 0.03;
     private static final double GROUND_DRAG = 0.6 * 0.91;
-    private static final double WAYPOINT_BRAKE_BUFFER = 0.12;
     private static final double FINAL_BRAKE_BUFFER = 0.35;
     private static final double BRAKE_RELEASE_SPEED = 0.075;
+    private static final float SWIM_SURFACE_PITCH = -25.0F;
+    private static final int PREDICTION_COLOR = 0xFF9F1C;
+    private static final int PREDICTION_TTL = 3;
     private static final int STUCK_TICKS = 100;
 
     private final MinecraftClient client;
@@ -107,8 +110,12 @@ public final class SimFollowTask extends GladeTask {
         MovementProfile profile = MovementProfile.capture(player); // Effects/attributes are live.
         float yaw = yawTo(new Vec3d(player.getX(), player.getY(), player.getZ()), waypoint.position());
         Input selected = chooseInput(live, profile, waypoint, yaw);
+        renderPrediction(live, selected, profile);
+        if (live.inFluid()) player.setPitch(SWIM_SURFACE_PITCH);
         apply(player, selected);
-        status(isBrake(selected) ? "braking"
+        status(live.inFluid()
+                ? live.fluid() == MotionState.Fluid.LAVA ? "swimming (lava)" : "swimming"
+                : isBrake(selected) ? "braking (final approach)"
                 : selected.sprint() && selected.jump() ? "sprint-jumping"
                 : selected.jump() ? "jumping"
                 : selected.sprint() ? "sprinting" : label(waypoint.via()));
@@ -139,6 +146,12 @@ public final class SimFollowTask extends GladeTask {
     /** Enumerate compact controls, simulate each from reality, and keep the safest progress. */
     private Input chooseInput(MotionState live, MovementProfile profile,
             PlannedRoute.Waypoint waypoint, float yaw) {
+        // Fluid movement deliberately has one committed control mode. Mixing land walk,
+        // jump-release, brake, and strafe candidates made the selected keys thrash each tick.
+        // Held jump supplies the simulator's gentle ascent while the live pitch aims forward
+        // motion toward the surface for air.
+        if (live.inFluid()) return new Input(1, 0, true, true, false, yaw);
+
         Primitive primitive = waypoint.via();
         boolean wantsSprint = primitive == Primitive.SPRINT || primitive == Primitive.SPRINT_JUMP;
         boolean wantsJump = primitive == Primitive.SPRINT_JUMP || primitive == Primitive.STEP_UP
@@ -150,25 +163,23 @@ public final class SimFollowTask extends GladeTask {
         Vec3d finalFrom = route.waypoints().size() > 1
                 ? route.waypoints().get(route.waypoints().size() - 2).position()
                 : live.position();
-        boolean approachingFinal = index + 1 == route.waypoints().size();
+        boolean approachingFinal = route.reachedGoal()
+                && index + 1 == route.waypoints().size();
 
         // Evaluate the control the primitive would hold, on every tick and for every primitive.
         // The geometric tail is v + v*d + ... = v/(1-d), with vanilla ground drag d=.6*.91.
         Input held = new Input(1, 0, wantsJump, wantsSprint, wantsSneak, yaw);
-        MotionState heldLanding = predictLanding(live, held, profile);
+        MotionState heldLanding = approachingFinal ? predictLanding(live, held, profile) : null;
         double speed = Math.hypot(live.velocity().x, live.velocity().z);
         double stoppingDistance = speed / (1.0 - GROUND_DRAG);
         double targetDistance = horizontalDistance(live.position(), waypoint.position());
         double landingTravel = heldLanding == null ? 0.0
                 : horizontalDistance(live.position(), heldLanding.position());
-        double brakeBuffer = approachingFinal ? FINAL_BRAKE_BUFFER : WAYPOINT_BRAKE_BUFFER;
-        boolean landingOvershoots = heldLanding != null
-                && (overshoot(heldLanding.position(), from, waypoint.position()) > OVERSHOOT_SLOP
-                || approachingFinal && overshoot(heldLanding.position(), finalFrom, finalTarget)
-                        > OVERSHOOT_SLOP);
-        boolean insideStoppingEnvelope = targetDistance
-                <= Math.max(stoppingDistance, landingTravel) + brakeBuffer;
-        boolean brakeNeeded = !live.inFluid() && (landingOvershoots || insideStoppingEnvelope);
+        boolean landingOvershoots = approachingFinal && heldLanding != null
+                && overshoot(heldLanding.position(), finalFrom, finalTarget) > OVERSHOOT_SLOP;
+        boolean insideStoppingEnvelope = approachingFinal && targetDistance
+                <= Math.max(stoppingDistance, landingTravel) + FINAL_BRAKE_BUFFER;
+        boolean brakeNeeded = approachingFinal && (landingOvershoots || insideStoppingEnvelope);
         boolean hardBrake = brakeNeeded && (!live.onGround() || speed > BRAKE_RELEASE_SPEED);
         Input brake = new Input(0, 0, false, false, true, yaw);
         if (primitive != committedPrimitive) {
@@ -177,9 +188,9 @@ public final class SimFollowTask extends GladeTask {
             strafeCommitUntil = ticks;
         }
         List<Input> candidates = new ArrayList<>();
-        // The brake is first so equal scores deterministically favor deceleration. It is always
-        // present, including ordinary walking and the final approach.
-        candidates.add(brake);
+        // Intermediate nodes are pass-through guides: they never receive a brake/stop option.
+        // The final goal alone may trade progress for deliberate deceleration.
+        if (approachingFinal) candidates.add(brake);
         boolean precisionLaunch = brakeNeeded && live.onGround()
                 && speed <= BRAKE_RELEASE_SPEED;
         candidates.add(new Input(1, 0, wantsJump,
@@ -197,12 +208,11 @@ public final class SimFollowTask extends GladeTask {
             candidates.add(new Input(1, -.35F, wantsJump,
                     wantsSprint && (!brakeNeeded || precisionLaunch), wantsSneak, yaw));
         }
-        candidates.add(new Input(0, 0, false, false, false, yaw));
-        if (live.inFluid()) candidates.add(new Input(1, 0, true, false, false, yaw));
+        if (approachingFinal) candidates.add(new Input(0, 0, false, false, false, yaw));
 
         // Once an unsafe landing is imminent, scoring cannot trade the mark for short-term
-        // progress. First bleed momentum; at release speed the non-sprint jump candidate above
-        // can make a required final gap crossing without restoring sprint impulse.
+        // progress. First bleed momentum; at release speed rollout scoring chooses the least
+        // forceful safe launch, while retaining sprint-jump only when a gap requires it.
         if (hardBrake) return brake;
 
         Input best = candidates.getFirst();
@@ -227,19 +237,15 @@ public final class SimFollowTask extends GladeTask {
                     break;
                 }
                 if (state.position().y < Math.min(from.y, waypoint.position().y) - 2.5) score -= 80.0;
-                score -= overshoot(state.position(), from, waypoint.position()) * 80.0;
                 if (approachingFinal) {
                     score -= overshoot(state.position(), finalFrom, finalTarget) * 140.0;
                 }
                 oldDistance = distance;
             }
-            MotionState landing = (!live.onGround() || candidate.jump())
+            MotionState landing = approachingFinal && (!live.onGround() || candidate.jump())
                     ? predictLanding(live, candidate, profile) : null;
-            if (landing != null) {
-                score -= overshoot(landing.position(), from, waypoint.position()) * 120.0;
-                if (approachingFinal) {
-                    score -= overshoot(landing.position(), finalFrom, finalTarget) * 220.0;
-                }
+            if (landing != null && approachingFinal) {
+                score -= overshoot(landing.position(), finalFrom, finalTarget) * 220.0;
             }
             if (brakeNeeded) {
                 if (isBrake(candidate)) score += 18.0;
@@ -247,7 +253,7 @@ public final class SimFollowTask extends GladeTask {
                 if (candidate.jump() && !precisionLaunch) score -= 40.0;
             }
             // Precision endpoints prefer braking over flying through the waypoint.
-            boolean precise = index + 1 == route.waypoints().size()
+            boolean precise = approachingFinal
                     || primitive == Primitive.PLACE || primitive == Primitive.MINE;
             if (precise) score -= horizontalDistance(state.position(), waypoint.position()) * 3.0;
             if (ticks < strafeCommitUntil
@@ -267,6 +273,16 @@ public final class SimFollowTask extends GladeTask {
             committedStrafe = 0;
         }
         return best;
+    }
+
+    /** Refresh a short-lived, exact-hitbox trail for the input selected from this live state. */
+    private void renderPrediction(MotionState live, Input selected, MovementProfile profile) {
+        MotionState predicted = live;
+        for (int i = 0; i < ROLLOUT_TICKS; i++) {
+            predicted = PlayerMotion.step(client.world, predicted, selected, profile);
+            RenderQueue.add("glade-sim-tick:" + i,
+                    predicted.box(predicted.position()), PREDICTION_COLOR, PREDICTION_TTL);
+        }
     }
 
     private static boolean isBrake(Input input) {
