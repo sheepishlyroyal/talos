@@ -1,0 +1,337 @@
+package dev.glade.client.pathing.sim;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.function.Predicate;
+
+import net.minecraft.block.BlockState;
+import net.minecraft.registry.tag.FluidTags;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.World;
+
+/**
+ * Bounded A* over controls rather than blocks. Every ordinary edge is accepted only after
+ * {@link PlayerMotion} has rolled it forward in the supplied world.
+ */
+public final class SimPathfinder {
+    public static final int BUMP_PENALTY = 3;
+    public static final int EDIT_PENALTY = 40;
+    private static final int MAX_DROP = 4;
+    private static final double EPSILON = 1.0E-7;
+    private static final int[][] DIRECTIONS = {
+            {0, 1}, {1, 1}, {1, 0}, {1, -1},
+            {0, -1}, {-1, -1}, {-1, 0}, {-1, 1}
+    };
+
+    private SimPathfinder() {}
+
+    /** Search limits. A non-positive time budget disables expansion rather than being unbounded. */
+    public record Options(boolean allowMining, boolean allowPlacing, int nodeCap,
+            long timeBudgetNanos, int maxRolloutTicks) {
+        public Options {
+            if (nodeCap < 1 || timeBudgetNanos < 0L || maxRolloutTicks < 1) {
+                throw new IllegalArgumentException("invalid pathfinder options");
+            }
+        }
+
+        public static Options defaults() {
+            return new Options(false, false, 8_000, 10_000_000L, 14);
+        }
+    }
+
+    /**
+     * Finds a route toward {@code goal}. The predicate decides success; {@code goal} remains the
+     * heuristic anchor, allowing callers to accept a region while guiding toward its center.
+     */
+    public static PlannedRoute find(World world, MotionState start, MovementProfile profile,
+            BlockPos goal, Predicate<BlockPos> isGoal, Options opts) {
+        if (world == null || start == null || profile == null || goal == null
+                || isGoal == null || opts == null) {
+            throw new IllegalArgumentException("find arguments must not be null");
+        }
+
+        long began = System.nanoTime();
+        long deadline = saturatingAdd(began, opts.timeBudgetNanos());
+        long sequence = 0L;
+        BlockPos startCell = cell(start.position());
+        Node root = new Node(start, startCell, heading(start.velocity(), 0), null, null,
+                0, 0.0, heuristic(startCell, goal, profile), sequence++);
+
+        PriorityQueue<Node> open = new PriorityQueue<>(Comparator
+                .comparingDouble(Node::f)
+                .thenComparingDouble(Node::h)
+                .thenComparingLong(Node::sequence));
+        Map<Key, Double> bestCost = new HashMap<>();
+        open.add(root);
+        bestCost.put(key(root), 0.0);
+        Node closest = root;
+        int expanded = 0;
+        boolean timedOut = false;
+
+        while (!open.isEmpty() && expanded < opts.nodeCap()) {
+            if (System.nanoTime() >= deadline) {
+                timedOut = true;
+                break;
+            }
+            Node node = open.poll();
+            if (node.g() > bestCost.getOrDefault(key(node), Double.POSITIVE_INFINITY) + EPSILON) {
+                continue;
+            }
+            if (isGoal.test(node.cell())) {
+                return route(node, true, "goal reached; expanded " + expanded + " nodes");
+            }
+            expanded++;
+            if (closer(node, closest)) closest = node;
+
+            for (Edge edge : edges(world, node, profile, opts)) {
+                BlockPos edgeCell = cell(edge.state().position());
+                int edgeHeading = heading(edge.state().velocity(), edge.fallbackHeading());
+                double g = node.g() + edge.cost();
+                double h = heuristic(edgeCell, goal, profile);
+                Node next = new Node(edge.state(), edgeCell, edgeHeading, node,
+                        edge.primitive(), edge.ticks(), g, h, sequence++);
+                Key key = key(next);
+                if (g + EPSILON < bestCost.getOrDefault(key, Double.POSITIVE_INFINITY)) {
+                    bestCost.put(key, g);
+                    open.add(next);
+                    if (closer(next, closest)) closest = next;
+                }
+            }
+        }
+
+        String reason = timedOut ? "time budget exhausted"
+                : expanded >= opts.nodeCap() ? "node cap exhausted" : "search frontier exhausted";
+        return route(closest, false, reason + "; returning best partial after " + expanded + " nodes");
+    }
+
+    private static List<Edge> edges(World world, Node node, MovementProfile profile,
+            Options opts) {
+        List<Edge> result = new ArrayList<>(48);
+        for (int direction = 0; direction < DIRECTIONS.length; direction++) {
+            int dx = DIRECTIONS[direction][0];
+            int dz = DIRECTIONS[direction][1];
+            float yaw = yaw(dx, dz);
+
+            add(result, rollout(world, node, profile, opts, Primitive.WALK, direction,
+                    new Input(1.0F, 0.0F, false, false, false, yaw), false, false));
+            add(result, rollout(world, node, profile, opts, Primitive.SPRINT, direction,
+                    new Input(1.0F, 0.0F, false, true, false, yaw), false, false));
+            add(result, rollout(world, node, profile, opts, Primitive.SPRINT_JUMP, direction,
+                    new Input(1.0F, 0.0F, true, true, false, yaw), true, false));
+
+            MotionState fluidStart = withPose(node.state(), MotionState.Pose.SWIM);
+            if (node.state().inFluid() || fluidNear(world, node.cell(), dx, dz)) {
+                add(result, rollout(world, node.withState(fluidStart), profile, opts,
+                        Primitive.SWIM, direction,
+                        new Input(1.0F, 0.0F, true, false, false, yaw), false, true));
+            }
+
+            MotionState crawlStart = withPose(node.state(), MotionState.Pose.CRAWL);
+            if (PlayerMotion.hitboxFits(world, MotionState.Pose.CRAWL, crawlStart.position())) {
+                add(result, rollout(world, node.withState(crawlStart), profile, opts,
+                        Primitive.CRAWL, direction,
+                        new Input(1.0F, 0.0F, false, false, true, yaw), false, false));
+            }
+
+            add(result, stepUp(world, node, dx, dz, direction));
+            add(result, drop(world, node, profile, opts, dx, dz, direction, yaw));
+            if (opts.allowMining()) add(result, mine(world, node, dx, dz, direction));
+            if (opts.allowPlacing()) add(result, place(world, node, profile, opts,
+                    dx, dz, direction, yaw));
+        }
+        return result;
+    }
+
+    /** Roll until a new stable cell is reached, an arc lands, or swimming enters a new cell. */
+    private static Edge rollout(World world, Node node, MovementProfile profile, Options opts,
+            Primitive primitive, int direction, Input input, boolean arc, boolean swimming) {
+        MotionState state = node.state();
+        BlockPos origin = cell(state.position());
+        int bumps = 0;
+        boolean airborne = !state.onGround();
+        for (int tick = 1; tick <= opts.maxRolloutTicks(); tick++) {
+            state = PlayerMotion.step(world, state, input, profile);
+            if (state.bumpedHorizontally()) bumps++;
+            if (state.fluid() == MotionState.Fluid.LAVA) return null;
+            airborne |= !state.onGround();
+            BlockPos reached = cell(state.position());
+            if (reached.getY() < origin.getY() - MAX_DROP) return null;
+            if ((primitive == Primitive.WALK || primitive == Primitive.SPRINT
+                    || primitive == Primitive.CRAWL) && reached.getY() < origin.getY()) {
+                return null;
+            }
+            if (!PlayerMotion.hitboxFits(world, state.pose(), state.position())) return null;
+
+            boolean newCell = !reached.equals(origin);
+            boolean stable = swimming ? state.inFluid() : state.onGround() || state.inFluid();
+            if (newCell && stable && (!arc || airborne)) {
+                int horizontal = Math.max(Math.abs(reached.getX() - origin.getX()),
+                        Math.abs(reached.getZ() - origin.getZ()));
+                if (arc && (horizontal < 1 || horizontal > 4)) return null;
+                return new Edge(state, primitive, tick, tick + bumps * BUMP_PENALTY, direction);
+            }
+        }
+        return null;
+    }
+
+    /* Stage A has no step-height collision retry. Model this single-cell topology edge only
+       after exact endpoint-fit/support checks; Stage C will approach and revalidate it. */
+    private static Edge stepUp(World world, Node node, int dx, int dz, int direction) {
+        BlockPos target = node.cell().add(dx, 1, dz);
+        if (!standable(world, target, MotionState.Pose.STAND)) return null;
+        Vec3d position = bottomCenter(target);
+        MotionState state = new MotionState(position, Vec3d.ZERO, true, MotionState.Pose.STAND);
+        return new Edge(state, Primitive.STEP_UP, 1, 1.0, direction);
+    }
+
+    private static Edge drop(World world, Node node, MovementProfile profile, Options opts,
+            int dx, int dz, int direction, float yaw) {
+        BlockPos adjacent = node.cell().add(dx, 0, dz);
+        if (standable(world, adjacent, MotionState.Pose.STAND)) return null;
+        Edge edge = rollout(world, node, profile, opts, Primitive.DROP, direction,
+                new Input(1.0F, 0.0F, false, false, false, yaw), false, false);
+        return edge != null && edge.state().position().y < node.state().position().y - 0.25
+                ? edge : null;
+    }
+
+    /* Mining is represented without mutating World: require a solid two-block face and a safe
+       standable cell immediately beyond it, then hand Stage C the post-edit waypoint. */
+    private static Edge mine(World world, Node node, int dx, int dz, int direction) {
+        BlockPos wall = node.cell().add(dx, 0, dz);
+        BlockPos wallHead = wall.up();
+        if (!mineable(world, wall) || !mineable(world, wallHead)) return null;
+        BlockPos target = wall.add(dx, 0, dz);
+        if (!standable(world, target, MotionState.Pose.STAND)) return null;
+        MotionState state = new MotionState(bottomCenter(target), Vec3d.ZERO, true,
+                MotionState.Pose.STAND);
+        return new Edge(state, Primitive.MINE, 1, 1.0 + EDIT_PENALTY, direction);
+    }
+
+    /* Placement likewise keeps the rollout pure. The approach is simulated across the gap; if
+       Stage A cannot land in-budget, a checked far-side endpoint represents the future bridge. */
+    private static Edge place(World world, Node node, MovementProfile profile, Options opts,
+            int dx, int dz, int direction, float yaw) {
+        BlockPos gap = node.cell().add(dx, 0, dz);
+        if (!empty(world, gap.down()) || !empty(world, gap)) return null;
+        BlockPos target = gap.add(dx, 0, dz);
+        if (!standable(world, target, MotionState.Pose.STAND)) return null;
+        Edge simulated = rollout(world, node, profile, opts, Primitive.PLACE, direction,
+                new Input(1.0F, 0.0F, false, false, false, yaw), false, false);
+        if (simulated != null && cell(simulated.state().position()).equals(target)) {
+            return simulated.withAddedCost(EDIT_PENALTY);
+        }
+        MotionState state = new MotionState(bottomCenter(target), Vec3d.ZERO, true,
+                MotionState.Pose.STAND);
+        return new Edge(state, Primitive.PLACE, 1, 1.0 + EDIT_PENALTY, direction);
+    }
+
+    private static boolean standable(World world, BlockPos feet, MotionState.Pose pose) {
+        Vec3d position = bottomCenter(feet);
+        return PlayerMotion.hitboxFits(world, pose, position)
+                && !world.getBlockState(feet.down()).getCollisionShape(world, feet.down()).isEmpty()
+                && !world.getFluidState(feet).isIn(FluidTags.LAVA);
+    }
+
+    private static boolean mineable(World world, BlockPos pos) {
+        BlockState state = world.getBlockState(pos);
+        return !state.isAir() && !state.getCollisionShape(world, pos).isEmpty()
+                && state.getHardness(world, pos) >= 0.0F;
+    }
+
+    private static boolean empty(World world, BlockPos pos) {
+        return world.getBlockState(pos).getCollisionShape(world, pos).isEmpty();
+    }
+
+    private static boolean fluidNear(World world, BlockPos cell, int dx, int dz) {
+        return !world.getFluidState(cell.add(dx, 0, dz)).isEmpty();
+    }
+
+    private static MotionState withPose(MotionState state, MotionState.Pose pose) {
+        return new MotionState(state.position(), state.velocity(), state.onGround(), pose,
+                state.fluid(), state.bumpedHorizontally());
+    }
+
+    private static void add(List<Edge> edges, Edge edge) {
+        if (edge != null) edges.add(edge);
+    }
+
+    private static boolean closer(Node candidate, Node current) {
+        return candidate.h() < current.h() - EPSILON
+                || (Math.abs(candidate.h() - current.h()) <= EPSILON && candidate.g() < current.g());
+    }
+
+    private static PlannedRoute route(Node end, boolean reachedGoal, String detail) {
+        List<PlannedRoute.Waypoint> reverse = new ArrayList<>();
+        for (Node node = end; node != null; node = node.parent()) {
+            double edgeCost = node.parent() == null ? 0.0 : node.g() - node.parent().g();
+            reverse.add(new PlannedRoute.Waypoint(node.state().position(), node.via(),
+                    node.edgeTicks(), edgeCost));
+        }
+        List<PlannedRoute.Waypoint> forward = new ArrayList<>(reverse.size());
+        for (int i = reverse.size() - 1; i >= 0; i--) forward.add(reverse.get(i));
+        return new PlannedRoute(forward, reachedGoal, detail);
+    }
+
+    /* Octile distance is divided by an intentionally generous profile-derived speed ceiling.
+       The vertical coefficient is below the cheapest bounded DROP/STEP progress per tick. */
+    private static double heuristic(BlockPos from, BlockPos goal, MovementProfile profile) {
+        int dx = Math.abs(goal.getX() - from.getX());
+        int dz = Math.abs(goal.getZ() - from.getZ());
+        double octile = Math.max(dx, dz) + (Math.sqrt(2.0) - 1.0) * Math.min(dx, dz);
+        double maxBlocksPerTick = Math.max(1.0,
+                profile.movementSpeed() * 40.0 + profile.jumpVelocity() * 4.0);
+        return octile / maxBlocksPerTick + Math.abs(goal.getY() - from.getY()) * 0.05;
+    }
+
+    private static Key key(Node node) {
+        return new Key(node.cell(), node.state().pose(), node.heading());
+    }
+
+    private static BlockPos cell(Vec3d position) {
+        return BlockPos.ofFloored(position.x, position.y + 1.0E-4, position.z);
+    }
+
+    private static Vec3d bottomCenter(BlockPos pos) {
+        return new Vec3d(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
+    }
+
+    private static float yaw(int dx, int dz) {
+        return (float) Math.toDegrees(Math.atan2(-dx, dz));
+    }
+
+    private static int heading(Vec3d velocity, int fallback) {
+        if (velocity.horizontalLengthSquared() < 1.0E-4) return fallback;
+        double angle = Math.atan2(velocity.x, velocity.z);
+        return Math.floorMod((int) Math.round(angle / (Math.PI / 4.0)), 8);
+    }
+
+    private static long saturatingAdd(long left, long right) {
+        if (right > 0L && left > Long.MAX_VALUE - right) return Long.MAX_VALUE;
+        return left + right;
+    }
+
+    private record Key(BlockPos cell, MotionState.Pose pose, int heading) {}
+
+    private record Node(MotionState state, BlockPos cell, int heading, Node parent,
+            Primitive via, int edgeTicks, double g, double h, long sequence) {
+        double f() { return g + h; }
+
+        Node withState(MotionState replacement) {
+            return new Node(replacement, SimPathfinder.cell(replacement.position()), heading,
+                    parent, via,
+                    edgeTicks, g, h, sequence);
+        }
+    }
+
+    private record Edge(MotionState state, Primitive primitive, int ticks, double cost,
+            int fallbackHeading) {
+        Edge withAddedCost(double extra) {
+            return new Edge(state, primitive, ticks, cost + extra, fallbackHeading);
+        }
+    }
+}
