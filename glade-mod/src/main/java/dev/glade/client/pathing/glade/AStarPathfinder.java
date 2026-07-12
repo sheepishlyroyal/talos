@@ -164,8 +164,8 @@ public final class AStarPathfinder {
             }
         }
 
-        // Water is a volume rather than a floor: allow deliberate ascent and descent.
-        if (isWater(from) || isWater(from.down())) {
+        // Fluids are volumes rather than floors: allow deliberate ascent and descent.
+        if (isSwimFluid(from) || isSwimFluid(from.down())) {
             BlockPos up = from.up();
             if (isLegalSwimDestination(from, up)) result.add(new Move(up.toImmutable(), movementCost(from, up, MoveType.SWIM)));
             BlockPos down = from.down();
@@ -207,10 +207,14 @@ public final class AStarPathfinder {
     private BlockPos resolveMove(BlockPos from, int dx, int dz) {
         BlockPos horizontal = from.add(dx, 0, dz);
         if (!isLoaded(horizontal)) return null;
-        if (isWater(horizontal)) {
+        if (isSwimFluid(horizontal)) {
             return isLegalSwimDestination(from, horizontal) ? horizontal.toImmutable() : null;
         }
         if (isStandable(horizontal)) return horizontal.toImmutable();
+
+        // Sneaking lets the follower enter a one-block-high corridor. Keep this a
+        // cardinal grid edge; diagonal crawl corner-cutting is intentionally excluded.
+        if (isCrawlStandable(horizontal)) return horizontal.toImmutable();
 
         // A two-block-high mine-through corridor is a legal edge. The closed-form
         // break estimate below makes A* prefer walking around whenever that is faster.
@@ -238,7 +242,7 @@ public final class AStarPathfinder {
         if (!isLoaded(pos) || !isLoaded(pos.down()) || !isLoaded(pos.up())) return false;
         if (isHazard(pos) || isHazard(pos.up()) || isHazard(pos.down())) return false;
         if (!isPassable(pos) || !isPassable(pos.up())) return false;
-        if (isWater(pos) || isWater(pos.up())) return true;
+        if (isSwimFluid(pos) || isSwimFluid(pos.up())) return true;
         BlockState support = world.getBlockState(pos.down());
         if (support.isSolidBlock(world, pos.down())) return true;
         // Partial-height collision surfaces (notably stairs and slabs) are valid
@@ -261,26 +265,27 @@ public final class AStarPathfinder {
     }
 
     private boolean isSwimmable(BlockPos pos) {
-        return isLoaded(pos) && isWater(pos) && isPassable(pos) && isPassable(pos.up());
+        return isLoaded(pos) && isSwimFluid(pos) && isPassable(pos);
     }
 
     private boolean isLegalSwimDestination(BlockPos from, BlockPos pos) {
         if (!isSwimmable(pos)) return false;
-        boolean deepEnough = isLoaded(pos.down()) && isWater(pos.down());
-        boolean continuing = isWater(from) && player != null && (player.isSwimming()
-                || player.isSubmergedInWater() || player.isTouchingWater());
+        boolean deepEnough = isLoaded(pos.down()) && isSwimFluid(pos.down());
+        boolean continuing = isSwimFluid(from) && player != null && (player.isSwimming()
+                || player.isSubmergedInWater() || player.isTouchingWater() || player.isInLava());
         return deepEnough || continuing;
     }
 
     private boolean isHazard(BlockPos pos) {
         BlockState state = world.getBlockState(pos);
-        return state.isOf(Blocks.LAVA) || state.isOf(Blocks.FIRE) || state.isOf(Blocks.SOUL_FIRE)
+        return state.isOf(Blocks.FIRE) || state.isOf(Blocks.SOUL_FIRE)
                 || state.isOf(Blocks.CACTUS) || state.isOf(Blocks.MAGMA_BLOCK)
                 || state.isOf(Blocks.CAMPFIRE) || state.isOf(Blocks.SOUL_CAMPFIRE);
     }
 
     private MoveType classify(BlockPos from, BlockPos to, boolean diagonal) {
-        if (isWater(to) && isLegalSwimDestination(from, to)) return MoveType.SWIM;
+        if (isSwimFluid(to) && isLegalSwimDestination(from, to)) return MoveType.SWIM;
+        if (isCrawlStandable(to)) return MoveType.CRAWL;
         if (!isPassable(to) || !isPassable(to.up())) return MoveType.BREAK;
         if (!hasSafeSupport(to.down())) return MoveType.PLACE;
         if (to.getY() > from.getY()) {
@@ -309,6 +314,7 @@ public final class AStarPathfinder {
     private double effectiveSpeed(MoveType type, BlockPos destination) {
         return switch (type) {
             case WALK, DIAGONAL -> 5.6;
+            case CRAWL -> 1.3;
             case BREAK, JUMP -> 4.317;
             case SPRINT_JUMP -> 6.0;
             case STAIR_STEP -> 5.2;
@@ -385,6 +391,17 @@ public final class AStarPathfinder {
         return world.getBlockState(pos).getFluidState().isIn(FluidTags.WATER);
     }
 
+    private boolean isLava(BlockPos pos) {
+        return world.getBlockState(pos).getFluidState().isIn(FluidTags.LAVA);
+    }
+
+    private boolean isSwimFluid(BlockPos pos) { return isWater(pos) || isLava(pos); }
+
+    private boolean isCrawlStandable(BlockPos pos) {
+        return isLoaded(pos) && isLoaded(pos.up()) && isPassable(pos)
+                && !isPassable(pos.up()) && hasSafeSupport(pos.down()) && !isHazard(pos.up());
+    }
+
     private boolean isLoaded(BlockPos pos) {
         return world.isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4);
     }
@@ -411,7 +428,7 @@ public final class AStarPathfinder {
         @Override public int compareTo(OpenNode other) { return Double.compare(score, other.score); }
     }
     private record Move(BlockPos pos, double cost) { }
-    private enum MoveType { WALK, DIAGONAL, JUMP, SPRINT_JUMP, SWIM, PLACE, BREAK, STAIR_STEP }
+    private enum MoveType { WALK, DIAGONAL, JUMP, SPRINT_JUMP, SWIM, CRAWL, PLACE, BREAK, STAIR_STEP }
 
     public record SearchResult(List<BlockPos> path, boolean reachesGoal, String detail) { }
 

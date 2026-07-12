@@ -14,6 +14,7 @@ import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.item.BlockItem;
@@ -94,7 +95,6 @@ public final class NavigateAndActTask extends GladeTask {
     @Override public void body() {
         ClientPlayerEntity player = client.player;
         if (player == null || client.world == null) { finish(false, "World unloaded while navigating"); return; }
-        if (ticks >= 60 * 20) { finish(false, "Navigation timed out after 60 seconds"); return; }
         advancePastReachedOrPassed(player);
         if (sprintJumpLanding != null) {
             sprintJumpWasAirborne |= !player.isOnGround();
@@ -127,8 +127,7 @@ public final class NavigateAndActTask extends GladeTask {
             aim.tick();
             if (aim.isAimed() && GladeClient.tickBudget().hasBudgetRemaining()) action.perform(client);
         } else {
-            aim.aimAt(new Vec3d(node.getX() + 0.5, player.getEyeY(), node.getZ() + 0.5));
-            aim.tick();
+            Vec3d followTarget = followTarget(player, node);
             // Recompute steering without flickering sprint/jump off for part of every
             // client tick. Normal travel keeps both inputs continuously held.
             releaseDirectionalInputs();
@@ -138,18 +137,27 @@ public final class NavigateAndActTask extends GladeTask {
                     Math.abs(node.getZ() - player.getBlockZ()));
             boolean jumpEdge = horizontalDistance > 1;
             boolean stairOrSlab = isStairOrSlab(node.down()) || isStairOrSlab(player.getBlockPos().down());
-            boolean swimEdge = isWater(node) && (isWater(node.down()) || player.isSwimming()
-                    || player.isSubmergedInWater() || player.isTouchingWater());
+            boolean swimEdge = isFluid(node) || player.isSwimming() || player.isSubmergedInWater()
+                    || player.isTouchingWater() || player.isInLava();
             if (swimEdge) {
-                // Sprint is required to enter and maintain the swimming pose.
-                status("swimming");
-                client.options.jumpKey.setPressed(node.getY() >= player.getBlockY());
+                // Swimming is driven by view pitch. Jump causes repeated surface
+                // breaches and sinking, so it is deliberately never used here.
+                status(isLava(node) || player.isInLava() ? "swimming (lava)" : "swimming");
+                client.options.jumpKey.setPressed(false);
+                steerSwimming(player, followTarget, node);
+            } else if (isCrawlNode(node)) {
+                status("crawling");
+                client.options.sneakKey.setPressed(true);
+                client.options.jumpKey.setPressed(false);
+                steerToward(player, followTarget, false);
             } else if (stairOrSlab) {
+                steerToward(player, followTarget, isSlippery(player, node));
                 status("spam-jump (stairs)");
                 // Stair/slab travel deliberately pulses space instead of holding it.
                 client.options.jumpKey.setPressed(false);
                 pressSpamJumpIfReady(player);
             } else if (jumpEdge) {
+                steerToward(player, followTarget, isSlippery(player, node));
                 // A gap edge is one indivisible movement: never let waypoint advancement
                 // turn the player back toward a passed node during the airborne arc.
                 status("sprint-jump");
@@ -157,10 +165,12 @@ public final class NavigateAndActTask extends GladeTask {
                 sprintJumpWasAirborne = !player.isOnGround();
                 client.options.jumpKey.setPressed(true);
             } else if (!hasOpenJumpHeadroom(player.getBlockPos()) || !hasOpenJumpHeadroom(node)) {
+                steerToward(player, followTarget, isSlippery(player, node));
                 status("spam-jump");
                 client.options.jumpKey.setPressed(false);
                 pressSpamJumpIfReady(player);
             } else {
+                steerToward(player, followTarget, isSlippery(player, node));
                 // Continuous bunny-hopping is only appropriate in a fully open
                 // corridor. A block in either jump headspace uses prompt pulses.
                 status("sprint-jump");
@@ -181,6 +191,83 @@ public final class NavigateAndActTask extends GladeTask {
         // Holding jump is intentional for a single gap-crossing arc; randomized pulses
         // are reserved for repeated grounded stair/step/head-bump jumps.
         client.options.jumpKey.setPressed(true);
+    }
+
+    /** A short look-ahead removes center-to-center yaw snaps without cutting corners. */
+    private Vec3d followTarget(ClientPlayerEntity player, BlockPos node) {
+        Vec3d current = clearanceAdjustedCenter(node, player.getEyeY());
+        if (index + 1 >= nodes.size()) return current;
+        BlockPos next = nodes.get(index + 1);
+        if (next.getY() != node.getY() || isCrawlNode(node) || isCrawlNode(next)) return current;
+        Vec3d ahead = clearanceAdjustedCenter(next, player.getEyeY());
+        return current.lerp(ahead, 0.45);
+    }
+
+    /** Bias away from a single nearby wall; balanced one-wide corridors stay centered. */
+    private Vec3d clearanceAdjustedCenter(BlockPos pos, double y) {
+        double x = pos.getX() + 0.5, z = pos.getZ() + 0.5;
+        boolean west = blocksBody(pos.west()), east = blocksBody(pos.east());
+        boolean north = blocksBody(pos.north()), south = blocksBody(pos.south());
+        if (west != east) x += west ? 0.12 : -0.12;
+        if (north != south) z += north ? 0.12 : -0.12;
+        return new Vec3d(x, y, z);
+    }
+
+    private boolean blocksBody(BlockPos pos) {
+        return !client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty()
+                || !client.world.getBlockState(pos.up()).getCollisionShape(client.world, pos.up()).isEmpty();
+    }
+
+    private void steerSwimming(ClientPlayerEntity player, Vec3d target, BlockPos node) {
+        Vec3d horizontalTarget = new Vec3d(target.x, player.getEyeY(), target.z);
+        steerToward(player, horizontalTarget, false);
+        double horizontal = Math.hypot(target.x - player.getX(), target.z - player.getZ());
+        double pathY = node.getY() + 0.5;
+        float pathPitch = (float) MathHelper.clamp(
+                -Math.toDegrees(Math.atan2(pathY - player.getEyeY(), Math.max(0.01, horizontal))),
+                -32.0, 32.0);
+        // Eyes below the fluid surface need a gentle, sustained rise. Near the
+        // surface, a slight upward pitch maintains breathing without porpoising.
+        boolean needsAir = player.isSubmergedInWater();
+        float desiredPitch = needsAir ? -18.0F : Math.min(pathPitch, -4.0F);
+        player.setPitch(MathHelper.lerp(0.22F, player.getPitch(), desiredPitch));
+    }
+
+    private void steerToward(ClientPlayerEntity player, Vec3d target, boolean slippery) {
+        double dx = target.x - player.getX(), dz = target.z - player.getZ();
+        float targetYaw = (float) MathHelper.wrapDegrees(Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
+        Vec3d velocity = player.getVelocity();
+        double speed = Math.hypot(velocity.x, velocity.z);
+        if (slippery && speed > 0.08) {
+            float velocityYaw = (float) MathHelper.wrapDegrees(
+                    Math.toDegrees(Math.atan2(velocity.z, velocity.x)) - 90.0);
+            targetYaw = player.getYaw() + MathHelper.wrapDegrees(
+                    0.70F * MathHelper.wrapDegrees(targetYaw - player.getYaw())
+                            + 0.30F * MathHelper.wrapDegrees(velocityYaw - player.getYaw()));
+        }
+        float delta = MathHelper.wrapDegrees(targetYaw - player.getYaw());
+        float deadzone = slippery ? 2.5F : 1.25F;
+        if (Math.abs(delta) > deadzone) {
+            float maxChange = slippery ? 4.0F : 12.0F;
+            float yaw = player.getYaw() + MathHelper.clamp(delta, -maxChange, maxChange);
+            player.setYaw(yaw); player.setHeadYaw(yaw); player.setBodyYaw(yaw);
+        }
+        if (slippery && (Math.abs(delta) > 28.0F || speed > 0.48)) {
+            client.options.sprintKey.setPressed(false);
+        }
+    }
+
+    private boolean isSlippery(ClientPlayerEntity player, BlockPos target) {
+        return slipperiness(player.getBlockPos().down()) > 0.61F || slipperiness(target.down()) > 0.61F;
+    }
+
+    private float slipperiness(BlockPos pos) {
+        return client.world.getBlockState(pos).getBlock().getFriction();
+    }
+
+    private boolean isCrawlNode(BlockPos pos) {
+        return client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty()
+                && !client.world.getBlockState(pos.up()).getCollisionShape(client.world, pos.up()).isEmpty();
     }
 
     private void pressSpamJumpIfReady(ClientPlayerEntity player) {
@@ -229,7 +316,7 @@ public final class NavigateAndActTask extends GladeTask {
         BlockPos support = node.down();
         boolean unsupportedUp = node.getX() == player.getBlockX()
                 && node.getZ() == player.getBlockZ() && node.getY() > player.getBlockY()
-                && !isWater(node) && !isWater(support) && isFallRisk(support);
+                && !isFluid(node) && !isFluid(support) && isFallRisk(support);
         // A vertical PLACE edge wins over mining even if a prior failed placement has
         // temporarily made the destination collide.
         if (unsupportedUp) return handlePillar(player);
@@ -262,7 +349,7 @@ public final class NavigateAndActTask extends GladeTask {
         }
         breaking = null;
         var supportState = client.world.getBlockState(support);
-        if (isWater(node) || isWater(support)) return false;
+        if (isFluid(node) || isFluid(support)) return false;
         if (isFallRisk(support)) {
             // Never approach an unsupported edge at walking speed.  Keeping sneak held
             // also makes a delayed server placement safe: the player stops at the lip.
@@ -395,6 +482,12 @@ public final class NavigateAndActTask extends GladeTask {
     private boolean isWater(BlockPos pos) {
         return client.world.getBlockState(pos).getFluidState().isIn(FluidTags.WATER);
     }
+
+    private boolean isLava(BlockPos pos) {
+        return client.world.getBlockState(pos).getFluidState().isIn(FluidTags.LAVA);
+    }
+
+    private boolean isFluid(BlockPos pos) { return isWater(pos) || isLava(pos); }
 
     private static boolean reached(ClientPlayerEntity player, BlockPos node) {
         double dx = player.getX() - node.getX() - 0.5, dz = player.getZ() - node.getZ() - 0.5;
