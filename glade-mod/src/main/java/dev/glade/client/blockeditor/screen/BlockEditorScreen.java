@@ -222,8 +222,8 @@ public final class BlockEditorScreen extends Screen {
             Path scripts = FabricLoader.getInstance().getGameDir().resolve("glade").resolve("scripts");
             Files.createDirectories(scripts);
             Files.writeString(scripts.resolve(SWITCH_SCRIPT_NAME + ".py"), source, StandardCharsets.UTF_8);
-            setStatus("Converted to Python — load '" + SWITCH_SCRIPT_NAME + "' in the Python editor", false);
-            if (client != null) client.setScreen(new PythonEditorScreen());
+            setStatus("Converted to Python (one-way)", false);
+            if (client != null) client.setScreen(new PythonEditorScreen(SWITCH_SCRIPT_NAME, source));
         } catch (IOException | RuntimeException error) {
             String message = "Switch to Python failed: " + error.getMessage();
             setStatus(message, true);

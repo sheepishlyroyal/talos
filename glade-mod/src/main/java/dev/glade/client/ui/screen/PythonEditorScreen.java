@@ -51,8 +51,19 @@ public final class PythonEditorScreen extends net.minecraft.client.gui.screen.Sc
     private volatile String status = "Ready";
     private volatile boolean statusError;
 
+    /** Set by the preload constructor to seed the buffer instead of loading from disk. */
+    private String pendingName;
+    private String pendingSource;
+
     public PythonEditorScreen() {
         super(Text.literal("Glade Python Editor"));
+    }
+
+    /** Opens the editor preloaded with source — used by the block editor's one-way "Switch to Python". */
+    public PythonEditorScreen(String initialName, String initialSource) {
+        this();
+        this.pendingName = initialName;
+        this.pendingSource = initialSource;
     }
 
     @Override
@@ -99,7 +110,16 @@ public final class PythonEditorScreen extends net.minecraft.client.gui.screen.Sc
         this.sourceEditor.setMaxLength(1_000_000);
         this.addDrawableChild(this.sourceEditor);
 
-        loadScript(false);
+        if (this.pendingSource != null) {
+            if (this.pendingName != null && !this.pendingName.isBlank()) {
+                lastScriptName = this.pendingName;
+                this.nameField.setText(this.pendingName);
+            }
+            this.sourceEditor.setText(this.pendingSource);
+            setStatus("Converted from blocks (one-way) — Save to keep this script", false);
+        } else {
+            loadScript(false);
+        }
         this.setInitialFocus(this.sourceEditor);
     }
 
