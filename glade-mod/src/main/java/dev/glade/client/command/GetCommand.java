@@ -33,9 +33,17 @@ public final class GetCommand {
         LiteralArgumentBuilder<FabricClientCommandSource> get = ClientCommandManager.literal("get");
         get.then(ClientCommandManager.literal("list").executes(context -> {
             context.getSource().sendFeedback(Text.literal(
-                    "Observables: " + String.join(", ", GETTERS.keySet())));
+                    "Observables: " + String.join(", ", GETTERS.keySet())
+                            + " | slot <hotbar.1-9|inv.1-27|head|chest|legs|feet|offhand|cursor"
+                            + "|container.N|saddle|horsearmor>"));
             return 1;
         }));
+        get.then(ClientCommandManager.literal("slot")
+                .then(ClientCommandManager.argument("name",
+                                com.mojang.brigadier.arguments.StringArgumentType.word())
+                        .executes(context -> slot(context.getSource(),
+                                com.mojang.brigadier.arguments.StringArgumentType
+                                        .getString(context, "name")))));
         for (Map.Entry<String, BiFunction<MinecraftClient, ClientPlayerEntity, String>> entry
                 : GETTERS.entrySet()) {
             get.then(ClientCommandManager.literal(entry.getKey()).executes(context -> {
@@ -166,6 +174,74 @@ public final class GetCommand {
                 player.currentScreenHandler.slots.stream()
                         .anyMatch(slot -> slot.inventory != player.getInventory())));
         return map;
+    }
+
+    /** {@code /talos get slot <name>} — exact contents of one named slot. */
+    private static int slot(FabricClientCommandSource source, String name) {
+        MinecraftClient client = source.getClient();
+        ClientPlayerEntity player = client.player;
+        if (player == null) {
+            source.sendError(Text.literal("No player is loaded"));
+            return 0;
+        }
+        net.minecraft.item.ItemStack stack = null;
+        String key = name.toLowerCase(Locale.ROOT);
+        if (key.startsWith("hotbar.")) {
+            int index = parseIndex(key.substring(7), 1, 9);
+            if (index > 0) stack = player.getInventory().getStack(index - 1);
+        } else if (key.startsWith("inv.")) {
+            int index = parseIndex(key.substring(4), 1, 27);
+            if (index > 0) stack = player.getInventory().getStack(8 + index);
+        } else if (key.startsWith("container.")) {
+            int index = parseIndex(key.substring(10), 1, 1024);
+            int seen = 0;
+            for (net.minecraft.screen.slot.Slot handlerSlot : player.currentScreenHandler.slots) {
+                if (handlerSlot.inventory == player.getInventory()) continue;
+                if (++seen == index) { stack = handlerSlot.getStack(); break; }
+            }
+        } else {
+            stack = switch (key) {
+                case "head", "helmet" -> player.getEquippedStack(EquipmentSlot.HEAD);
+                case "chest", "chestplate" -> player.getEquippedStack(EquipmentSlot.CHEST);
+                case "legs", "leggings" -> player.getEquippedStack(EquipmentSlot.LEGS);
+                case "feet", "boots" -> player.getEquippedStack(EquipmentSlot.FEET);
+                case "offhand" -> player.getOffHandStack();
+                case "held", "hand" -> player.getMainHandStack();
+                case "cursor" -> player.currentScreenHandler.getCursorStack();
+                // Horse screen layout: container slot 1 = saddle, 2 = body armor.
+                case "saddle" -> containerSlot(player, 1);
+                case "horsearmor", "horse_armor" -> containerSlot(player, 2);
+                default -> null;
+            };
+        }
+        if (stack == null) {
+            source.sendError(Text.literal("Unknown slot '" + name
+                    + "' (hotbar.1-9, inv.1-27, head/chest/legs/feet, offhand, held, cursor, "
+                    + "container.N, saddle, horsearmor)"));
+            return 0;
+        }
+        source.sendFeedback(Text.literal("§bslot[" + key + "]§f = " + (stack.isEmpty() ? "empty"
+                : Registries.ITEM.getId(stack.getItem()) + " x" + stack.getCount())));
+        return 1;
+    }
+
+    private static net.minecraft.item.ItemStack containerSlot(ClientPlayerEntity player,
+            int oneBasedIndex) {
+        int seen = 0;
+        for (net.minecraft.screen.slot.Slot handlerSlot : player.currentScreenHandler.slots) {
+            if (handlerSlot.inventory == player.getInventory()) continue;
+            if (++seen == oneBasedIndex) return handlerSlot.getStack();
+        }
+        return net.minecraft.item.ItemStack.EMPTY;
+    }
+
+    private static int parseIndex(String raw, int min, int max) {
+        try {
+            int value = Integer.parseInt(raw);
+            return value >= min && value <= max ? value : -1;
+        } catch (NumberFormatException exception) {
+            return -1;
+        }
     }
 
     private interface BoolGetter {

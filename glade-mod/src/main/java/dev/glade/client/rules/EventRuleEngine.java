@@ -146,6 +146,10 @@ public final class EventRuleEngine {
         HELD_NAME_CHANGED(Kind.TEXT),
         // Unload-vs-gone disambiguation (no timers: the chunk-loaded test decides).
         ENTITY_UNLOADED(Kind.TEXT), ITEM_UNLOADED(Kind.TEXT),
+        // Combat/consumable moments.
+        TOTEM_POPPED(Kind.TEXT), ENTITY_STATUS(Kind.TEXT), PARTICLE_SEEN(Kind.TEXT),
+        PEARL_THROWN(Kind.TEXT), PEARL_LANDED(Kind.TEXT), TELEPORTED(Kind.TEXT),
+        POTION_SPLASHED(Kind.TEXT), POTION_DRANK(Kind.TEXT),
         // Metrics — every one supports instant compares, 'for <seconds>' sustained compares,
         // and 'changes above|below <delta> within <seconds>' windowed net change.
         HEALTH(Kind.COMPARE), HUNGER(Kind.COMPARE), AIR(Kind.COMPARE), XP_LEVEL(Kind.COMPARE),
@@ -349,6 +353,23 @@ public final class EventRuleEngine {
         fireText(Trigger.BOSSBAR_REMOVED, "");
     }
 
+    /** Entity status bytes: 35 is a totem pop; everything else is exposed generically. */
+    public static void onEntityStatus(Entity entity, byte status) {
+        String label = entity == null ? "unknown" : entityLabel(entity);
+        if (status == 35) fireText(Trigger.TOTEM_POPPED, label);
+        fireText(Trigger.ENTITY_STATUS, label + ": " + status);
+    }
+
+    public static void onParticle(String particleId, double x, double y, double z) {
+        boolean wanted = false;
+        for (Rule rule : RULES) {
+            if (rule.triggerType() == Trigger.PARTICLE_SEEN) { wanted = true; break; }
+        }
+        if (!wanted) return; // particle packets are frequent; skip the string work
+        fireText(Trigger.PARTICLE_SEEN, particleId + " @ "
+                + String.format(Locale.ROOT, "%.0f %.0f %.0f", x, y, z));
+    }
+
     /**
      * Authoritative pickup attribution: the server's ItemPickupAnimation packet names the
      * exact collector entity — no proximity guessing, no ambiguity between nearby mobs.
@@ -498,6 +519,12 @@ public final class EventRuleEngine {
 
         if (!before.dimension.equals(now.dimension)) {
             fireText(Trigger.DIMENSION_CHANGED, now.dimension);
+        } else {
+            // A same-dimension jump no legitimate tick of movement can produce: pearls,
+            // chorus fruit, /tp, respawn anchors. {value} = distance.
+            double jump = Math.sqrt(before.position.getSquaredDistance(now.position));
+            if (jump > 12.0) fireText(Trigger.TELEPORTED,
+                    String.format(Locale.ROOT, "%.0f", jump));
         }
 
         if (now.health < before.health - 0.01) fireText(Trigger.DAMAGE_TAKEN,
@@ -942,7 +969,8 @@ public final class EventRuleEngine {
 
     /** Everything the client actually syncs about a foreign entity, one record per tick. */
     private record TrackedEntity(String type, String label, boolean living, boolean isItem,
-            boolean isProjectile, boolean isPlayer, String hand, String offhand, String armor,
+            boolean isProjectile, boolean isPlayer, boolean isPearl, boolean isPotion,
+            String ownerLabel, String hand, String offhand, String armor,
             boolean hurt, boolean burning, int vehicleId, String vehicleType, boolean sneaking,
             boolean sprinting, boolean usingItem, boolean blocking, boolean gliding,
             boolean swimming, boolean sleeping, boolean baby, float health, String profession,
@@ -960,7 +988,9 @@ public final class EventRuleEngine {
             Trigger.PLAYER_OFFHAND_CHANGED, Trigger.PLAYER_ARMOR_CHANGED,
             Trigger.PLAYER_GAMEMODE_CHANGED, Trigger.ITEM_SPAWNED, Trigger.ITEM_PICKED_UP,
             Trigger.ITEM_DESPAWNED, Trigger.PROJECTILE_LAUNCHED, Trigger.ENTITY_SPAWNED,
-            Trigger.ENTITY_REMOVED, Trigger.ENTITY_UNLOADED, Trigger.ITEM_UNLOADED);
+            Trigger.ENTITY_REMOVED, Trigger.ENTITY_UNLOADED, Trigger.ITEM_UNLOADED,
+            Trigger.PEARL_THROWN, Trigger.PEARL_LANDED, Trigger.POTION_SPLASHED,
+            Trigger.POTION_DRANK);
 
     private static void evaluateEntityEvents(MinecraftClient client, ClientPlayerEntity player) {
         boolean anyRule = false;
@@ -983,7 +1013,12 @@ public final class EventRuleEngine {
                 if (past == null) {
                     fireText(Trigger.ENTITY_SPAWNED, current.label);
                     if (current.isItem) fireText(Trigger.ITEM_SPAWNED, current.itemStack);
-                    if (current.isProjectile) fireText(Trigger.PROJECTILE_LAUNCHED, current.label);
+                    if (current.isProjectile) {
+                        String by = current.ownerLabel.isEmpty() ? ""
+                                : " by " + current.ownerLabel;
+                        fireText(Trigger.PROJECTILE_LAUNCHED, current.label + by);
+                        if (current.isPearl) fireText(Trigger.PEARL_THROWN, current.label + by);
+                    }
                     continue;
                 }
                 diffEntity(past, current);
@@ -1003,6 +1038,13 @@ public final class EventRuleEngine {
                     fireText(chunkStillLoaded ? Trigger.ITEM_DESPAWNED : Trigger.ITEM_UNLOADED,
                             gone.itemStack);
                     continue;
+                }
+                if (chunkStillLoaded && (gone.isPearl || gone.isPotion)) {
+                    String by = gone.ownerLabel.isEmpty() ? "" : " by " + gone.ownerLabel;
+                    String where = String.format(Locale.ROOT, "%.0f %.0f %.0f",
+                            gone.x, gone.y, gone.z);
+                    fireText(gone.isPearl ? Trigger.PEARL_LANDED : Trigger.POTION_SPLASHED,
+                            where + by);
                 }
                 if (!chunkStillLoaded) {
                     fireText(Trigger.ENTITY_UNLOADED, gone.label);
@@ -1077,6 +1119,10 @@ public final class EventRuleEngine {
         if (!past.swimming && now.swimming) fireText(Trigger.ENTITY_SWIMMING, label);
         if (!past.sleeping && now.sleeping) fireText(Trigger.ENTITY_SLEEPING, label);
         if (past.baby && !now.baby) fireText(Trigger.ENTITY_BABY_GROWN, label);
+        // Finishing a use-cycle while holding a potion is a completed drink (self included).
+        if (past.usingItem && !now.usingItem && past.hand.contains("potion")) {
+            fireText(Trigger.POTION_DRANK, label + ": " + past.hand);
+        }
         if (!past.profession.equals(now.profession) && !now.profession.isEmpty()) {
             fireText(Trigger.VILLAGER_PROFESSION_CHANGED, label + ": " + now.profession);
         }
@@ -1136,9 +1182,17 @@ public final class EventRuleEngine {
             ItemStack stack = ((net.minecraft.entity.ItemEntity) entity).getStack();
             itemStack = Registries.ITEM.getId(stack.getItem()) + " x" + stack.getCount();
         }
-        return new TrackedEntity(type, label, living, isItem,
-                entity instanceof net.minecraft.entity.projectile.ProjectileEntity,
-                entity instanceof PlayerEntity, hand, offhand, armor,
+        boolean isProjectile = entity instanceof net.minecraft.entity.projectile.ProjectileEntity;
+        String ownerLabel = "";
+        if (isProjectile) {
+            Entity owner = ((net.minecraft.entity.projectile.ProjectileEntity) entity).getOwner();
+            if (owner != null) ownerLabel = entityLabel(owner);
+        }
+        return new TrackedEntity(type, label, living, isItem, isProjectile,
+                entity instanceof PlayerEntity,
+                entity instanceof net.minecraft.entity.projectile.thrown.EnderPearlEntity,
+                entity instanceof net.minecraft.entity.projectile.thrown.PotionEntity,
+                ownerLabel, hand, offhand, armor,
                 living && ((net.minecraft.entity.LivingEntity) entity).hurtTime > 0,
                 entity.getFireTicks() > 0,
                 entity.getVehicle() == null ? -1 : entity.getVehicle().getId(),

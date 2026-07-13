@@ -492,9 +492,15 @@ public final class SimFollowTask extends GladeTask {
         client.options.jumpKey.setPressed(input.jump());
         client.options.sprintKey.setPressed(input.sprint());
         client.options.sneakKey.setPressed(input.sneak());
-        player.setYaw(input.yaw());
-        player.setHeadYaw(input.yaw());
-        player.setBodyYaw(input.yaw());
+        // Fast slew instead of a hard snap: routine steering deltas (<45 degrees) still
+        // complete in a single tick — jumps stay accurate — while big course changes take
+        // two or three smooth steps instead of teleporting the view.
+        float delta = net.minecraft.util.math.MathHelper.wrapDegrees(input.yaw() - player.getYaw());
+        float yaw = Math.abs(delta) <= 45.0F ? input.yaw()
+                : player.getYaw() + Math.copySign(45.0F + Math.abs(delta) * 0.35F, delta);
+        player.setYaw(yaw);
+        player.setHeadYaw(yaw);
+        player.setBodyYaw(yaw);
     }
 
     private void updateAirMode(ClientPlayerEntity player) {

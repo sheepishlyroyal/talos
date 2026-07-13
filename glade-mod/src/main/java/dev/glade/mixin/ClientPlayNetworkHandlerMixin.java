@@ -35,6 +35,25 @@ public abstract class ClientPlayNetworkHandlerMixin {
         EventRuleEngine.onExplosion(packet.center());
     }
 
+    @Inject(method = "onEntityStatus", at = @At("HEAD"))
+    private void talos$onEntityStatus(
+            net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket packet,
+            CallbackInfo ci) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (!client.isOnThread() || client.world == null) return;
+        EventRuleEngine.onEntityStatus(packet.getEntity(client.world), packet.getStatus());
+    }
+
+    @Inject(method = "onParticle", at = @At("HEAD"))
+    private void talos$onParticle(
+            net.minecraft.network.packet.s2c.play.ParticleS2CPacket packet, CallbackInfo ci) {
+        if (!MinecraftClient.getInstance().isOnThread()) return;
+        EventRuleEngine.onParticle(
+                net.minecraft.registry.Registries.PARTICLE_TYPE.getId(
+                        packet.getParameters().getType()).toString(),
+                packet.getX(), packet.getY(), packet.getZ());
+    }
+
     @Inject(method = "onBossBar", at = @At("HEAD"))
     private void talos$onBossBar(BossBarS2CPacket packet, CallbackInfo ci) {
         if (!MinecraftClient.getInstance().isOnThread()) return;
