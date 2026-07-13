@@ -60,10 +60,9 @@ public final class TalosPathingEngine implements PathingEngine {
     private void startOnClientThread(MinecraftClient client, Goal goal, PathingOptions options,
                                      CompletableFuture<PathResult> future) {
         if (activeRun != null && activeRun.future.isDone()) activeRun = null;
-        if (activeRun != null) {
-            future.complete(new PathResult(false, "A native path is already active"));
-            return;
-        }
+        // A new goto supersedes the active one — the player changed their mind; refusing
+        // with a task-conflict error forced a manual stop first.
+        if (activeRun != null) releaseActiveRun("Superseded by a new goto");
         if (client.world == null || client.player == null) {
             future.complete(new PathResult(false, "No client world or player is loaded"));
             return;
@@ -276,23 +275,26 @@ public final class TalosPathingEngine implements PathingEngine {
     @Override
     public void cancel() {
         MinecraftClient client = MinecraftClient.getInstance();
-        Runnable cancel = () -> {
-            NavigationRun run = activeRun;
-            // Capture the task before completing the run: CompletableFuture callbacks execute
-            // synchronously and clear activeTask.
-            TalosTask task = activeTask;
-            if (run != null) {
-                run.cancelled = true;
-                run.future.complete(new PathResult(false, "Pathing cancelled"));
-            }
-            if (task instanceof NavigateAndActTask oldTask) oldTask.cancel();
-            if (task instanceof SimFollowTask simTask) simTask.cancel();
-            // A pipelined follower may not be the captured activeTask; release its keys too.
-            if (run != null && run.follower != null) run.follower.cancel();
-            activeTask = null;
-            activeRun = null;
-        };
+        Runnable cancel = () -> releaseActiveRun("Pathing cancelled");
         if (client.isOnThread()) cancel.run(); else client.execute(cancel);
+    }
+
+    /** Client-thread only: stop the active run/tasks and release their movement keys. */
+    private void releaseActiveRun(String reason) {
+        NavigationRun run = activeRun;
+        // Capture the task before completing the run: CompletableFuture callbacks execute
+        // synchronously and clear activeTask.
+        TalosTask task = activeTask;
+        if (run != null) {
+            run.cancelled = true;
+            run.future.complete(new PathResult(false, reason));
+        }
+        if (task instanceof NavigateAndActTask oldTask) oldTask.cancel();
+        if (task instanceof SimFollowTask simTask) simTask.cancel();
+        // A pipelined follower may not be the captured activeTask; release its keys too.
+        if (run != null && run.follower != null) run.follower.cancel();
+        activeTask = null;
+        activeRun = null;
     }
 
     @Override public boolean isPathing() { return activeRun != null && !activeRun.future.isDone(); }
@@ -359,7 +361,12 @@ public final class TalosPathingEngine implements PathingEngine {
         return switch (goal) {
             case GoalBlock block -> {
                 BlockPos target = new BlockPos(block.x(), block.y(), block.z());
-                yield new GoalSnapshot(target::equals, target);
+                // A cell that cannot be stood in (solid ore/log, or floorless) is a
+                // mining/interaction destination: arriving means standing beside it within
+                // touch range. Demanding the exact cell made goto(log) brake at the trunk
+                // forever — the goal was physically unreachable.
+                if (isStandable(client, target)) yield new GoalSnapshot(target::equals, target);
+                yield new GoalSnapshot(pos -> pos.getSquaredDistance(target) <= 4.0, target);
             }
             case GoalNear near -> {
                 BlockPos target = new BlockPos(near.x(), near.y(), near.z());
@@ -379,6 +386,15 @@ public final class TalosPathingEngine implements PathingEngine {
                 yield new GoalSnapshot(pos -> pos.getSquaredDistance(target) <= 1, target);
             }
         };
+    }
+
+    /** Feet and head cells passable with solid support below. */
+    private static boolean isStandable(MinecraftClient client, BlockPos pos) {
+        var world = client.world;
+        if (world == null) return true;
+        return world.getBlockState(pos).getCollisionShape(world, pos).isEmpty()
+                && world.getBlockState(pos.up()).getCollisionShape(world, pos.up()).isEmpty()
+                && !world.getBlockState(pos.down()).getCollisionShape(world, pos.down()).isEmpty();
     }
 
     private record GoalSnapshot(Predicate<BlockPos> test, BlockPos target) { }

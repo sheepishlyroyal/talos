@@ -267,8 +267,15 @@ public final class SimFollowTask extends TalosTask {
         if (approachingFinal) candidates.add(brake);
         boolean precisionLaunch = brakeNeeded && live.onGround()
                 && speed <= BRAKE_RELEASE_SPEED;
-        candidates.add(new Input(1, 0, wantsJump,
-                wantsSprint && (!brakeNeeded || precisionLaunch), wantsSneak, yaw));
+        // Steering is part of the prediction, not a fixed bearing: on slick ground (or with
+        // sideways momentum) also offer drift-compensated headings, and let the physics
+        // rollouts — which model live speed, effects, and per-block friction — pick the yaw
+        // whose PREDICTED positions stay on the route. Aiming straight at the waypoint while
+        // sliding was what made ice turns overshoot and double back.
+        for (float heading : steeringYaws(live, waypoint, yaw, drag)) {
+            candidates.add(new Input(1, 0, wantsJump,
+                    wantsSprint && (!brakeNeeded || precisionLaunch), wantsSneak, heading));
+        }
         // Never offer a one-tick jump release during a committed sprint-jump or ledge climb.
         if ((!continuousRun || brakeNeeded) && primitive != Primitive.STEP_UP) {
             candidates.add(new Input(1, 0, false, false, wantsSneak, yaw));
@@ -348,6 +355,35 @@ public final class SimFollowTask extends TalosTask {
             committedStrafe = 0;
         }
         return best;
+    }
+
+    /**
+     * Candidate headings for the rollout scorer. The first is the plain bearing; on
+     * low-friction ground with real sideways momentum, drift-compensated headings are added:
+     * the aim direction is the route direction minus the lateral velocity component scaled
+     * by the drag tail (d/(1-d)), i.e. steer INTO the slide roughly as hard as the ice will
+     * keep pushing. The simulation, not this heuristic, makes the final choice.
+     */
+    private float[] steeringYaws(MotionState live, PlannedRoute.Waypoint waypoint,
+            float base, double drag) {
+        Vec3d to = waypoint.position().subtract(live.position());
+        double length = Math.hypot(to.x, to.z);
+        Vec3d velocity = live.velocity();
+        double speed = Math.hypot(velocity.x, velocity.z);
+        if (length < 1.0E-6 || speed < 0.06) return new float[]{base};
+        double tx = to.x / length, tz = to.z / length;
+        double along = velocity.x * tx + velocity.z * tz;
+        double lateralX = velocity.x - tx * along, lateralZ = velocity.z - tz * along;
+        double lateral = Math.hypot(lateralX, lateralZ);
+        // Normal ground with an aligned velocity needs no compensation candidates.
+        if (drag <= 0.62 && lateral < 0.05) return new float[]{base};
+        double gain = Math.min(3.5, drag / (1.0 - drag) * 0.35) / Math.max(speed, 0.15);
+        double steerX = tx - lateralX * gain, steerZ = tz - lateralZ * gain;
+        float compensated = (float) Math.toDegrees(Math.atan2(-steerX, steerZ));
+        float correction = net.minecraft.util.math.MathHelper.wrapDegrees(compensated - base);
+        if (Math.abs(correction) < 3.0F) return new float[]{base};
+        correction = Math.max(-55.0F, Math.min(55.0F, correction));
+        return new float[]{base, base + correction, base + correction * 0.5F};
     }
 
     /** Refresh a short-lived, exact-hitbox trail for the input selected from this live state. */
@@ -578,8 +614,13 @@ public final class SimFollowTask extends TalosTask {
         }
         double delta = net.minecraft.util.math.MathHelper.wrapDegrees(targetYaw - player.getYaw());
         double cap = Math.abs(delta) > 60.0 ? Math.max(maxTurnSpeed * 2.5, 28.0) : maxTurnSpeed;
-        double desired = Math.max(-cap, Math.min(cap, delta * 0.45));
         double accel = Math.max(2.0, profile.maxAngularAccelDegPerTick2());
+        // Anticipatory braking on the turn itself: never spin faster than can be shed
+        // before the target angle (v^2 <= 2*a*remaining), so the view stops ON the heading
+        // instead of swinging past it and coming back — the visible "over-turning".
+        double stopCap = Math.sqrt(2.0 * accel * Math.abs(delta));
+        double limit = Math.min(cap, stopCap);
+        double desired = Math.max(-limit, Math.min(limit, delta * 0.45));
         yawVelocity += Math.max(-accel, Math.min(accel, desired - yawVelocity));
         double jitter = Math.abs(delta) > 1.0
                 ? steerRng.nextGaussian() * profile.pathDeviationStdev() * 1.5 : 0.0;
