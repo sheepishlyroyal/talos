@@ -361,11 +361,12 @@ public final class TalosPathingEngine implements PathingEngine {
         return switch (goal) {
             case GoalBlock block -> {
                 BlockPos target = new BlockPos(block.x(), block.y(), block.z());
-                // A cell that cannot be stood in (solid ore/log, or floorless) is a
-                // mining/interaction destination: arriving means standing beside it within
-                // touch range. Demanding the exact cell made goto(log) brake at the trunk
-                // forever — the goal was physically unreachable.
-                if (isStandable(client, target)) yield new GoalSnapshot(target::equals, target);
+                // A cell the player can never OCCUPY (solid ore/log, or head blocked) is an
+                // interaction destination: arriving means standing beside it within touch
+                // range — demanding the exact cell made goto(log) brake at the trunk forever.
+                // Floorless AIR cells stay exact: they are pillar/build destinations
+                // (goto ~ ~10 ~ must nerdpole straight up, not bridge to "nearby").
+                if (isOccupiable(client, target)) yield new GoalSnapshot(target::equals, target);
                 yield new GoalSnapshot(pos -> pos.getSquaredDistance(target) <= 4.0, target);
             }
             case GoalNear near -> {
@@ -388,13 +389,12 @@ public final class TalosPathingEngine implements PathingEngine {
         };
     }
 
-    /** Feet and head cells passable with solid support below. */
-    private static boolean isStandable(MinecraftClient client, BlockPos pos) {
+    /** Feet and head cells passable — the player could occupy this cell (support or not). */
+    private static boolean isOccupiable(MinecraftClient client, BlockPos pos) {
         var world = client.world;
         if (world == null) return true;
         return world.getBlockState(pos).getCollisionShape(world, pos).isEmpty()
-                && world.getBlockState(pos.up()).getCollisionShape(world, pos.up()).isEmpty()
-                && !world.getBlockState(pos.down()).getCollisionShape(world, pos.down()).isEmpty();
+                && world.getBlockState(pos.up()).getCollisionShape(world, pos.up()).isEmpty();
     }
 
     private record GoalSnapshot(Predicate<BlockPos> test, BlockPos target) { }
