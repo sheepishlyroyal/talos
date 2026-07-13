@@ -47,14 +47,25 @@ _RULES = (
     (OutOfReachError, ("out of reach", "too far")),
     (ActionCancelledError, ("cancelled", "stopping", "stopped")),
     (WorldClosedError, ("invalidated", "no active client world", "no active player", "disconnect")),
-    (TargetLostError, ("target changed", "left the mining target", "changed unexpectedly")),
+    (TargetLostError, ("target changed", "left the mining target", "changed unexpectedly",
+                       "already air", "no longer", "target is gone")),
     (NotFoundError, ("no hostile entity", "unknown", "not found", "not looking at", "did not hit")),
 )
 
 
+def _clean(text):
+    """Drop leading java exception class names: 'java.lang.IllegalStateException: msg' -> 'msg'."""
+    while True:
+        head, sep, rest = text.partition(": ")
+        if sep and rest and " " not in head and ("." in head or head.endswith(("Exception", "Error"))):
+            text = rest
+            continue
+        return text
+
+
 def map_error(source):
     """Convert a host-side failure into the matching TalosError subclass."""
-    text = str(source) if source is not None else ""
+    text = _clean(str(source)) if source is not None else ""
     low = text.lower()
     for kind, needles in _RULES:
         for needle in needles:

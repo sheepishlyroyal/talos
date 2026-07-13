@@ -1,6 +1,8 @@
 package dev.talos.client.pathing.sim;
 
 import dev.talos.client.TalosClient;
+import dev.talos.client.humanize.HumanizationProfile;
+import dev.talos.client.humanize.SeededRng;
 import dev.talos.client.pathing.PathResult;
 import dev.talos.client.render.RenderQueue;
 import dev.talos.client.task.TalosTask;
@@ -31,7 +33,6 @@ public final class SimFollowTask extends TalosTask {
     private static final int ROLLOUT_TICKS = 6;
     private static final int LANDING_ROLLOUT_TICKS = 40;
     private static final double OVERSHOOT_SLOP = 0.03;
-    private static final double GROUND_DRAG = 0.6 * 0.91;
     private static final double FINAL_BRAKE_BUFFER = 0.35;
     private static final double BRAKE_RELEASE_SPEED = 0.075;
     // The swim hitbox is 0.6 tall; holding the feet this far under the surface keeps the
@@ -60,6 +61,17 @@ public final class SimFollowTask extends TalosTask {
     private int committedStrafe;
     private int strafeCommitUntil;
     private boolean surfacingForAir;
+    // Orbit breaker: waypoints we brushed past but never technically "reached" (slopes,
+    // jump arcs) must not trap the follower in circles around them.
+    private double closestApproach = Double.POSITIVE_INFINITY;
+    private int recedeTicks;
+    // Humanized steering state: the view follows the route with bounded, eased turns
+    // plus profile-scaled noise instead of snapping.
+    private final SeededRng steerRng = new SeededRng(System.nanoTime());
+    private double yawVelocity;
+    private double maxTurnSpeed;
+    private double pitchWander;
+    private int pitchWanderTicks;
 
     public SimFollowTask(MinecraftClient client, PlannedRoute route, Predicate<BlockPos> goal,
             CompletableFuture<PathResult> future) {
@@ -98,6 +110,8 @@ public final class SimFollowTask extends TalosTask {
         this.lastProgressTick = ticks;
         this.replanRequested = false;
         this.committedPrimitive = null;
+        this.closestApproach = Double.POSITIVE_INFINITY;
+        this.recedeTicks = 0;
     }
 
     @Override public void initialize() { }
@@ -151,14 +165,15 @@ public final class SimFollowTask extends TalosTask {
 
         MotionState live = liveState(player);
         MovementProfile profile = MovementProfile.capture(player); // Effects/attributes are live.
-        float yaw = yawTo(new Vec3d(player.getX(), player.getY(), player.getZ()), waypoint.position());
+        Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
+        float yaw = yawTo(feet, aimPoint(feet, waypoint));
         Input selected = chooseInput(live, profile, waypoint, yaw);
         renderPrediction(live, selected, profile);
         if (live.fluid() == MotionState.Fluid.WATER) {
             updateAirMode(player);
             player.setPitch(swimPitch(player, waypoint));
         }
-        apply(player, selected);
+        apply(player, selected, live, waypoint);
         status(live.inFluid()
                 ? live.fluid() == MotionState.Fluid.LAVA ? "swimming (lava)" : "swimming"
                 : isBrake(selected) ? "braking (final approach)"
@@ -222,11 +237,15 @@ public final class SimFollowTask extends TalosTask {
                 && index + 1 == route.waypoints().size();
 
         // Evaluate the control the primitive would hold, on every tick and for every primitive.
-        // The geometric tail is v + v*d + ... = v/(1-d), with vanilla ground drag d=.6*.91.
+        // The geometric tail is v + v*d + ... = v/(1-d), with d = slipperiness*.91 read from
+        // the actual block underfoot: on ice (0.98) the stop takes ~4x normal ground, and a
+        // fixed d=.6*.91 made the follower brake far too late, overshoot, and oscillate.
         Input held = new Input(1, 0, wantsJump, wantsSprint, wantsSneak, yaw);
         MotionState heldLanding = approachingFinal ? predictLanding(live, held, profile) : null;
         double speed = Math.hypot(live.velocity().x, live.velocity().z);
-        double stoppingDistance = speed / (1.0 - GROUND_DRAG);
+        double drag = Math.min(0.985,
+                PlayerMotion.slipperinessBelow(client.world, live.position()) * 0.91);
+        double stoppingDistance = speed / (1.0 - drag);
         double targetDistance = horizontalDistance(live.position(), waypoint.position());
         double landingTravel = heldLanding == null ? 0.0
                 : horizontalDistance(live.position(), heldLanding.position());
@@ -313,17 +332,18 @@ public final class SimFollowTask extends TalosTask {
             if (precise) score -= horizontalDistance(state.position(), waypoint.position()) * 3.0;
             if (ticks < strafeCommitUntil
                     && Float.compare(candidate.strafe(), 0.0F) == committedStrafe) {
-                score += 0.8; // Four-tick hysteresis, still overridable by a clearly safer line.
+                score += 1.2; // Commit-window hysteresis, still overridable by a clearly safer line.
             }
             // Stable ordering is the deterministic tie-break: forward is first. Strafing must
-            // beat it materially, preventing close scores from alternating left/right.
-            double margin = candidate.strafe() == 0.0F ? 0.0 : 0.75;
+            // beat it materially, preventing close scores from alternating left/right — the
+            // visible symptom of a thin margin was sideways wiggle on hills.
+            double margin = candidate.strafe() == 0.0F ? 0.0 : 1.4;
             if (score > bestScore + margin) { bestScore = score; best = candidate; }
         }
         int chosenStrafe = Float.compare(best.strafe(), 0.0F);
         if (chosenStrafe != 0) {
             committedStrafe = chosenStrafe;
-            strafeCommitUntil = ticks + 4;
+            strafeCommitUntil = ticks + 7;
         } else if (ticks >= strafeCommitUntil) {
             committedStrafe = 0;
         }
@@ -457,20 +477,52 @@ public final class SimFollowTask extends TalosTask {
     private void advance(ClientPlayerEntity player) {
         while (index < route.waypoints().size()) {
             Vec3d target = route.waypoints().get(index).position();
-            double dx = player.getX() - target.x, dz = player.getZ() - target.z;
-            boolean reached = dx * dx + dz * dz < REACHED_SQUARED
-                    && Math.abs(player.getY() - target.y) <= .75;
             Vec3d previous = route.waypoints().get(index - 1).position();
             double edgeX = target.x - previous.x, edgeZ = target.z - previous.z;
-            // A vertical edge (pillar/shaft) has no horizontal direction to be "past"; it can
-            // only be completed by actually reaching the waypoint.
-            boolean passed = edgeX * edgeX + edgeZ * edgeZ > 1.0E-6
+            boolean horizontalEdge = edgeX * edgeX + edgeZ * edgeZ > 1.0E-6;
+            double dx = player.getX() - target.x, dz = player.getZ() - target.z;
+            // Slopes and jump arcs put the player up to a block above/below the waypoint
+            // while clearly passing it; only vertical edges (pillar/shaft) need the exact Y.
+            double yTolerance = horizontalEdge ? 1.25 : 0.75;
+            boolean reached = dx * dx + dz * dz < REACHED_SQUARED
+                    && Math.abs(player.getY() - target.y) <= yTolerance;
+            // A vertical edge has no horizontal direction to be "past"; it can only be
+            // completed by actually reaching the waypoint.
+            boolean passed = horizontalEdge
                     && (player.getX() - target.x) * edgeX
                     + (player.getZ() - target.z) * edgeZ >= 0.0;
             if (!reached && !passed) break;
-            index++;
-            bestRemaining = Double.POSITIVE_INFINITY;
-            lastProgressTick = ticks;
+            waypointAdvanced();
+        }
+        orbitBreaker(player);
+    }
+
+    private void waypointAdvanced() {
+        index++;
+        bestRemaining = Double.POSITIVE_INFINITY;
+        lastProgressTick = ticks;
+        closestApproach = Double.POSITIVE_INFINITY;
+        recedeTicks = 0;
+    }
+
+    /**
+     * Circling an intermediate waypoint we brushed but never "reached" (typical on hills,
+     * where the Y check used to fail forever) shows up as the horizontal distance growing
+     * again after a close pass. Give up on that waypoint and steer for the next one.
+     */
+    private void orbitBreaker(ClientPlayerEntity player) {
+        if (index >= route.waypoints().size() - 1) return; // never skip the final goal
+        Vec3d target = route.waypoints().get(index).position();
+        Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
+        double horizontal = horizontalDistance(feet, target);
+        if (horizontal < closestApproach - 1.0E-3) {
+            closestApproach = horizontal;
+            recedeTicks = 0;
+        } else if (closestApproach < 0.9) {
+            recedeTicks++;
+        }
+        if (recedeTicks >= 4 && Math.abs(player.getY() - target.y) <= 1.5) {
+            waypointAdvanced();
         }
     }
 
@@ -482,7 +534,22 @@ public final class SimFollowTask extends TalosTask {
         }
     }
 
-    private void apply(ClientPlayerEntity player, Input input) {
+    /**
+     * Steering ahead of a corner: once the current waypoint is close, the gaze (and with it
+     * the walk direction) starts blending toward the next one, so turns are carved as smooth
+     * arcs the way a player steers, instead of pivoting on top of every node.
+     */
+    private Vec3d aimPoint(Vec3d feet, PlannedRoute.Waypoint waypoint) {
+        Vec3d target = waypoint.position();
+        if (index + 1 >= route.waypoints().size()) return target;
+        double distance = horizontalDistance(feet, target);
+        if (distance >= 1.6) return target;
+        double blend = Math.min(0.6, (1.6 - distance) / 1.6);
+        return target.lerp(route.waypoints().get(index + 1).position(), blend);
+    }
+
+    private void apply(ClientPlayerEntity player, Input input, MotionState live,
+            PlannedRoute.Waypoint waypoint) {
         // Set the complete desired state directly. Releasing first created a real per-tick
         // false/true pulse that broke continuous sprint-jump holds and bunny-hop momentum.
         client.options.forwardKey.setPressed(input.forward() > .1F);
@@ -492,15 +559,58 @@ public final class SimFollowTask extends TalosTask {
         client.options.jumpKey.setPressed(input.jump());
         client.options.sprintKey.setPressed(input.sprint());
         client.options.sneakKey.setPressed(input.sneak());
-        // Fast slew instead of a hard snap: routine steering deltas (<45 degrees) still
-        // complete in a single tick — jumps stay accurate — while big course changes take
-        // two or three smooth steps instead of teleporting the view.
-        float delta = net.minecraft.util.math.MathHelper.wrapDegrees(input.yaw() - player.getYaw());
-        float yaw = Math.abs(delta) <= 45.0F ? input.yaw()
-                : player.getYaw() + Math.copySign(45.0F + Math.abs(delta) * 0.35F, delta);
+        steerYaw(player, input.yaw());
+        // Water pitch is owned by the swim controller; on land the gaze is humanized.
+        if (live.fluid() == MotionState.Fluid.NONE) steerPitch(player, waypoint);
+    }
+
+    /**
+     * Humanized view control: turn speed is sampled from the active humanization profile,
+     * approached with bounded angular acceleration and eased out near the target, with
+     * profile-scaled noise while turning. Small corrections drift; big course changes are
+     * quick flicks that decelerate — never a snap. The closed rollout loop re-decides from
+     * the real state every tick, so the lagging view stays accurate.
+     */
+    private void steerYaw(ClientPlayerEntity player, float targetYaw) {
+        HumanizationProfile profile = TalosClient.humanizer().defaultProfile();
+        if (maxTurnSpeed <= 0.0) {
+            maxTurnSpeed = Math.max(6.0, profile.rotationSpeedDegPerTick().sample(steerRng));
+        }
+        double delta = net.minecraft.util.math.MathHelper.wrapDegrees(targetYaw - player.getYaw());
+        double cap = Math.abs(delta) > 60.0 ? Math.max(maxTurnSpeed * 2.5, 28.0) : maxTurnSpeed;
+        double desired = Math.max(-cap, Math.min(cap, delta * 0.45));
+        double accel = Math.max(2.0, profile.maxAngularAccelDegPerTick2());
+        yawVelocity += Math.max(-accel, Math.min(accel, desired - yawVelocity));
+        double jitter = Math.abs(delta) > 1.0
+                ? steerRng.nextGaussian() * profile.pathDeviationStdev() * 1.5 : 0.0;
+        float yaw = (float) (player.getYaw() + yawVelocity + jitter);
+        if (Math.abs(delta) < 1.2 && Math.abs(yawVelocity) < 1.2) {
+            yaw = (float) (player.getYaw() + delta * 0.6); // settle without a visible snap
+            yawVelocity *= 0.5;
+        }
         player.setYaw(yaw);
         player.setHeadYaw(yaw);
         player.setBodyYaw(yaw);
+    }
+
+    /**
+     * Land pitch never affects movement, so the gaze is free to look where a player would:
+     * gently toward the route ahead, with a slowly wandering offset so the view is alive
+     * instead of locked to the horizon.
+     */
+    private void steerPitch(ClientPlayerEntity player, PlannedRoute.Waypoint waypoint) {
+        if (--pitchWanderTicks <= 0) {
+            pitchWanderTicks = 25 + steerRng.nextInt(35);
+            pitchWander = steerRng.nextGaussian() * 3.5;
+        }
+        Vec3d eye = player.getEyePos();
+        Vec3d target = waypoint.position();
+        double horizontal = Math.max(horizontalDistance(eye, target), 3.0);
+        double toward = Math.toDegrees(Math.atan2(eye.y - (target.y + 1.2), horizontal));
+        double desired = Math.max(-30.0, Math.min(35.0, toward + pitchWander));
+        double step = Math.max(-2.5, Math.min(2.5, desired - player.getPitch()));
+        player.setPitch((float) (player.getPitch() + step
+                + steerRng.nextGaussian() * 0.12));
     }
 
     private void updateAirMode(ClientPlayerEntity player) {

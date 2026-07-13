@@ -218,9 +218,27 @@ def _ensure_running():
     _talos_host.on("tick", _pump)
 
 
+def _script_frames(error):
+    """Traceback frames from the user's script only - engine internals are noise."""
+    return [frame for frame in _traceback.extract_tb(error.__traceback__)
+            if not frame.filename.startswith("embedded:") and not frame.filename.startswith("<")]
+
+
 def _report(where, error):
-    print(f"error in {where}: {type(error).__name__}: {error}", file=_sys.stderr)
-    _traceback.print_exc(file=_sys.stderr)
+    frames = _script_frames(error)
+    at = ""
+    if frames:
+        last = frames[-1]
+        at = f" ({last.filename.rsplit('/', 1)[-1]}, line {last.lineno})"
+    # Expected in-game failures (path blocked, target gone, ...) get ONE readable line;
+    # only genuine script bugs earn a (script-frames-only) traceback.
+    print(f"{where} failed: {type(error).__name__}: {error}{at}", file=_sys.stderr)
+    if not isinstance(error, _errors.TalosError):
+        for frame in frames:
+            print(f"  {frame.filename.rsplit('/', 1)[-1]}, line {frame.lineno}, in {frame.name}",
+                  file=_sys.stderr)
+            if frame.line:
+                print(f"    {frame.line}", file=_sys.stderr)
 
 
 def _launch():

@@ -62,7 +62,8 @@ public final class BreakBlockAction extends SimpleTask {
 
     private void prepare(MinecraftClient client) {
         original = client.world.getBlockState(target);
-        if (original.isAir()) { finish(false, "Target block is already air"); return; }
+        // The desired end state (block gone) already holds — that's success, not an error.
+        if (original.isAir()) { finish(true, "Block was already clear"); return; }
         if (!withinReach(client)) { finish(false, "Block is out of reach"); return; }
         int slot = bestToolSlot(client, original);
         WeaponSelector.select(client, slot);

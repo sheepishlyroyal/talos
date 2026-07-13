@@ -11,7 +11,6 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import dev.talos.client.script.ScriptEngine;
-import dev.talos.client.blockeditor.screen.BlockEditorScreen;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.minecraft.command.argument.IdentifierArgumentType;
 import net.minecraft.text.Text;
@@ -112,13 +111,6 @@ public final class TalosCommands {
                                 .then(directionNode(CoordsCommand::executeDirection))))
                 .then(ClientCommandManager.literal("ui")
                         .executes(UiCommand::execute))
-                .then(ClientCommandManager.literal("editor")
-                        .executes(context -> {
-                            var client = context.getSource().getClient();
-                            // Chat closes after command dispatch, so defer opening by one client task.
-                            client.send(() -> client.setScreen(new BlockEditorScreen()));
-                            return 1;
-                        }))
                 .then(ClientCommandManager.literal("script")
                         .then(ClientCommandManager.literal("run")
                                 .then(ClientCommandManager.argument("name", StringArgumentType.word())

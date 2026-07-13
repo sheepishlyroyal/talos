@@ -199,7 +199,8 @@ public final class PlayerMotion {
         return result;
     }
 
-    private static double slipperinessBelow(World world, Vec3d position) {
+    /** Slipperiness of the block under these feet (0.6 normal ground, 0.98 ice). */
+    public static double slipperinessBelow(World world, Vec3d position) {
         BlockPos below = BlockPos.ofFloored(position.x, position.y - 0.001, position.z);
         BlockState state = world.getBlockState(below);
         // AbstractBlock.AbstractBlockState.getBlock() and Block.getSlipperiness() are public.

@@ -1,6 +1,6 @@
 package dev.talos.client.ui.screen;
 
-import dev.talos.client.blockeditor.util.TalosGuiScale;
+import dev.talos.client.ui.util.TalosGuiScale;
 import dev.talos.client.ui.anim.Animation;
 import dev.talos.client.ui.anim.EaseOutQuad;
 import dev.talos.client.ui.draw.TalosUi;

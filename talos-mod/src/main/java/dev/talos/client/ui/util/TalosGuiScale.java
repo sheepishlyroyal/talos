@@ -1,4 +1,4 @@
-package dev.talos.client.blockeditor.util;
+package dev.talos.client.ui.util;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.util.Window;
