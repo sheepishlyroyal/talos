@@ -118,7 +118,11 @@ public final class SimPathfinder {
                 for (Edge edge : edges(world, node, profile, opts)) {
                     BlockPos edgeCell = cell(edge.state().position());
                     int edgeHeading = heading(edge.state().velocity(), edge.fallbackHeading());
-                    double g = node.g() + edge.cost();
+                    // A small direction-change cost keeps equal-time routes from tying, so
+                    // successive re-plans stop flip-flopping between mirrored zigzags and the
+                    // chosen line stays straight wherever straight is possible.
+                    double g = node.g() + edge.cost()
+                            + 0.75 * headingSteps(node.heading(), edgeHeading);
                     Node next = new Node(edge.state(), edgeCell, edgeHeading, node,
                             edge.primitive(), edge.ticks(), g,
                             heuristic(edgeCell, goal, profile), sequence++);
@@ -234,7 +238,11 @@ public final class SimPathfinder {
                         Math.abs(reached.getZ() - origin.getZ()));
                 if (arc && (horizontal < 1 || horizontal > 4)) return null;
                 if (!arc && primitive != Primitive.PLACE && horizontal > 1) return null;
-                return new Edge(state, primitive, tick, tick + bumps * BUMP_PENALTY, direction);
+                // A climbing edge presses against the step face by construction; billing
+                // those inherent bumps made straight ascents look worse than slope zigzags.
+                int billedBumps = reached.getY() > origin.getY() ? 0 : bumps;
+                return new Edge(state, primitive, tick, tick + billedBumps * BUMP_PENALTY,
+                        direction);
             }
         }
         return null;
@@ -254,8 +262,8 @@ public final class SimPathfinder {
             if (state.fluid() == MotionState.Fluid.LAVA) return null;
             BlockPos reached = cell(state.position());
             if (state.onGround() && reached.equals(target)) {
-                return new Edge(state, Primitive.STEP_UP, tick,
-                        tick + bumps * BUMP_PENALTY, direction);
+                // Pressing into the climbed face is the maneuver itself, not lost speed.
+                return new Edge(state, Primitive.STEP_UP, tick, tick, direction);
             }
             // Landing anywhere else means this control does not realize the requested edge.
             if (tick > 1 && state.onGround()) return null;
@@ -408,6 +416,12 @@ public final class SimPathfinder {
 
     private static float yaw(int dx, int dz) {
         return (float) Math.toDegrees(Math.atan2(-dx, dz));
+    }
+
+    /** Angular difference between two 8-way headings, in 45-degree steps (0..4). */
+    private static int headingSteps(int a, int b) {
+        int difference = Math.abs(a - b) % 8;
+        return Math.min(difference, 8 - difference);
     }
 
     private static int heading(Vec3d velocity, int fallback) {
