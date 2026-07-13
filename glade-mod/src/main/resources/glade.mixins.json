@@ -4,7 +4,9 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "InGameHudTitleMixin",
-    "SoundSystemMixin"
+    "SoundSystemMixin",
+    "ClientPlayNetworkHandlerMixin",
+    "ClientConnectionMixin"
   ],
   "injectors": {
     "defaultRequire": 1

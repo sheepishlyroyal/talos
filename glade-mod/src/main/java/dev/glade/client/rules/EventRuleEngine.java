@@ -135,6 +135,17 @@ public final class EventRuleEngine {
         // Open-container content diffs — the chest-indexing primitive.
         CONTAINER_ITEM_GAINED(Kind.TEXT), CONTAINER_ITEM_LOST(Kind.TEXT),
         CONTAINER_TITLE(Kind.TEXT),
+        // Network wave: every S2C packet by id, plus decoded high-value packets.
+        PACKET_RECEIVED(Kind.TEXT), EXPLOSION(Kind.TEXT),
+        BOSSBAR_SHOWN(Kind.TEXT), BOSSBAR_UPDATED(Kind.TEXT), BOSSBAR_REMOVED(Kind.NONE),
+        SIDEBAR_APPEARED(Kind.TEXT), SIDEBAR_REMOVED(Kind.NONE),
+        SIDEBAR_TITLE_CHANGED(Kind.TEXT), SIDEBAR_SCORE_CHANGED(Kind.TEXT),
+        SIDEBAR_LINE_ADDED(Kind.TEXT), SIDEBAR_LINE_REMOVED(Kind.TEXT),
+        // Held-item detail: enchantments and custom names.
+        HELD_ENCHANT(Kind.ITEM_COUNT), HELD_ENCHANTED(Kind.NONE), HELD_HAS_NAME(Kind.NONE),
+        HELD_NAME_CHANGED(Kind.TEXT),
+        // Unload-vs-gone disambiguation (no timers: the chunk-loaded test decides).
+        ENTITY_UNLOADED(Kind.TEXT), ITEM_UNLOADED(Kind.TEXT),
         // Metrics — every one supports instant compares, 'for <seconds>' sustained compares,
         // and 'changes above|below <delta> within <seconds>' windowed net change.
         HEALTH(Kind.COMPARE), HUNGER(Kind.COMPARE), AIR(Kind.COMPARE), XP_LEVEL(Kind.COMPARE),
@@ -156,7 +167,7 @@ public final class EventRuleEngine {
         STUCK_ARROWS(Kind.COMPARE), VEHICLE_SPEED(Kind.COMPARE), EFFECT_COUNT(Kind.COMPARE),
         WORLD_BORDER_DISTANCE(Kind.COMPARE), SERVER_TPS(Kind.COMPARE), YAW(Kind.COMPARE),
         PITCH(Kind.COMPARE), HELD_COUNT(Kind.COMPARE), MAX_HEALTH(Kind.COMPARE),
-        WORLD_AGE(Kind.COMPARE),
+        WORLD_AGE(Kind.COMPARE), BOSSBAR_PERCENT(Kind.COMPARE),
         // Clock.
         TICK_EVERY(Kind.NUMBER);
 
@@ -211,6 +222,11 @@ public final class EventRuleEngine {
     private static double serverTps = 20.0;
     private static long tpsWorldTimeAnchor = -1L;
     private static int tpsClientTickAnchor;
+    private static volatile double bossbarPercent;
+    private static String sidebarTitle;
+    private static Map<String, Integer> sidebarScores = Map.of();
+    /** Item-entity ids whose disappearance the pickup packet already explained. */
+    private static final Set<Integer> explainedPickups = new HashSet<>();
 
     private EventRuleEngine() {}
 
@@ -297,6 +313,59 @@ public final class EventRuleEngine {
 
     public static void onSound(String soundId) {
         fireText(Trigger.SOUND, soundId);
+    }
+
+    /** Generic S2C packet trigger (netty thread; skipped entirely unless a rule wants it). */
+    public static void onPacket(net.minecraft.network.packet.Packet<?> packet) {
+        boolean wanted = false;
+        for (Rule rule : RULES) {
+            if (rule.triggerType() == Trigger.PACKET_RECEIVED) { wanted = true; break; }
+        }
+        if (!wanted || packet == null) return;
+        fireText(Trigger.PACKET_RECEIVED, packet.getPacketType().id().toString());
+    }
+
+    public static void onExplosion(net.minecraft.util.math.Vec3d center) {
+        fireText(Trigger.EXPLOSION, String.format(Locale.ROOT, "%.0f %.0f %.0f",
+                center.x, center.y, center.z));
+    }
+
+    public static void onBossBarAdd(String name, float percent) {
+        bossbarPercent = percent * 100.0;
+        fireText(Trigger.BOSSBAR_SHOWN, name);
+    }
+
+    public static void onBossBarProgress(float percent) {
+        bossbarPercent = percent * 100.0;
+        fireText(Trigger.BOSSBAR_UPDATED, String.format(Locale.ROOT, "%.0f%%", percent * 100.0));
+    }
+
+    public static void onBossBarName(String name) {
+        fireText(Trigger.BOSSBAR_UPDATED, name);
+    }
+
+    public static void onBossBarRemove() {
+        bossbarPercent = 0.0;
+        fireText(Trigger.BOSSBAR_REMOVED, "");
+    }
+
+    /**
+     * Authoritative pickup attribution: the server's ItemPickupAnimation packet names the
+     * exact collector entity — no proximity guessing, no ambiguity between nearby mobs.
+     * Runs on the client thread at the HEAD of the vanilla handler, before the item entity
+     * is discarded, so the stack is still readable.
+     */
+    public static void onItemPickup(int itemEntityId, int collectorEntityId, int amount) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.world == null) return;
+        Entity itemEntity = client.world.getEntityById(itemEntityId);
+        Entity collector = client.world.getEntityById(collectorEntityId);
+        String stack = itemEntity instanceof net.minecraft.entity.ItemEntity item
+                ? Registries.ITEM.getId(item.getStack().getItem()) + " x" + amount
+                : "unknown x" + amount;
+        String who = collector == null ? "entity#" + collectorEntityId : entityLabel(collector);
+        explainedPickups.add(itemEntityId);
+        fireText(Trigger.ITEM_PICKED_UP, stack + " by " + who);
     }
 
     /** MENTION fires only when a message contains the local player's own name. */
@@ -414,6 +483,7 @@ public final class EventRuleEngine {
             evaluateEntityEvents(client, client.player);
             evaluateContainerEvents(client, client.player,
                     before != null && before.containerOpen, now.containerOpen);
+            evaluateSidebar(client);
         } else {
             trackedEntities = Map.of();
             playerGamemodes = Map.of();
@@ -490,20 +560,18 @@ public final class EventRuleEngine {
         if (!before.offhandItem.equals(now.offhandItem)) {
             fireText(Trigger.OFFHAND_CHANGED, now.offhandItem);
         }
+        fireState(Trigger.HELD_ENCHANTED, before.heldEnchanted, now.heldEnchanted, "");
+        fireState(Trigger.HELD_HAS_NAME, !before.heldName.isEmpty(),
+                !now.heldName.isEmpty(), now.heldName);
+        if (!before.heldName.equals(now.heldName) && !now.heldName.isEmpty()) {
+            fireText(Trigger.HELD_NAME_CHANGED, now.heldName);
+        }
         if (!before.lookingAtEntity.equals(now.lookingAtEntity)
                 && !now.lookingAtEntity.isEmpty()) {
             fireText(Trigger.LOOKING_AT_ENTITY, now.lookingAtEntity);
         }
-        for (Map.Entry<Integer, String> entry : now.entityIds.entrySet()) {
-            if (!before.entityIds.containsKey(entry.getKey())) {
-                fireText(Trigger.ENTITY_SPAWNED, entry.getValue());
-            }
-        }
-        for (Map.Entry<Integer, String> entry : before.entityIds.entrySet()) {
-            if (!now.entityIds.containsKey(entry.getKey())) {
-                fireText(Trigger.ENTITY_REMOVED, entry.getValue());
-            }
-        }
+        // entity_spawned/removed/unloaded now fire from the per-entity tracker, which knows
+        // each entity's last position and can apply the chunk-loaded disambiguation.
         if (!before.vehicle.equals(now.vehicle)) {
             if (!now.vehicle.isEmpty()) fireText(Trigger.MOUNTED, now.vehicle);
             if (!before.vehicle.isEmpty()) fireText(Trigger.DISMOUNTED, before.vehicle);
@@ -593,6 +661,10 @@ public final class EventRuleEngine {
                     else evaluateComparable(rule, count);
                 }
                 case ITEM_COUNT -> {
+                    if (trigger == Trigger.HELD_ENCHANT) {
+                        evaluateComparable(rule, heldEnchantLevel(rule, player));
+                        continue;
+                    }
                     int count = itemCount(rule, player, trigger == Trigger.HOTBAR_ITEM_COUNT);
                     if (count < 0) continue;
                     evaluateComparable(rule, count);
@@ -772,6 +844,7 @@ public final class EventRuleEngine {
             case HELD_COUNT -> player.getMainHandStack().getCount();
             case MAX_HEALTH -> player.getMaxHealth();
             case WORLD_AGE -> client.world.getTime();
+            case BOSSBAR_PERCENT -> bossbarPercent;
             default -> 0.0;
         };
     }
@@ -886,7 +959,8 @@ public final class EventRuleEngine {
             Trigger.VILLAGER_LEVEL_CHANGED, Trigger.PLAYER_HELD_CHANGED,
             Trigger.PLAYER_OFFHAND_CHANGED, Trigger.PLAYER_ARMOR_CHANGED,
             Trigger.PLAYER_GAMEMODE_CHANGED, Trigger.ITEM_SPAWNED, Trigger.ITEM_PICKED_UP,
-            Trigger.ITEM_DESPAWNED, Trigger.PROJECTILE_LAUNCHED);
+            Trigger.ITEM_DESPAWNED, Trigger.PROJECTILE_LAUNCHED, Trigger.ENTITY_SPAWNED,
+            Trigger.ENTITY_REMOVED, Trigger.ENTITY_UNLOADED, Trigger.ITEM_UNLOADED);
 
     private static void evaluateEntityEvents(MinecraftClient client, ClientPlayerEntity player) {
         boolean anyRule = false;
@@ -907,8 +981,9 @@ public final class EventRuleEngine {
                 TrackedEntity current = entry.getValue();
                 TrackedEntity past = before.get(entry.getKey());
                 if (past == null) {
+                    fireText(Trigger.ENTITY_SPAWNED, current.label);
                     if (current.isItem) fireText(Trigger.ITEM_SPAWNED, current.itemStack);
-                    if (current.isProjectile) fireText(Trigger.PROJECTILE_LAUNCHED, current.type);
+                    if (current.isProjectile) fireText(Trigger.PROJECTILE_LAUNCHED, current.label);
                     continue;
                 }
                 diffEntity(past, current);
@@ -916,26 +991,29 @@ public final class EventRuleEngine {
             for (Map.Entry<Integer, TrackedEntity> entry : before.entrySet()) {
                 if (now.containsKey(entry.getKey())) continue;
                 TrackedEntity gone = entry.getValue();
+                // The pickup packet is the authoritative explanation; anything it claimed
+                // needs no further interpretation here.
+                if (gone.isItem && explainedPickups.remove(entry.getKey())) continue;
+                // No timers, no guessing: if the chunk at the entity's last position is
+                // still loaded, it truly vanished there; otherwise it merely unloaded
+                // with its chunk and may come back.
+                boolean chunkStillLoaded = client.world.isChunkLoaded(
+                        ((int) Math.floor(gone.x)) >> 4, ((int) Math.floor(gone.z)) >> 4);
                 if (gone.isItem) {
-                    // Someone within pickup range at the item's last position = a pickup.
-                    TrackedEntity collector = null;
-                    double best = 2.5 * 2.5;
-                    for (TrackedEntity candidate : now.values()) {
-                        if (!candidate.living) continue;
-                        double dx = candidate.x - gone.x, dy = candidate.y - gone.y,
-                                dz = candidate.z - gone.z;
-                        double distance = dx * dx + dy * dy + dz * dz;
-                        if (distance < best) { best = distance; collector = candidate; }
-                    }
-                    if (collector != null) fireText(Trigger.ITEM_PICKED_UP,
-                            gone.itemStack + " by " + collector.label);
-                    else fireText(Trigger.ITEM_DESPAWNED, gone.itemStack);
+                    fireText(chunkStillLoaded ? Trigger.ITEM_DESPAWNED : Trigger.ITEM_UNLOADED,
+                            gone.itemStack);
+                    continue;
                 }
-                if (gone.living && gone.health <= 0.0F) {
+                if (!chunkStillLoaded) {
+                    fireText(Trigger.ENTITY_UNLOADED, gone.label);
+                } else if (gone.living && gone.health <= 0.0F) {
                     fireText(Trigger.ENTITY_DIED, gone.label);
+                } else {
+                    fireText(Trigger.ENTITY_REMOVED, gone.label);
                 }
             }
         }
+        explainedPickups.clear();
 
         // Gamemodes come from the tab list, not the entity, and cover the local player too.
         Map<String, String> modes = new HashMap<>();
@@ -1007,10 +1085,21 @@ public final class EventRuleEngine {
         }
     }
 
+    /**
+     * Stable identity string: {@code type#networkId[/name]}. The network id is unique for
+     * the session and is how follow-up commands can target the exact same entity; players
+     * and named mobs also carry their name.
+     */
+    public static String entityLabel(Entity entity) {
+        String type = Registries.ENTITY_TYPE.getId(entity.getType()).toString();
+        String label = type + "#" + entity.getId();
+        return entity instanceof PlayerEntity || entity.hasCustomName()
+                ? label + "/" + entity.getName().getString() : label;
+    }
+
     private static TrackedEntity track(Entity entity) {
         String type = Registries.ENTITY_TYPE.getId(entity.getType()).toString();
-        String label = entity instanceof PlayerEntity || entity.hasCustomName()
-                ? type + "/" + entity.getName().getString() : type;
+        String label = entityLabel(entity);
         boolean living = entity instanceof net.minecraft.entity.LivingEntity;
         String hand = "", offhand = "", armor = "";
         boolean usingItem = false, blocking = false, sleeping = false, baby = false;
@@ -1090,6 +1179,62 @@ public final class EventRuleEngine {
         }
     }
 
+    /** Scoreboard sidebar: appearance, title, and per-line score diffs. */
+    private static void evaluateSidebar(MinecraftClient client) {
+        boolean wanted = false;
+        for (Rule rule : RULES) {
+            switch (rule.triggerType()) {
+                case SIDEBAR_APPEARED, SIDEBAR_REMOVED, SIDEBAR_TITLE_CHANGED,
+                        SIDEBAR_SCORE_CHANGED, SIDEBAR_LINE_ADDED, SIDEBAR_LINE_REMOVED ->
+                        wanted = true;
+                default -> { }
+            }
+        }
+        if (!wanted) { sidebarTitle = null; sidebarScores = Map.of(); return; }
+
+        net.minecraft.scoreboard.ScoreboardObjective objective = client.world.getScoreboard()
+                .getObjectiveForSlot(net.minecraft.scoreboard.ScoreboardDisplaySlot.SIDEBAR);
+        if (objective == null) {
+            if (sidebarTitle != null) fireText(Trigger.SIDEBAR_REMOVED, "");
+            sidebarTitle = null;
+            sidebarScores = Map.of();
+            return;
+        }
+        String title = objective.getDisplayName().getString();
+        Map<String, Integer> scores = new HashMap<>();
+        for (net.minecraft.scoreboard.ScoreboardEntry entry
+                : client.world.getScoreboard().getScoreboardEntries(objective)) {
+            scores.put(entry.owner(), entry.value());
+        }
+        if (sidebarTitle == null) {
+            fireText(Trigger.SIDEBAR_APPEARED, title);
+        } else {
+            if (!sidebarTitle.equals(title)) fireText(Trigger.SIDEBAR_TITLE_CHANGED, title);
+            for (Map.Entry<String, Integer> entry : scores.entrySet()) {
+                Integer old = sidebarScores.get(entry.getKey());
+                if (old == null) fireText(Trigger.SIDEBAR_LINE_ADDED, entry.getKey());
+                else if (!old.equals(entry.getValue())) fireText(Trigger.SIDEBAR_SCORE_CHANGED,
+                        entry.getKey() + ": " + entry.getValue());
+            }
+            for (String owner : sidebarScores.keySet()) {
+                if (!scores.containsKey(owner)) fireText(Trigger.SIDEBAR_LINE_REMOVED, owner);
+            }
+        }
+        sidebarTitle = title;
+        sidebarScores = scores;
+    }
+
+    /** Held-item enchantment level for HELD_ENCHANT rules; 0 when absent. */
+    private static int heldEnchantLevel(Rule rule, ClientPlayerEntity player) {
+        var enchantments = player.getMainHandStack().getEnchantments();
+        if (enchantments.isEmpty()) return 0;
+        String wanted = rule.block.contains(":") ? rule.block : "minecraft:" + rule.block;
+        for (var entry : enchantments.getEnchantments()) {
+            if (entry.getIdAsString().equals(wanted)) return enchantments.getLevel(entry);
+        }
+        return 0;
+    }
+
     /** Server TPS estimated from world-time advancement over a rolling five-second window. */
     private static void updateServerTps(MinecraftClient client) {
         long worldTime = client.world.getTime();
@@ -1129,7 +1274,7 @@ public final class EventRuleEngine {
             float fallDistance, double velocityY, boolean windowFocused, String screenName,
             String offhandItem, String lookingAtEntity, boolean hotbarEmpty,
             boolean armorMissing, boolean containerFull, boolean containerEmpty,
-            boolean projectileIncoming, Map<Integer, String> entityIds) {
+            boolean projectileIncoming, boolean heldEnchanted, String heldName) {
 
         static Snapshot capture(MinecraftClient client) {
             ClientPlayerEntity player = client.player;
@@ -1138,7 +1283,7 @@ public final class EventRuleEngine {
                         false, false, false, false, "", "", false, 0, false, false, Set.of(),
                         Map.of(), "", "", "", "", "", 0, 0, false, false, Set.of(), BlockPos.ORIGIN,
                         false, false, false, false, false, false, false, false, 0.0F, 0.0,
-                        false, "", "", "", false, false, false, false, false, Map.of());
+                        false, "", "", "", false, false, false, false, false, false, "");
             }
             ItemStack held = player.getMainHandStack();
             Set<String> effects = new HashSet<>();
@@ -1187,10 +1332,7 @@ public final class EventRuleEngine {
                     instanceof net.minecraft.util.hit.EntityHitResult entityHit
                     ? Registries.ENTITY_TYPE.getId(entityHit.getEntity().getType()).toString() : "";
             boolean projectileIncoming = false;
-            Map<Integer, String> entityIds = new HashMap<>();
             for (Entity entity : client.world.getEntities()) {
-                entityIds.put(entity.getId(),
-                        Registries.ENTITY_TYPE.getId(entity.getType()).toString());
                 if (!projectileIncoming
                         && entity instanceof net.minecraft.entity.projectile.PersistentProjectileEntity
                         && entity.squaredDistanceTo(player) < 144.0
@@ -1227,7 +1369,8 @@ public final class EventRuleEngine {
                     lookingAtEntity, hotbarEmpty, armorMissing,
                     containerSlots > 0 && containerFilled == containerSlots,
                     containerSlots > 0 && containerFilled == 0,
-                    projectileIncoming, entityIds);
+                    projectileIncoming, held.hasEnchantments(),
+                    held.getCustomName() == null ? "" : held.getCustomName().getString());
         }
 
         private static String blockId(MinecraftClient client, BlockPos pos) {
