@@ -11,7 +11,7 @@ import {
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'reconnecting';
 
-export interface GladeConnectionOptions {
+export interface TalosConnectionOptions {
     host: string;
     port: number;
     tokenPath: string;
@@ -28,7 +28,7 @@ const MAX_BACKOFF_MS = 30_000;
 const BACKOFF_MULTIPLIER = 2;
 
 /**
- * Wraps a single WebSocket connection to the Glade mod's localhost server.
+ * Wraps a single WebSocket connection to the Talos mod's localhost server.
  *
  * Security invariants enforced here (see PROTOCOL.md):
  *  - Only ever connects to ws://127.0.0.1:<port> or ws://<host>:<port> where
@@ -41,7 +41,7 @@ const BACKOFF_MULTIPLIER = 2;
  *    `push_script` / `run` frames automatically. Re-running a script after
  *    a reconnect is always a fresh, explicit user action (see extension.ts).
  */
-export class GladeConnection {
+export class TalosConnection {
     private ws: WebSocket | undefined;
     private state: ConnectionState = 'disconnected';
     private backoffMs = INITIAL_BACKOFF_MS;
@@ -53,7 +53,7 @@ export class GladeConnection {
      *  after the user has moved on. */
     private wantConnected = false;
 
-    constructor(private readonly options: GladeConnectionOptions) {}
+    constructor(private readonly options: TalosConnectionOptions) {}
 
     getState(): ConnectionState {
         return this.state;
@@ -68,7 +68,7 @@ export class GladeConnection {
     }
 
     private readToken(): string {
-        const resolved = GladeConnection.resolveTokenPath(this.options.tokenPath);
+        const resolved = TalosConnection.resolveTokenPath(this.options.tokenPath);
         const raw = fs.readFileSync(resolved, 'utf8');
         return raw.trim();
     }
@@ -100,7 +100,7 @@ export class GladeConnection {
             token = this.readToken();
         } catch (err) {
             this.diagnostic(
-                `Could not read Glade token file at ${GladeConnection.resolveTokenPath(this.options.tokenPath)}: ${errMessage(err)}`
+                `Could not read Talos token file at ${TalosConnection.resolveTokenPath(this.options.tokenPath)}: ${errMessage(err)}`
             );
             this.setState('disconnected');
             this.wantConnected = false;
@@ -108,7 +108,7 @@ export class GladeConnection {
         }
 
         if (token.length === 0) {
-            this.diagnostic('Glade token file is empty.');
+            this.diagnostic('Talos token file is empty.');
             this.setState('disconnected');
             this.wantConnected = false;
             return;
@@ -119,7 +119,7 @@ export class GladeConnection {
         // effectively remote code execution in the running game client.
         const host = this.options.host;
         if (!isLoopbackHost(host)) {
-            this.diagnostic(`Refusing to connect to non-loopback host "${host}". Glade only connects to 127.0.0.1.`);
+            this.diagnostic(`Refusing to connect to non-loopback host "${host}". Talos only connects to 127.0.0.1.`);
             this.setState('disconnected');
             this.wantConnected = false;
             return;
@@ -190,7 +190,7 @@ export class GladeConnection {
 
     private rawSend(msg: ClientToServerMessage): void {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            throw new Error('Glade: not connected');
+            throw new Error('Talos: not connected');
         }
         this.ws.send(JSON.stringify(msg));
     }
@@ -198,7 +198,7 @@ export class GladeConnection {
     /** Sends a message. Throws if not fully connected (authenticated). */
     send(msg: ClientToServerMessage): void {
         if (this.state !== 'connected') {
-            throw new Error('Glade: cannot send, not connected');
+            throw new Error('Talos: cannot send, not connected');
         }
         this.rawSend(msg);
     }

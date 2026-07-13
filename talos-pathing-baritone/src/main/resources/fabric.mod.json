@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "talos-pathing-baritone",
+  "version": "${version}",
+  "name": "Talos Baritone Adapter",
+  "environment": "client",
+  "entrypoints": {
+    "talos:pathing_engine": ["dev.talos.pathing.baritone.BaritoneEngineProvider"]
+  },
+  "depends": { "fabricloader": ">=0.19.3", "minecraft": "~1.21.11", "talos": "*" },
+  "suggests": { "baritone": "*" }
+}

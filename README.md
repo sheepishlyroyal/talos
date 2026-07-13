@@ -1,6 +1,6 @@
 # Talos
 
-Talos (Java packages still `dev.glade`, formerly branded "Glade") is a **client-side**
+Talos (Java packages still `dev.talos`, formerly branded "Talos") is a **client-side**
 Minecraft 1.21.11 Fabric automation mod. It gives you a physics-simulated pathfinder that
 mines/bridges/pillars through obstacles, a 206-family event-rule engine that can react to
 almost anything the client observes, humanized aim and input macros, and an embedded GraalPy
@@ -8,7 +8,7 @@ Python runtime (plus a VS Code bridge) for scripting on top of all of it. Everyt
 client commands — no server permission level, no server-side mod required.
 
 - **Pathfinding** — a from-scratch A* planner over a deterministic mirror of vanilla player
-  physics (`glade-mod/src/main/java/dev/glade/client/pathing/sim/`), not a waypoint graph. It
+  physics (`talos-mod/src/main/java/dev/talos/client/pathing/sim/`), not a waypoint graph. It
   mines, bridges, pillars, shafts, and swims as needed, tick-sliced so it never freezes the
   client, replanning live off real player state.
 - **Event rules** — `/talos on <trigger> ... run <command>`, ~206 unique trigger families
@@ -19,7 +19,7 @@ client commands — no server permission level, no server-side mod required.
   snap.
 - **Macros** — channel-selective recording/replay of real per-tick input (movement, jump,
   sneak, sprint, clicks, look, hotbar).
-- **Scripting** — embedded GraalPy (`import glade`), an in-game block editor, and a VS Code
+- **Scripting** — embedded GraalPy (`import talos`), an in-game block editor, and a VS Code
   extension that pushes/runs scripts over a local, token-gated WebSocket.
 
 ## Requirements & install
@@ -32,24 +32,24 @@ client commands — no server permission level, no server-side mod required.
 | Java | 21 (build + run) |
 | Yarn mappings | 1.21.11+build.6 |
 
-Optional: the separately distributed `glade-pathing-baritone` adapter is picked up
+Optional: the separately distributed `talos-pathing-baritone` adapter is picked up
 automatically if installed and takes priority over the built-in pathfinder — but Talos'
-own sim-based pathfinder (`GladePathingEngine`) is **always available** with no dependency,
+own sim-based pathfinder (`TalosPathingEngine`) is **always available** with no dependency,
 so `/talos goto` works out of the box.
 
 Build the mod jar with a Java 21 `JAVA_HOME`:
 
 ```bash
 export JAVA_HOME=$(/usr/libexec/java_home -v 21)   # macOS example
-./gradlew :glade-mod:remapJar
+./gradlew :talos-mod:remapJar
 ```
 
-The output jar lands in `glade-mod/build/libs/`. Drop it into your Fabric `mods/` folder
+The output jar lands in `talos-mod/build/libs/`. Drop it into your Fabric `mods/` folder
 alongside a matching Fabric API build.
 
 ## Commands
 
-Every command lives under `/talos`; `/glade` is kept as a full alias (redirects to the same
+Every command lives under `/talos`; `/talos` is kept as a full alias (redirects to the same
 command tree — every example below works with either prefix).
 
 ### Pathfinding & world actions
@@ -221,7 +221,7 @@ against a moving target, so the crosshair trails it instead of re-snapping every
 
 ## Trigger catalog (206 unique families)
 
-`Trigger` enum: `glade-mod/src/main/java/dev/glade/client/rules/EventRuleEngine.java`. Grouped
+`Trigger` enum: `talos-mod/src/main/java/dev/talos/client/rules/EventRuleEngine.java`. Grouped
 as documented there:
 
 - **Vitals** — health/hunger/air thresholds, damage taken, healed, death, respawn, XP level.
@@ -277,13 +277,13 @@ has a named sibling: `packet_received matching <id>` (any S2C packet), `entity_s
 
 ## Scripting, block editor, VS Code bridge
 
-`/talos script run <name>` runs `.minecraft/glade/scripts/<name>.py` through an embedded
-GraalPy runtime (`glade-graalpy-runtime`) exposing a small curated `import glade` API
+`/talos script run <name>` runs `.minecraft/talos/scripts/<name>.py` through an embedded
+GraalPy runtime (`talos-graalpy-runtime`) exposing a small curated `import talos` API
 (`goto`/`goto_near`/`goto_xz`, `find_block`/`find_entity`/`find_item`, `place_block`/
-`break_block`/`kill_nearest`/`look_at`, humanization controls, `@glade.on(...)` event hooks).
+`break_block`/`kill_nearest`/`look_at`, humanization controls, `@talos.on(...)` event hooks).
 `/talos script stop` hard-stops it, even mid-loop. `/talos editor` opens the in-game block
 editor screen. `/talos bridge allow` / `/talos bridge status` control the local, token-gated
-WebSocket server (`~/.glade/token`) that the `vscode-extension/` uses to push and run scripts
+WebSocket server (`~/.talos/token`) that the `vscode-extension/` uses to push and run scripts
 from VS Code with live log streaming. Full details: `docs/scripting.md`, `docs/vscode.md`,
 `docs/ui.md`.
 
@@ -293,8 +293,8 @@ from VS Code with live log streaming. Full details: `docs/scripting.md`, `docs/v
 |---|---|
 | `~/.talos/rules.json` | Persisted event rules and schedules. |
 | `~/.talos/macros/` | Recorded input macros (JSON, per-tick frames). |
-| `~/.glade/token` | Per-session VS Code bridge auth token (regenerated every launch). |
-| `.minecraft/glade/scripts/` | Python scripts run by `/talos script run`. |
+| `~/.talos/token` | Per-session VS Code bridge auth token (regenerated every launch). |
+| `.minecraft/talos/scripts/` | Python scripts run by `/talos script run`. |
 
 ## Limitations
 
@@ -312,8 +312,8 @@ from VS Code with live log streaming. Full details: `docs/scripting.md`, `docs/v
   the humanized cube-aim rewrite) have not all been exercised against a live server yet. Expect
   rough edges in newly landed trigger families before well-worn ones like pathing/mining.
 - `docs/commands.md` and `docs/vscode.md` in this repo predate several of the changes above
-  (older `/glade`-only naming, an outdated "Baritone required" pathing error). Treat
-  `GladeCommands.java` and this README as the source of truth over those docs until they're
+  (older `/talos`-only naming, an outdated "Baritone required" pathing error). Treat
+  `TalosCommands.java` and this README as the source of truth over those docs until they're
   refreshed.
 
 ## Development
@@ -322,12 +322,12 @@ Multi-module Gradle repo (Fabric Loom):
 
 | Module | Purpose |
 |---|---|
-| `glade-mod/` | The mod itself — commands, pathing, rules, macros, aim, bridge, scripting glue. |
-| `glade-pathing-baritone/` | Optional adapter that lets Baritone (if installed) supersede the built-in pathfinder. |
-| `glade-graalpy-runtime/` | Embedded GraalPy runtime + the `glade` Python package. |
+| `talos-mod/` | The mod itself — commands, pathing, rules, macros, aim, bridge, scripting glue. |
+| `talos-pathing-baritone/` | Optional adapter that lets Baritone (if installed) supersede the built-in pathfinder. |
+| `talos-graalpy-runtime/` | Embedded GraalPy runtime + the `talos` Python package. |
 | `vscode-extension/` | VS Code extension for pushing/running scripts over the bridge. |
 | `docs/` | Longer-form docs: architecture, commands, scripting, UI, VS Code bridge. |
 
 Active development is on the `pathing-v2` branch (the physics-simulated pathfinder rewrite);
-`glade-integration` and the `glade-p*`/`wt/cmd*` branches are earlier work already merged
-forward. Build with `./gradlew :glade-mod:remapJar` under a Java 21 `JAVA_HOME`.
+`talos-integration` and the `talos-p*`/`wt/cmd*` branches are earlier work already merged
+forward. Build with `./gradlew :talos-mod:remapJar` under a Java 21 `JAVA_HOME`.

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "talos",
+  "version": "${version}",
+  "name": "Talos",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.talos.client.TalosClientMod", "dev.talos.client.script.ScriptClientInit"],
+    "talos:pathing_engine": ["dev.talos.client.pathing.talos.TalosPathingEngineProvider"]
+  },
+  "mixins": ["talos.mixins.json"],
+  "accessWidener": "talos.accesswidener",
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

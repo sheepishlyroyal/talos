@@ -1,40 +1,40 @@
-# Glade Scripting — VS Code extension
+# Talos Scripting — VS Code extension
 
-Write Python automation scripts for the Glade Minecraft Fabric client mod
+Write Python automation scripts for the Talos Minecraft Fabric client mod
 and run them straight from VS Code. The extension pushes your script over a
 local WebSocket to the running game client and streams its logs back into a
-"Glade" output channel.
+"Talos" output channel.
 
 ## Install (development)
 
 1. `cd vscode-extension && npm install && npm run compile`
 2. Open this folder in VS Code and press **F5** — this launches an Extension
-   Development Host with Glade active.
+   Development Host with Talos active.
 3. To produce a shareable `.vsix`: `npx vsce package` (requires `vsce`;
    `npm install -g @vscode/vsce` or `npx` will fetch it on demand).
 
 ## Usage
 
-1. Launch Minecraft with the Glade mod loaded. On startup the mod writes a
-   fresh per-session token to `~/.glade/token` (`%USERPROFILE%\.glade\token`
+1. Launch Minecraft with the Talos mod loaded. On startup the mod writes a
+   fresh per-session token to `~/.talos/token` (`%USERPROFILE%\.talos\token`
    on Windows) and starts its WebSocket server on `127.0.0.1:43077`.
 2. Open a `.py` script in VS Code.
-3. Run **Glade: Run Script in Minecraft** from the command palette, or
+3. Run **Talos: Run Script in Minecraft** from the command palette, or
    press **Cmd+Alt+Enter** / **Ctrl+Alt+Enter**. The extension connects
    (if not already connected), authenticates, pushes your script, and runs
-   it. Output streams live into the **Glade** output channel, which is
+   it. Output streams live into the **Talos** output channel, which is
    revealed automatically.
-4. Run **Glade: Stop Script** to stop whatever's running.
+4. Run **Talos: Stop Script** to stop whatever's running.
 5. The status bar shows connection state (`●` connected, `○`
    disconnected/reconnecting, spinner while connecting) — click it to
-   trigger **Glade: Reconnect** at any time.
+   trigger **Talos: Reconnect** at any time.
 
-### Autocomplete for the `glade` API
+### Autocomplete for the `talos` API
 
-Python scripts run inside the mod's embedded runtime with a `glade` module
+Python scripts run inside the mod's embedded runtime with a `talos` module
 already in scope (`goto`, `find_block`, `place_block`, `kill_nearest`,
-`player_pos`, the `@glade.on(...)` event decorator, etc.). This extension
-ships type stubs at [`stubs/glade.pyi`](./stubs/glade.pyi) purely for editor
+`player_pos`, the `@talos.on(...)` event decorator, etc.). This extension
+ships type stubs at [`stubs/talos.pyi`](./stubs/talos.pyi) purely for editor
 tooling — drop that file next to your scripts, or point
 `python.analysis.stubPath` at the `stubs/` folder, to get Pylance
 autocomplete and type checking. See the stub file's docstring for both
@@ -44,9 +44,9 @@ options.
 
 | Setting | Default | Description |
 |---|---|---|
-| `glade.host` | `127.0.0.1` | Must be a loopback address. The extension refuses anything else. |
-| `glade.port` | `43077` | Port the mod's WebSocket server listens on. |
-| `glade.tokenPath` | `~/.glade/token` | Path to the per-session auth token file. `~` expands to your home directory. |
+| `talos.host` | `127.0.0.1` | Must be a loopback address. The extension refuses anything else. |
+| `talos.port` | `43077` | Port the mod's WebSocket server listens on. |
+| `talos.tokenPath` | `~/.talos/token` | Path to the per-session auth token file. `~` expands to your home directory. |
 
 ## Security
 
@@ -71,7 +71,7 @@ surface that can execute code should be:
   VS Code.
 
 **Don't run untrusted scripts.** A `.py` file you push through this
-extension has the same capabilities as any other Glade script — treat it
+extension has the same capabilities as any other Talos script — treat it
 with the same caution you'd give any code that controls your game client.
 
 ## Protocol
@@ -95,9 +95,9 @@ vscode-extension/
   tsconfig.json
   src/
     extension.ts       activation, commands, status bar, output channel
-    connection.ts       GladeConnection — WebSocket + reconnect/backoff
+    connection.ts       TalosConnection — WebSocket + reconnect/backoff
     protocol.ts          shared message types (mirrored by the Java server)
   stubs/
-    glade.pyi             Python type stubs for the in-game `glade` API
+    talos.pyi             Python type stubs for the in-game `talos` API
   PROTOCOL.md
 ```

@@ -1,6 +1,6 @@
 /**
- * Glade WebSocket protocol — shared contract between the VS Code extension
- * (client) and the Glade Fabric mod's embedded WebSocket server (host).
+ * Talos WebSocket protocol — shared contract between the VS Code extension
+ * (client) and the Talos Fabric mod's embedded WebSocket server (host).
  *
  * This file is the canonical TypeScript definition. The Java server mirrors
  * these exact message shapes and field names — keep the two in lockstep.
@@ -18,7 +18,7 @@ export const PROTOCOL_VERSION = 1 as const;
 
 /**
  * Must be the FIRST message sent on every connection. The token is read
- * from the local token file (~/.glade/token) and is never placed in the
+ * from the local token file (~/.talos/token) and is never placed in the
  * WebSocket URL/query string (CSWSH hardening — query strings leak into
  * logs, referrers, and browser history-equivalents).
  */
@@ -106,7 +106,7 @@ export type ServerToClientMessage =
     | StatusMessage
     | ScriptDoneMessage;
 
-export type GladeMessage = ClientToServerMessage | ServerToClientMessage;
+export type TalosMessage = ClientToServerMessage | ServerToClientMessage;
 
 // ---------------------------------------------------------------------------
 // Helpers

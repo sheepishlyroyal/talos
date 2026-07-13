@@ -10,5 +10,5 @@ pluginManagement {
     }
 }
 
-rootProject.name = "glade"
-include("glade-mod", "glade-pathing-baritone", "glade-graalpy-runtime")
+rootProject.name = "talos"
+include("talos-mod", "talos-pathing-baritone", "talos-graalpy-runtime")

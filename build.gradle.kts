@@ -3,7 +3,7 @@ plugins {
 }
 
 allprojects {
-    group = "dev.glade"
+    group = "dev.talos"
     version = property("mod_version") as String
 
     repositories {

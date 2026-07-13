@@ -1,8 +1,8 @@
-# Glade WebSocket Protocol (v1)
+# Talos WebSocket Protocol (v1)
 
 This document is the human-readable companion to
 [`src/protocol.ts`](./src/protocol.ts), which is the canonical machine
-definition. The Java-side WebSocket server implemented in the Glade Fabric
+definition. The Java-side WebSocket server implemented in the Talos Fabric
 mod must mirror these message shapes and field names exactly. If the two
 drift, bump `PROTOCOL_VERSION` on both sides and reject mismatched versions.
 
@@ -43,8 +43,8 @@ localhost-RPC-with-code-execution surface should be treated (this is a
    Electron version before relying on this alone.
 3. **Token auth, not in the URL.** The mod writes a random per-session
    token to a file only the local OS user can read
-   (`~/.glade/token`, i.e. `os.homedir()/.glade/token`, which on Windows is
-   `%USERPROFILE%\.glade\token`). The client reads that file and sends it
+   (`~/.talos/token`, i.e. `os.homedir()/.talos/token`, which on Windows is
+   `%USERPROFILE%\.talos\token`). The client reads that file and sends it
    in the **first** message on the socket, an `auth` frame. It is **never**
    placed in the connection URL or query string, because URLs end up in
    logs, browser history-equivalents, and are visible to anything that can

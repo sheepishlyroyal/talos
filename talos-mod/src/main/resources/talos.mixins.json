@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "package": "dev.talos.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "InGameHudTitleMixin",
+    "SoundSystemMixin",
+    "ClientPlayNetworkHandlerMixin",
+    "ClientConnectionMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

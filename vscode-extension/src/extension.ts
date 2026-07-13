@@ -1,27 +1,27 @@
 import * as vscode from 'vscode';
-import { GladeConnection, ConnectionState } from './connection';
+import { TalosConnection, ConnectionState } from './connection';
 import { makePushScript, makeRun, makeStop, ServerToClientMessage } from './protocol';
 
-let connection: GladeConnection | undefined;
+let connection: TalosConnection | undefined;
 let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
 /** Name of the script currently pushed/running, so stop/status messages read naturally. */
 let activeScriptName: string | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
-    outputChannel = vscode.window.createOutputChannel('Glade');
+    outputChannel = vscode.window.createOutputChannel('Talos');
     context.subscriptions.push(outputChannel);
 
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    statusBarItem.command = 'glade.reconnect';
+    statusBarItem.command = 'talos.reconnect';
     context.subscriptions.push(statusBarItem);
     renderStatusBar('disconnected');
     statusBarItem.show();
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('glade.runScript', () => void runScript()),
-        vscode.commands.registerCommand('glade.stopScript', () => void stopScript()),
-        vscode.commands.registerCommand('glade.reconnect', () => void reconnect())
+        vscode.commands.registerCommand('talos.runScript', () => void runScript()),
+        vscode.commands.registerCommand('talos.stopScript', () => void stopScript()),
+        vscode.commands.registerCommand('talos.reconnect', () => void reconnect())
     );
 
     context.subscriptions.push({
@@ -38,41 +38,41 @@ export function deactivate(): void {
 }
 
 function config() {
-    const cfg = vscode.workspace.getConfiguration('glade');
+    const cfg = vscode.workspace.getConfiguration('talos');
     return {
         host: cfg.get<string>('host', '127.0.0.1'),
         port: cfg.get<number>('port', 43077),
-        tokenPath: cfg.get<string>('tokenPath', '~/.glade/token'),
+        tokenPath: cfg.get<string>('tokenPath', '~/.talos/token'),
     };
 }
 
 /** Lazily creates the connection object. Does not open a socket by itself. */
-function getConnection(): GladeConnection {
+function getConnection(): TalosConnection {
     if (connection) {
         return connection;
     }
     const { host, port, tokenPath } = config();
-    connection = new GladeConnection({
+    connection = new TalosConnection({
         host,
         port,
         tokenPath,
         onStateChange: (state) => renderStatusBar(state),
         onMessage: (msg) => handleMessage(msg),
-        onDiagnostic: (text) => outputChannel.appendLine(`[glade] ${text}`),
+        onDiagnostic: (text) => outputChannel.appendLine(`[talos] ${text}`),
     });
     return connection;
 }
 
 /** Connects and resolves once authenticated ('connected'), or rejects if the
  *  connection settles into 'disconnected' before that happens. */
-function connectAndWaitReady(conn: GladeConnection, timeoutMs = 10_000): Promise<void> {
+function connectAndWaitReady(conn: TalosConnection, timeoutMs = 10_000): Promise<void> {
     if (conn.getState() === 'connected') {
         return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
             cleanup();
-            reject(new Error('Timed out waiting for Glade connection.'));
+            reject(new Error('Timed out waiting for Talos connection.'));
         }, timeoutMs);
 
         // Poll state via the status bar callback isn't wired for one-shot
@@ -85,7 +85,7 @@ function connectAndWaitReady(conn: GladeConnection, timeoutMs = 10_000): Promise
                 resolve();
             } else if (state === 'disconnected') {
                 cleanup();
-                reject(new Error('Glade connection failed. Check that Minecraft is running with Glade loaded.'));
+                reject(new Error('Talos connection failed. Check that Minecraft is running with Talos loaded.'));
             }
         }, 100);
 
@@ -101,12 +101,12 @@ function connectAndWaitReady(conn: GladeConnection, timeoutMs = 10_000): Promise
 async function runScript(): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
-        void vscode.window.showErrorMessage('Glade: no active editor.');
+        void vscode.window.showErrorMessage('Talos: no active editor.');
         return;
     }
     const doc = editor.document;
     if (doc.languageId !== 'python' && !doc.fileName.endsWith('.py')) {
-        void vscode.window.showErrorMessage('Glade: active file is not a Python (.py) script.');
+        void vscode.window.showErrorMessage('Talos: active file is not a Python (.py) script.');
         return;
     }
 
@@ -115,11 +115,11 @@ async function runScript(): Promise<void> {
 
     try {
         if (conn.getState() !== 'connected') {
-            outputChannel.appendLine('[glade] Connecting...');
+            outputChannel.appendLine('[talos] Connecting...');
             await connectAndWaitReady(conn);
         }
     } catch (err) {
-        void vscode.window.showErrorMessage(`Glade: ${errMessage(err)}`);
+        void vscode.window.showErrorMessage(`Talos: ${errMessage(err)}`);
         return;
     }
 
@@ -130,23 +130,23 @@ async function runScript(): Promise<void> {
         activeScriptName = name;
         conn.send(makePushScript(name, source));
         conn.send(makeRun(name));
-        outputChannel.appendLine(`[glade] Running "${name}"...`);
+        outputChannel.appendLine(`[talos] Running "${name}"...`);
     } catch (err) {
-        void vscode.window.showErrorMessage(`Glade: failed to send script: ${errMessage(err)}`);
+        void vscode.window.showErrorMessage(`Talos: failed to send script: ${errMessage(err)}`);
     }
 }
 
 async function stopScript(): Promise<void> {
     const conn = getConnection();
     if (conn.getState() !== 'connected') {
-        void vscode.window.showWarningMessage('Glade: not connected.');
+        void vscode.window.showWarningMessage('Talos: not connected.');
         return;
     }
     try {
         conn.send(makeStop());
-        outputChannel.appendLine(`[glade] Stop requested${activeScriptName ? ` for "${activeScriptName}"` : ''}.`);
+        outputChannel.appendLine(`[talos] Stop requested${activeScriptName ? ` for "${activeScriptName}"` : ''}.`);
     } catch (err) {
-        void vscode.window.showErrorMessage(`Glade: failed to send stop: ${errMessage(err)}`);
+        void vscode.window.showErrorMessage(`Talos: failed to send stop: ${errMessage(err)}`);
     }
 }
 
@@ -159,12 +159,12 @@ async function reconnect(): Promise<void> {
     connection?.dispose();
     connection = undefined;
     const conn = getConnection();
-    outputChannel.appendLine('[glade] Reconnecting...');
+    outputChannel.appendLine('[talos] Reconnecting...');
     try {
         await connectAndWaitReady(conn);
-        outputChannel.appendLine('[glade] Connected.');
+        outputChannel.appendLine('[talos] Connected.');
     } catch (err) {
-        void vscode.window.showErrorMessage(`Glade: ${errMessage(err)}`);
+        void vscode.window.showErrorMessage(`Talos: ${errMessage(err)}`);
     }
 }
 
@@ -174,11 +174,11 @@ function handleMessage(msg: ServerToClientMessage): void {
             outputChannel.appendLine(formatLog(msg.level, msg.text));
             break;
         case 'status':
-            outputChannel.appendLine(`[glade] status: ${msg.state}`);
+            outputChannel.appendLine(`[talos] status: ${msg.state}`);
             break;
         case 'script_done':
             outputChannel.appendLine(
-                `[glade] script ${msg.success ? 'finished' : 'failed'}${msg.message ? `: ${msg.message}` : ''}`
+                `[talos] script ${msg.success ? 'finished' : 'failed'}${msg.message ? `: ${msg.message}` : ''}`
             );
             activeScriptName = undefined;
             break;
@@ -199,22 +199,22 @@ function scriptNameFor(uri: vscode.Uri): string {
 function renderStatusBar(state: ConnectionState): void {
     switch (state) {
         case 'connected':
-            statusBarItem.text = '$(circle-filled) Glade';
-            statusBarItem.tooltip = 'Glade: connected. Click to reconnect.';
+            statusBarItem.text = '$(circle-filled) Talos';
+            statusBarItem.tooltip = 'Talos: connected. Click to reconnect.';
             break;
         case 'connecting':
         case 'authenticating':
-            statusBarItem.text = '$(sync~spin) Glade';
-            statusBarItem.tooltip = 'Glade: connecting...';
+            statusBarItem.text = '$(sync~spin) Talos';
+            statusBarItem.tooltip = 'Talos: connecting...';
             break;
         case 'reconnecting':
-            statusBarItem.text = '$(circle-outline) Glade';
-            statusBarItem.tooltip = 'Glade: reconnecting... Click to retry now.';
+            statusBarItem.text = '$(circle-outline) Talos';
+            statusBarItem.tooltip = 'Talos: reconnecting... Click to retry now.';
             break;
         case 'disconnected':
         default:
-            statusBarItem.text = '$(circle-outline) Glade';
-            statusBarItem.tooltip = 'Glade: disconnected. Click to connect.';
+            statusBarItem.text = '$(circle-outline) Talos';
+            statusBarItem.tooltip = 'Talos: disconnected. Click to connect.';
             break;
     }
 }
