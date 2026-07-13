@@ -32,8 +32,10 @@ public final class TalosPathingEngine implements PathingEngine {
     /** Runtime escape hatch for the retained AStar/NavigateAndActTask implementation. */
     public static boolean USE_SIM = true;
     private static final Logger LOGGER = LoggerFactory.getLogger(TalosPathingEngine.class);
-    private static final int SIM_NODE_CAP = 40_000;
-    private static final long SIM_SEARCH_NANOS = 150_000_000L;
+    // Budgets are CAPS, not durations — the search returns the moment the goal is found.
+    // Deep caps mean far goals get one complete plan instead of stop-and-replan stutters.
+    private static final int SIM_NODE_CAP = 160_000;
+    private static final long SIM_SEARCH_NANOS = 600_000_000L;
     // Planning gets a dedicated per-tick slice rather than the shared 1-3ms action budget:
     // a pending plan means the player is (or will be) idle, which costs far more than 15ms
     // of one 50ms tick. Worst-case plan latency is therefore ~10 ticks (0.5s), usually 1-3.

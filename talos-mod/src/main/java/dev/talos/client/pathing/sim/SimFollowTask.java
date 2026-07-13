@@ -2,6 +2,7 @@ package dev.talos.client.pathing.sim;
 
 import dev.talos.client.TalosClient;
 import dev.talos.client.humanize.HumanizationProfile;
+import dev.talos.client.humanize.RotationHumanizer;
 import dev.talos.client.humanize.SeededRng;
 import dev.talos.client.pathing.PathResult;
 import dev.talos.client.render.RenderQueue;
@@ -138,10 +139,10 @@ public final class SimFollowTask extends TalosTask {
             finish(true, "Arrived");
             return;
         }
-        // A partial route is extended in the background well before it runs out, so the
-        // follower keeps moving on the old plan while the next one is computed and swapped in.
-        if (!route.reachedGoal() && replanRequest != null && !replanRequested
-                && route.waypoints().size() - index <= Math.max(10, route.waypoints().size() / 3)) {
+        // A PARTIAL route means the planner ran out of budget, not that the route is good:
+        // start extending IMMEDIATELY in the background — waiting until the route nearly
+        // ran out was the visible walk-a-few-steps-then-stop-and-plan stutter.
+        if (!route.reachedGoal() && replanRequest != null && !replanRequested) {
             replanRequested = true;
             replanRequest.run();
         }
@@ -464,6 +465,9 @@ public final class SimFollowTask extends TalosTask {
                         face.x + 0.07, face.y + 0.07, face.z + 0.07),
                 AIM_GAZE_COLOR, PREDICTION_TTL * 3);
         releaseInputs();
+        // Face the block with the eased look before a single swing: converge this tick,
+        // dig on the tick the crosshair actually rests on it.
+        if (!steerLook(player, Vec3d.ofCenter(block), 12.0)) return true;
         BlockState state = client.world.getBlockState(block);
         int best = player.getInventory().getSelectedSlot();
         float speed = player.getInventory().getStack(best).getMiningSpeedMultiplier(state);
@@ -512,6 +516,8 @@ public final class SimFollowTask extends TalosTask {
             if (support.equals(lastPlacement) && ticks - lastPlacementTick < 2) return true;
             Vec3d hit = Vec3d.ofCenter(anchor).add(side.getOffsetX() * .5,
                     side.getOffsetY() * .5, side.getOffsetZ() * .5);
+            // Look at the actual anchor face (eased) before the click lands on it.
+            if (!steerLook(player, hit, 14.0)) return true;
             player.getInventory().setSelectedSlot(slot);
             client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
                     new BlockHitResult(hit, side, anchor, false));
@@ -536,10 +542,12 @@ public final class SimFollowTask extends TalosTask {
         }
         BlockPos anchor = pillarOrigin.down();
         Vec3d hit = Vec3d.ofCenter(anchor).add(0.0, 0.5, 0.0);
+        // Nerdpole gaze: ease the view down onto the anchor while airborne, like a player.
+        boolean aimed = steerLook(player, hit, 22.0);
         player.getInventory().setSelectedSlot(slot);
         // Jump input applies after this tick; place only once the feet clear the target cell,
         // since same-tick jump+place is rejected by the placement collision check.
-        if (player.getY() >= pillarOrigin.getY() + 0.42) {
+        if (aimed && player.getY() >= pillarOrigin.getY() + 0.42) {
             client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
                     new BlockHitResult(hit, Direction.UP, anchor, false));
             player.swingHand(Hand.MAIN_HAND);
@@ -665,6 +673,26 @@ public final class SimFollowTask extends TalosTask {
      * quick flicks that decelerate — never a snap. The closed rollout loop re-decides from
      * the real state every tick, so the lagging view stays accurate.
      */
+    /**
+     * Ease the whole view (yaw AND pitch) onto a world point with the same smoothed turn
+     * machinery used for walking, and report when the crosshair is close enough to act.
+     * Every block the follower breaks or places gates its interaction on this, so edits
+     * only ever happen to blocks the player is visibly looking at.
+     */
+    private boolean steerLook(ClientPlayerEntity player, Vec3d point, double toleranceDegrees) {
+        float[] desired = RotationHumanizer.yawPitchTo(player.getEyePos(), point);
+        steerYaw(player, desired[0]);
+        double pitchStep = (desired[1] - player.getPitch()) * 0.55;
+        pitchStep = Math.max(-14.0, Math.min(14.0, pitchStep));
+        player.setPitch(net.minecraft.util.math.MathHelper.clamp(
+                (float) (player.getPitch() + pitchStep + steerRng.nextGaussian() * 0.15),
+                -90.0F, 90.0F));
+        double yawError = Math.abs(net.minecraft.util.math.MathHelper.wrapDegrees(
+                desired[0] - player.getYaw()));
+        double pitchError = Math.abs(desired[1] - player.getPitch());
+        return yawError <= toleranceDegrees && pitchError <= toleranceDegrees;
+    }
+
     private void steerYaw(ClientPlayerEntity player, float targetYaw) {
         HumanizationProfile profile = TalosClient.humanizer().defaultProfile();
         if (maxTurnSpeed <= 0.0) {
