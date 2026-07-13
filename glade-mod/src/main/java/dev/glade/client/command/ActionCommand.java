@@ -35,18 +35,15 @@ final class ActionCommand {
     static int mineBlock(CommandContext<FabricClientCommandSource> context, int n) throws CommandSyntaxException {
         FabricClientCommandSource source = context.getSource();
         BlockStatePredicate predicate = BlockStatePredicate.fromArgument(context, "blockPredicate");
-        if (n < 1) {
-            source.sendError(Text.literal("n must be >= 1"));
-            return 0;
-        }
 
         int radius = MinecraftClient.getInstance().options.getViewDistance().getValue();
         NthClosestBlockTask task = new NthClosestBlockTask(
                 predicate, radius, n, (found, pos) ->
                         source.getClient().execute(() -> {
                             if (pos == null) {
-                                source.sendError(Text.literal("Only found %d match(es), need at least %d"
-                                        .formatted(found, n)));
+                                source.sendError(Text.literal(
+                                        "Index %d out of range: %d match(es) (0-based, -1 = furthest)"
+                                                .formatted(n, found)));
                                 return;
                             }
                             mine(context, pos);

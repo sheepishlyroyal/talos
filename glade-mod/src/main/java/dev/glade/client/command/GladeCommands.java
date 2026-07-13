@@ -103,8 +103,8 @@ public final class GladeCommands {
                         .then(ClientCommandManager.literal("block")
                                 .then(ClientCommandManager.argument(
                                                 "blockPredicate", BlockStatePredicate.argument(registryAccess))
-                                        .executes(context -> ActionCommand.mineBlock(context, 1))
-                                        .then(nArgument(n -> ActionCommand.mineBlock(n.context(), n.n()))))))
+                                        .executes(context -> ActionCommand.mineBlock(context, 0))
+                                        .then(indexArgument(n -> ActionCommand.mineBlock(n.context(), n.n()))))))
                 .then(ClientCommandManager.literal("place")
                         .then(coordinates((context, pos) -> ActionCommand.place(context, pos))))
                 .then(ClientCommandManager.literal("coords")
