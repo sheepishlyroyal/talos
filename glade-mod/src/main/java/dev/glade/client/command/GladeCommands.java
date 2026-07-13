@@ -203,32 +203,32 @@ public final class GladeCommands {
                 .then(ClientCommandManager.literal("block")
                         .then(ClientCommandManager.argument(
                                         "blockPredicate", BlockStatePredicate.argument(registryAccess))
-                                .executes(context -> LookCommand.executeBlock(context, 1))
-                                .then(nArgument(n -> LookCommand.executeBlock(n.context(), n.n())))))
+                                .executes(context -> LookCommand.executeBlock(context, 0))
+                                .then(indexArgument(n -> LookCommand.executeBlock(n.context(), n.n())))))
                 .then(ClientCommandManager.literal("coords")
                         .then(coordinates((context, pos) -> LookCommand.executeCoords(context, pos))))
                 .then(ClientCommandManager.literal("direction")
                         .then(directionNode((context, pos) -> LookCommand.executeDirection(context, pos))))
                 .then(ClientCommandManager.argument("selector", SelectorArgumentType.selector())
-                        .executes(context -> LookCommand.executeSelector(context, selectorArg(context), 1))
-                        .then(nArgument(n -> LookCommand.executeSelector(
+                        .executes(context -> LookCommand.executeSelector(context, selectorArg(context), 0))
+                        .then(indexArgument(n -> LookCommand.executeSelector(
                                 n.context(), selectorArg(n.context()), n.n()))))
                 .then(ClientCommandManager.literal("entity")
                         .then(ClientCommandManager.literal("type")
                                 .then(ClientCommandManager.argument("entityType", IdentifierArgumentType.identifier())
-                                        .executes(context -> LookCommand.executeEntity(context, entityTypeArg(context), null, 1))
-                                        .then(nArgument(n -> LookCommand.executeEntity(
+                                        .executes(context -> LookCommand.executeEntity(context, entityTypeArg(context), null, 0))
+                                        .then(indexArgument(n -> LookCommand.executeEntity(
                                                 n.context(), entityTypeArg(n.context()), null, n.n())))
                                         .then(ClientCommandManager.literal("tag")
                                                 .then(ClientCommandManager.argument("tag", StringArgumentType.word())
                                                         .executes(context -> LookCommand.executeEntity(
-                                                                context, entityTypeArg(context), tagArg(context), 1))
-                                                        .then(nArgument(n -> LookCommand.executeEntity(
+                                                                context, entityTypeArg(context), tagArg(context), 0))
+                                                        .then(indexArgument(n -> LookCommand.executeEntity(
                                                                 n.context(), entityTypeArg(n.context()), tagArg(n.context()), n.n())))))))
                         .then(ClientCommandManager.literal("tag")
                                 .then(ClientCommandManager.argument("tag", StringArgumentType.word())
-                                        .executes(context -> LookCommand.executeEntity(context, null, tagArg(context), 1))
-                                        .then(nArgument(n -> LookCommand.executeEntity(
+                                        .executes(context -> LookCommand.executeEntity(context, null, tagArg(context), 0))
+                                        .then(indexArgument(n -> LookCommand.executeEntity(
                                                 n.context(), null, tagArg(n.context()), n.n()))))));
     }
 
@@ -241,6 +241,13 @@ public final class GladeCommands {
     }
 
     /** Builds the trailing optional {@code n} (rank, default 1) argument node for {@code /glade look} selectors. */
+    /** 0-based, negative-friendly source index: 0 = nearest, -1 = furthest. */
+    private static RequiredArgumentBuilder<FabricClientCommandSource, Integer> indexArgument(
+            NArgExecutor executor) {
+        return ClientCommandManager.argument("index", IntegerArgumentType.integer())
+                .executes(context -> executor.execute(new NArg(context, value(context, "index"))));
+    }
+
     private static RequiredArgumentBuilder<FabricClientCommandSource, Integer> nArgument(
             NArgExecutor executor) {
         return ClientCommandManager.argument("n", IntegerArgumentType.integer(1))

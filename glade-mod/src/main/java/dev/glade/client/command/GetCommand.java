@@ -38,6 +38,32 @@ public final class GetCommand {
                             + "|container.N|saddle|horsearmor>"));
             return 1;
         }));
+        get.then(ClientCommandManager.literal("entity")
+                .then(ClientCommandManager.argument("selector", SelectorArgumentType.selector())
+                        .executes(context -> entityAt(context.getSource(),
+                                com.mojang.brigadier.arguments.StringArgumentType
+                                        .getString(context, "selector"), 0))
+                        .then(ClientCommandManager.argument("index",
+                                        com.mojang.brigadier.arguments.IntegerArgumentType.integer())
+                                .executes(context -> entityAt(context.getSource(),
+                                        com.mojang.brigadier.arguments.StringArgumentType
+                                                .getString(context, "selector"),
+                                        com.mojang.brigadier.arguments.IntegerArgumentType
+                                                .getInteger(context, "index"))))))
+        ;
+        get.then(ClientCommandManager.literal("blockpos")
+                .then(ClientCommandManager.argument("block",
+                                com.mojang.brigadier.arguments.StringArgumentType.string())
+                        .executes(context -> blockAt(context.getSource(),
+                                com.mojang.brigadier.arguments.StringArgumentType
+                                        .getString(context, "block"), 0))
+                        .then(ClientCommandManager.argument("index",
+                                        com.mojang.brigadier.arguments.IntegerArgumentType.integer())
+                                .executes(context -> blockAt(context.getSource(),
+                                        com.mojang.brigadier.arguments.StringArgumentType
+                                                .getString(context, "block"),
+                                        com.mojang.brigadier.arguments.IntegerArgumentType
+                                                .getInteger(context, "index"))))));
         get.then(ClientCommandManager.literal("slot")
                 .then(ClientCommandManager.argument("name",
                                 com.mojang.brigadier.arguments.StringArgumentType.word())
@@ -151,6 +177,74 @@ public final class GetCommand {
             var recent = dev.glade.client.rules.EventRuleEngine.recentSounds(5.0);
             return recent.isEmpty() ? "none in the last 5s" : String.join(", ", recent);
         });
+        map.put("particles", (client, player) -> {
+            var recent = dev.glade.client.rules.EventRuleEngine.recentParticles(3.0);
+            return recent.isEmpty() ? "none in the last 3s" : String.join(", ", recent);
+        });
+        map.put("crosshair_particles", (client, player) -> {
+            var recent = dev.glade.client.rules.EventRuleEngine
+                    .particlesOnCrosshair(player, 2.0, 2.0);
+            return recent.isEmpty() ? "none near the look ray (2s, 2m)"
+                    : String.join(", ", recent);
+        });
+        map.put("sign", (client, player) -> {
+            var be = crosshairBlockEntity(client);
+            if (!(be instanceof net.minecraft.block.entity.SignBlockEntity sign)) {
+                return "not looking at a sign";
+            }
+            StringJoiner lines = new StringJoiner(" / ");
+            for (var line : sign.getFrontText().getMessages(false)) {
+                if (!line.getString().isEmpty()) lines.add(line.getString());
+            }
+            return lines.length() == 0 ? "(blank sign)" : lines.toString();
+        });
+        map.put("lectern", (client, player) -> {
+            var be = crosshairBlockEntity(client);
+            if (!(be instanceof net.minecraft.block.entity.LecternBlockEntity lectern)) {
+                return "not looking at a lectern";
+            }
+            if (!lectern.hasBook()) return "empty lectern";
+            var book = lectern.getBook();
+            return Registries.ITEM.getId(book.getItem()) + " (page "
+                    + (lectern.getCurrentPage() + 1) + ")"
+                    + (book.getCustomName() != null ? " \"" + book.getCustomName().getString() + "\"" : "");
+        });
+        map.put("skull", (client, player) -> {
+            var be = crosshairBlockEntity(client);
+            if (!(be instanceof net.minecraft.block.entity.SkullBlockEntity skull)) {
+                return "not looking at a skull";
+            }
+            var owner = skull.getOwner();
+            return owner == null ? "no owner" : owner.toString();
+        });
+        map.put("banner", (client, player) -> {
+            var be = crosshairBlockEntity(client);
+            if (!(be instanceof net.minecraft.block.entity.BannerBlockEntity banner)) {
+                return "not looking at a banner";
+            }
+            return banner.getColorForState().getId() + " with "
+                    + banner.getPatterns().layers().size() + " pattern layer(s)";
+        });
+        map.put("campfire", (client, player) -> {
+            var be = crosshairBlockEntity(client);
+            if (!(be instanceof net.minecraft.block.entity.CampfireBlockEntity campfire)) {
+                return "not looking at a campfire";
+            }
+            StringJoiner items = new StringJoiner(", ");
+            for (var stack : campfire.getItemsBeingCooked()) {
+                if (!stack.isEmpty()) items.add(Registries.ITEM.getId(stack.getItem()).getPath());
+            }
+            return items.length() == 0 ? "nothing cooking" : items.toString();
+        });
+        map.put("item_frame", (client, player) -> {
+            if (client.crosshairTarget instanceof net.minecraft.util.hit.EntityHitResult hit
+                    && hit.getEntity() instanceof net.minecraft.entity.decoration.ItemFrameEntity frame) {
+                var stack = frame.getHeldItemStack();
+                return stack.isEmpty() ? "empty frame"
+                        : Registries.ITEM.getId(stack.getItem()) + " x" + stack.getCount();
+            }
+            return "not looking at an item frame";
+        });
 
         // Booleans.
         map.put("sneaking", bool((client, player) -> player.isSneaking()));
@@ -246,6 +340,90 @@ public final class GetCommand {
         } catch (NumberFormatException exception) {
             return -1;
         }
+    }
+
+    /** Iteration primitive: nth match of a selector, nearest-first, Python-style index. */
+    private static int entityAt(FabricClientCommandSource source, String token, int index) {
+        MinecraftClient client = source.getClient();
+        ClientPlayerEntity player = client.player;
+        if (player == null || client.world == null) {
+            source.sendError(Text.literal("No world is loaded"));
+            return 0;
+        }
+        String[] error = new String[1];
+        EntitySelector selector = EntitySelector.parse(token, error);
+        if (selector == null) { source.sendError(Text.literal(error[0])); return 0; }
+        java.util.List<net.minecraft.entity.Entity> matches = new java.util.ArrayList<>();
+        for (net.minecraft.entity.Entity entity : client.world.getEntities()) {
+            if (entity == player && selector.kind() != EntitySelector.Kind.SELF) continue;
+            boolean playersOnly = selector.kind() == EntitySelector.Kind.PLAYERS_ALL
+                    || selector.kind() == EntitySelector.Kind.PLAYER_NEAREST;
+            if (playersOnly && !(entity instanceof net.minecraft.entity.player.PlayerEntity)) continue;
+            if (selector.kind() == EntitySelector.Kind.SELF && entity != player) continue;
+            if (selector.kind() == EntitySelector.Kind.ENTITIES
+                    && !selector.matchesFilters(entity)) continue;
+            if (!selector.withinDistance(Math.sqrt(entity.squaredDistanceTo(player)))) continue;
+            matches.add(entity);
+        }
+        matches.sort(java.util.Comparator.comparingDouble(player::squaredDistanceTo));
+        net.minecraft.entity.Entity target = Indexed.select(matches, index);
+        if (target == null) {
+            source.sendError(Text.literal("entity[" + index + "]: "
+                    + Indexed.rangeHint(matches.size())));
+            return 0;
+        }
+        source.sendFeedback(Text.literal(String.format(Locale.ROOT,
+                "§bentity[%d]§f = %s @ %.1f %.1f %.1f (%.1fm)", index,
+                dev.glade.client.rules.EventRuleEngine.entityLabel(target),
+                target.getX(), target.getY(), target.getZ(),
+                Math.sqrt(target.squaredDistanceTo(player)))));
+        return 1;
+    }
+
+    /** Iteration primitive: nth-nearest matching block within 32, Python-style index. */
+    private static int blockAt(FabricClientCommandSource source, String blockId, int index) {
+        MinecraftClient client = source.getClient();
+        ClientPlayerEntity player = client.player;
+        if (player == null || client.world == null) {
+            source.sendError(Text.literal("No world is loaded"));
+            return 0;
+        }
+        var id = net.minecraft.util.Identifier.tryParse(blockId.contains(":")
+                ? blockId : "minecraft:" + blockId);
+        if (id == null || !Registries.BLOCK.containsId(id)) {
+            source.sendError(Text.literal("Unknown block: " + blockId));
+            return 0;
+        }
+        var block = Registries.BLOCK.get(id);
+        var center = player.getBlockPos();
+        java.util.List<net.minecraft.util.math.BlockPos> matches = new java.util.ArrayList<>();
+        for (var pos : net.minecraft.util.math.BlockPos.iterate(
+                center.add(-32, -32, -32), center.add(32, 32, 32))) {
+            if (client.world.getBlockState(pos).getBlock() == block) matches.add(pos.toImmutable());
+        }
+        matches.sort(java.util.Comparator.comparingDouble(
+                pos -> pos.getSquaredDistance(center)));
+        var target = Indexed.select(matches, index);
+        if (target == null) {
+            source.sendError(Text.literal("blockpos[" + index + "]: "
+                    + Indexed.rangeHint(matches.size()) + " within 32"));
+            return 0;
+        }
+        source.sendFeedback(Text.literal(String.format(Locale.ROOT,
+                "§bblockpos[%d]§f = %d %d %d (%.1fm)", index,
+                target.getX(), target.getY(), target.getZ(),
+                Math.sqrt(target.getSquaredDistance(center)))));
+        return 1;
+    }
+
+    private static net.minecraft.block.entity.BlockEntity crosshairBlockEntity(
+            MinecraftClient client) {
+        if (client.crosshairTarget instanceof net.minecraft.util.hit.BlockHitResult hit
+                && client.crosshairTarget.getType()
+                        == net.minecraft.util.hit.HitResult.Type.BLOCK) {
+            return client.world.getBlockEntity(hit.getBlockPos());
+        }
+        return null;
     }
 
     private interface BoolGetter {

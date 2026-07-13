@@ -64,17 +64,14 @@ final class LookCommand {
     static int executeBlock(CommandContext<FabricClientCommandSource> context, int n) throws CommandSyntaxException {
         FabricClientCommandSource source = context.getSource();
         BlockStatePredicate predicate = BlockStatePredicate.fromArgument(context, "blockPredicate");
-        if (n < 1) {
-            source.sendError(Text.literal("n must be >= 1"));
-            return 0;
-        }
 
         NthClosestBlockTask task = new NthClosestBlockTask(
                 predicate, defaultBlockRadius(), n, (found, pos) ->
                         source.getClient().execute(() -> {
                             if (pos == null) {
-                                source.sendError(Text.literal("Only found %d match(es), need at least %d"
-                                        .formatted(found, n)));
+                                source.sendError(Text.literal(
+                                        "Index %d out of range: %d match(es) (0-based, -1 = furthest)"
+                                                .formatted(n, found)));
                                 return;
                             }
                             ClientPlayerEntity player = source.getPlayer();
@@ -115,10 +112,6 @@ final class LookCommand {
     static int executeEntity(
             CommandContext<FabricClientCommandSource> context, Identifier entityTypeId, String tag, int n) {
         FabricClientCommandSource source = context.getSource();
-        if (n < 1) {
-            source.sendError(Text.literal("n must be >= 1"));
-            return 0;
-        }
 
         EntityType<?> entityType = null;
         if (entityTypeId != null) {
@@ -147,13 +140,13 @@ final class LookCommand {
                 .sorted(Comparator.comparingDouble(player::squaredDistanceTo))
                 .toList();
 
-        if (matches.size() < n) {
-            source.sendError(Text.literal("Only found %d matching entit%s, need at least %d"
-                    .formatted(matches.size(), matches.size() == 1 ? "y" : "ies", n)));
+        Entity target = Indexed.select(matches, n);
+        if (target == null) {
+            source.sendError(Text.literal("Index %d out of range: %d matching entit%s (%s)"
+                    .formatted(n, matches.size(), matches.size() == 1 ? "y" : "ies",
+                            Indexed.rangeHint(matches.size()))));
             return 0;
         }
-
-        Entity target = matches.get(n - 1);
         aimAt(player, target.getEyePos());
 
         Identifier targetTypeId = Registries.ENTITY_TYPE.getId(target.getType());
@@ -169,10 +162,6 @@ final class LookCommand {
      */
     static int executeSelector(CommandContext<FabricClientCommandSource> context, String token, int n) {
         FabricClientCommandSource source = context.getSource();
-        if (n < 1) {
-            source.sendError(Text.literal("n must be >= 1"));
-            return 0;
-        }
 
         String[] error = new String[1];
         EntitySelector selector = EntitySelector.parse(token, error);
@@ -229,13 +218,13 @@ final class LookCommand {
             filtered = filtered.subList(0, Math.max(limit, 0));
         }
 
-        if (filtered.size() < n) {
-            source.sendError(Text.literal("Only found %d matching %s%s, need at least %d"
-                    .formatted(filtered.size(), noun, filtered.size() == 1 ? "" : "s", n)));
+        Entity target = Indexed.select(filtered, n);
+        if (target == null) {
+            source.sendError(Text.literal("Index %d out of range: %d matching %s%s (%s)"
+                    .formatted(n, filtered.size(), noun, filtered.size() == 1 ? "" : "s",
+                            Indexed.rangeHint(filtered.size()))));
             return 0;
         }
-
-        Entity target = filtered.get(n - 1);
         aimAt(player, target.getEyePos());
 
         Text label = target instanceof PlayerEntity playerEntity

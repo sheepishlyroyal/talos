@@ -154,6 +154,8 @@ public final class EventRuleEngine {
         PROJECTILE_HIT(Kind.TEXT), PROJECTILE_STOPPED(Kind.TEXT),
         SNOWBALL_THROWN(Kind.TEXT), SNOWBALL_HIT(Kind.TEXT),
         EGG_THROWN(Kind.TEXT), EGG_HIT(Kind.TEXT),
+        // Block-entity content under the crosshair, and item-frame contents anywhere.
+        SIGN_SEEN(Kind.TEXT), ITEM_FRAME_CHANGED(Kind.TEXT),
         // Metrics — every one supports instant compares, 'for <seconds>' sustained compares,
         // and 'changes above|below <delta> within <seconds>' windowed net change.
         HEALTH(Kind.COMPARE), HUNGER(Kind.COMPARE), AIR(Kind.COMPARE), XP_LEVEL(Kind.COMPARE),
@@ -382,7 +384,13 @@ public final class EventRuleEngine {
         fireEntity(Trigger.ENTITY_STATUS, entity, label + ": " + status);
     }
 
+    private static final java.util.ArrayDeque<Object[]> RECENT_PARTICLES = new java.util.ArrayDeque<>();
+
     public static void onParticle(String particleId, double x, double y, double z) {
+        synchronized (RECENT_PARTICLES) {
+            RECENT_PARTICLES.addLast(new Object[] {tick, particleId, x, y, z});
+            while (RECENT_PARTICLES.size() > 512) RECENT_PARTICLES.removeFirst();
+        }
         boolean wanted = false;
         for (Rule rule : RULES) {
             if (rule.triggerType() == Trigger.PARTICLE_SEEN) { wanted = true; break; }
@@ -390,6 +398,40 @@ public final class EventRuleEngine {
         if (!wanted) return; // particle packets are frequent; skip the string work
         fireText(Trigger.PARTICLE_SEEN, particleId + " @ "
                 + String.format(Locale.ROOT, "%.0f %.0f %.0f", x, y, z));
+    }
+
+    /** Distinct particle ids shown within the last {@code seconds}. */
+    public static java.util.List<String> recentParticles(double seconds) {
+        int horizon = tick - (int) (seconds * 20.0);
+        java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+        synchronized (RECENT_PARTICLES) {
+            for (Object[] entry : RECENT_PARTICLES) {
+                if ((Integer) entry[0] >= horizon) ids.add((String) entry[1]);
+            }
+        }
+        return java.util.List.copyOf(ids);
+    }
+
+    /** Recent particles whose position lies within {@code maxMiss} meters of the look ray. */
+    public static java.util.List<String> particlesOnCrosshair(ClientPlayerEntity player,
+            double seconds, double maxMiss) {
+        int horizon = tick - (int) (seconds * 20.0);
+        var eye = player.getEyePos();
+        var look = player.getRotationVecClient();
+        java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+        synchronized (RECENT_PARTICLES) {
+            for (Object[] entry : RECENT_PARTICLES) {
+                if ((Integer) entry[0] < horizon) continue;
+                var point = new net.minecraft.util.math.Vec3d(
+                        (Double) entry[2], (Double) entry[3], (Double) entry[4]);
+                var toPoint = point.subtract(eye);
+                double along = toPoint.dotProduct(look);
+                if (along < 0.0 || along > 64.0) continue;
+                double miss = toPoint.subtract(look.multiply(along)).length();
+                if (miss <= maxMiss) ids.add((String) entry[1]);
+            }
+        }
+        return java.util.List.copyOf(ids);
     }
 
     /**
@@ -627,6 +669,9 @@ public final class EventRuleEngine {
                 !now.heldName.isEmpty(), now.heldName);
         if (!before.heldName.equals(now.heldName) && !now.heldName.isEmpty()) {
             fireText(Trigger.HELD_NAME_CHANGED, now.heldName);
+        }
+        if (!before.crosshairSign.equals(now.crosshairSign) && !now.crosshairSign.isEmpty()) {
+            fireText(Trigger.SIGN_SEEN, now.crosshairSign);
         }
         if (!before.lookingAtEntity.equals(now.lookingAtEntity)
                 && !now.lookingAtEntity.isEmpty()) {
@@ -1032,7 +1077,7 @@ public final class EventRuleEngine {
     private record TrackedEntity(Entity handle, Entity ownerHandle, String type, String label,
             boolean living, boolean isItem,
             boolean isProjectile, boolean isPlayer, boolean isPearl, boolean isPotion,
-            boolean isSnowball, boolean isEgg, double speed,
+            boolean isSnowball, boolean isEgg, double speed, String frameItem,
             String ownerLabel, String hand, String offhand, String armor,
             boolean hurt, boolean burning, int vehicleId, String vehicleType, boolean sneaking,
             boolean sprinting, boolean usingItem, boolean blocking, boolean gliding,
@@ -1197,6 +1242,9 @@ public final class EventRuleEngine {
         if (!past.swimming && now.swimming) fireEntity(Trigger.ENTITY_SWIMMING, subject, label);
         if (!past.sleeping && now.sleeping) fireEntity(Trigger.ENTITY_SLEEPING, subject, label);
         if (past.baby && !now.baby) fireEntity(Trigger.ENTITY_BABY_GROWN, subject, label);
+        if (!past.frameItem.equals(now.frameItem) && !now.frameItem.isEmpty()) {
+            fireEntity(Trigger.ITEM_FRAME_CHANGED, subject, label + ": " + now.frameItem);
+        }
         if (past.isProjectile && past.speed > 0.2 && now.speed < 0.05) {
             fireEntity(Trigger.PROJECTILE_STOPPED, subject, label + String.format(Locale.ROOT,
                     " @ %.0f %.0f %.0f", now.x, now.y, now.z));
@@ -1278,6 +1326,8 @@ public final class EventRuleEngine {
                 entity instanceof net.minecraft.entity.projectile.thrown.SnowballEntity,
                 entity instanceof net.minecraft.entity.projectile.thrown.EggEntity,
                 isProjectile ? entity.getVelocity().length() : 0.0,
+                entity instanceof net.minecraft.entity.decoration.ItemFrameEntity frame
+                        ? Registries.ITEM.getId(frame.getHeldItemStack().getItem()).toString() : "",
                 ownerLabel, hand, offhand, armor,
                 living && ((net.minecraft.entity.LivingEntity) entity).hurtTime > 0,
                 entity.getFireTicks() > 0,
@@ -1414,7 +1464,8 @@ public final class EventRuleEngine {
             float fallDistance, double velocityY, boolean windowFocused, String screenName,
             String offhandItem, String lookingAtEntity, boolean hotbarEmpty,
             boolean armorMissing, boolean containerFull, boolean containerEmpty,
-            boolean projectileIncoming, boolean heldEnchanted, String heldName) {
+            boolean projectileIncoming, boolean heldEnchanted, String heldName,
+            String crosshairSign) {
 
         static Snapshot capture(MinecraftClient client) {
             ClientPlayerEntity player = client.player;
@@ -1423,7 +1474,7 @@ public final class EventRuleEngine {
                         false, false, false, false, "", "", false, 0, false, false, Set.of(),
                         Map.of(), "", "", "", "", "", 0, 0, false, false, Set.of(), BlockPos.ORIGIN,
                         false, false, false, false, false, false, false, false, 0.0F, 0.0,
-                        false, "", "", "", false, false, false, false, false, false, "");
+                        false, "", "", "", false, false, false, false, false, false, "", "");
             }
             ItemStack held = player.getMainHandStack();
             Set<String> effects = new HashSet<>();
@@ -1468,6 +1519,18 @@ public final class EventRuleEngine {
                 containerSlots++;
                 if (!slot.getStack().isEmpty()) containerFilled++;
             }
+            String crosshairSign = "";
+            if (client.crosshairTarget instanceof BlockHitResult signHit
+                    && client.crosshairTarget.getType() == HitResult.Type.BLOCK
+                    && client.world.getBlockEntity(signHit.getBlockPos())
+                            instanceof net.minecraft.block.entity.SignBlockEntity sign) {
+                StringBuilder text = new StringBuilder();
+                for (Text line : sign.getFrontText().getMessages(false)) {
+                    String raw = line.getString();
+                    if (!raw.isEmpty()) text.append(text.isEmpty() ? "" : " / ").append(raw);
+                }
+                crosshairSign = text.toString();
+            }
             String lookingAtEntity = client.crosshairTarget
                     instanceof net.minecraft.util.hit.EntityHitResult entityHit
                     ? Registries.ENTITY_TYPE.getId(entityHit.getEntity().getType()).toString() : "";
@@ -1510,7 +1573,8 @@ public final class EventRuleEngine {
                     containerSlots > 0 && containerFilled == containerSlots,
                     containerSlots > 0 && containerFilled == 0,
                     projectileIncoming, held.hasEnchantments(),
-                    held.getCustomName() == null ? "" : held.getCustomName().getString());
+                    held.getCustomName() == null ? "" : held.getCustomName().getString(),
+                    crosshairSign);
         }
 
         private static String blockId(MinecraftClient client, BlockPos pos) {

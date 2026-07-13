@@ -29,11 +29,14 @@ import net.minecraft.world.chunk.WorldChunk;
 final class NthClosestBlockTask extends SimpleTask {
     private final Predicate<BlockState> predicate;
     private final int chunkRadius;
-    private final int n;
-    /** Called with (matches found so far, capped at n) and the Nth-closest position, or null if fewer than n matches exist. */
+    /** Matches to retain; the heap root is exactly the requested match once full. */
+    private final int keepCount;
+    /** Python-style negative index: -1 = furthest match in radius (disables pruning). */
+    private final boolean furthestMode;
+    /** Called with (matches retained) and the selected position, or null when out of range. */
     private final BiConsumer<Integer, BlockPos> resultCallback;
     private final LongArrayFIFOQueue remainingChunks = new LongArrayFIFOQueue();
-    private final PriorityQueue<Match> nearest = new PriorityQueue<>((a, b) -> Double.compare(b.distSq, a.distSq));
+    private final PriorityQueue<Match> nearest;
 
     private Vec3d origin;
     private long currentChunk;
@@ -44,10 +47,17 @@ final class NthClosestBlockTask extends SimpleTask {
     private record Match(long pos, double distSq) {
     }
 
-    NthClosestBlockTask(Predicate<BlockState> predicate, int chunkRadius, int n, BiConsumer<Integer, BlockPos> resultCallback) {
+    /** {@code index} is 0-based; negative values count from the furthest match. */
+    NthClosestBlockTask(Predicate<BlockState> predicate, int chunkRadius, int index, BiConsumer<Integer, BlockPos> resultCallback) {
         this.predicate = predicate;
         this.chunkRadius = chunkRadius;
-        this.n = n;
+        this.furthestMode = index < 0;
+        this.keepCount = furthestMode ? -index : index + 1;
+        // Nearest mode keeps the keepCount nearest (max-heap: root = requested match).
+        // Furthest mode keeps the keepCount furthest (min-heap: root = requested match).
+        this.nearest = new PriorityQueue<>(furthestMode
+                ? (a, b) -> Double.compare(a.distSq, b.distSq)
+                : (a, b) -> Double.compare(b.distSq, a.distSq));
         this.resultCallback = resultCallback;
     }
 
@@ -137,13 +147,14 @@ final class NthClosestBlockTask extends SimpleTask {
 
     private void offer(Match match) {
         nearest.add(match);
-        if (nearest.size() > n) {
+        if (nearest.size() > keepCount) {
             nearest.poll();
         }
     }
 
     private boolean columnCanBeatWorst(ChunkPos chunkPos) {
-        if (nearest.size() < n) {
+        // Furthest-mode needs the complete scan: distance pruning only helps nearest-mode.
+        if (furthestMode || nearest.size() < keepCount) {
             return true;
         }
         double closestX = MathHelper.clamp(origin.x, chunkPos.getStartX(), chunkPos.getStartX() + 16);
@@ -159,7 +170,7 @@ final class NthClosestBlockTask extends SimpleTask {
 
     @Override
     public void onCompleted() {
-        BlockPos result = nearest.size() >= n && nearest.peek() != null ? BlockPos.fromLong(nearest.peek().pos) : null;
+        BlockPos result = nearest.size() >= keepCount && nearest.peek() != null ? BlockPos.fromLong(nearest.peek().pos) : null;
         resultCallback.accept(nearest.size(), result);
     }
 
