@@ -84,6 +84,14 @@ public final class EventRuleEngine {
         ON_FIRE(Kind.NONE), FALLING(Kind.NONE), SNEAKING(Kind.NONE), SPRINTING(Kind.NONE),
         SWIMMING(Kind.NONE), GLIDING(Kind.NONE), UNDERWATER(Kind.NONE), SLEEPING(Kind.NONE),
         WOKE_UP(Kind.NONE), MOUNTED(Kind.TEXT), DISMOUNTED(Kind.TEXT),
+        MOVING(Kind.NONE), STOPPED(Kind.NONE), CLIMBING(Kind.NONE), BLOCKING(Kind.NONE),
+        USING_ITEM(Kind.NONE), COLLIDED(Kind.NONE), HURT(Kind.NONE), FREEZING(Kind.NONE),
+        JUMPED(Kind.NONE), LANDED(Kind.NONE), PROJECTILE_INCOMING(Kind.NONE),
+        WINDOW_FOCUSED(Kind.NONE), WINDOW_UNFOCUSED(Kind.NONE),
+        SCREEN_OPENED(Kind.TEXT), SCREEN_CLOSED(Kind.TEXT), OFFHAND_CHANGED(Kind.TEXT),
+        LOOKING_AT_ENTITY(Kind.TEXT), ENTITY_SPAWNED(Kind.TEXT), ENTITY_REMOVED(Kind.TEXT),
+        MENTION(Kind.TEXT), HOTBAR_EMPTY(Kind.NONE), ARMOR_MISSING(Kind.NONE),
+        CONTAINER_FULL(Kind.NONE), CONTAINER_EMPTY(Kind.NONE),
         // Items and screens.
         HELD_CHANGED(Kind.NONE), TOOL_BROKEN(Kind.NONE), INVENTORY_FULL(Kind.NONE),
         SLOT_CHANGED(Kind.NONE), CONTAINER_OPENED(Kind.NONE), CONTAINER_CLOSED(Kind.NONE),
@@ -119,6 +127,15 @@ public final class EventRuleEngine {
         ABSORPTION(Kind.COMPARE), ARMOR_POINTS(Kind.COMPARE), HELD_DURABILITY(Kind.COMPARE),
         FALL_DISTANCE(Kind.COMPARE), TIME_TICKS(Kind.COMPARE), ENTITY_TOTAL(Kind.COMPARE),
         PLAYERS_ONLINE(Kind.COMPARE), IDLE_SECONDS(Kind.COMPARE),
+        VELOCITY_Y(Kind.COMPARE), MOON_PHASE(Kind.COMPARE), DAY_COUNT(Kind.COMPARE),
+        EMPTY_SLOTS(Kind.COMPARE), OCCUPIED_SLOTS(Kind.COMPARE), CONTAINER_ITEMS(Kind.COMPARE),
+        MEMORY_USED_PERCENT(Kind.COMPARE), NEAREST_PLAYER_DISTANCE(Kind.COMPARE),
+        NEAREST_HOSTILE_DISTANCE(Kind.COMPARE), NEAREST_ANIMAL_DISTANCE(Kind.COMPARE),
+        NEAREST_ITEM_DISTANCE(Kind.COMPARE), DROPPED_ITEMS_NEAR(Kind.COMPARE),
+        XP_ORBS_NEAR(Kind.COMPARE), ARROWS_NEAR(Kind.COMPARE),
+        CROSSHAIR_DISTANCE(Kind.COMPARE), SPAWN_DISTANCE(Kind.COMPARE),
+        FIRE_TICKS(Kind.COMPARE), FROZEN_TICKS(Kind.COMPARE), HURT_TIME(Kind.COMPARE),
+        STUCK_ARROWS(Kind.COMPARE), VEHICLE_SPEED(Kind.COMPARE), EFFECT_COUNT(Kind.COMPARE),
         // Clock.
         TICK_EVERY(Kind.NUMBER);
 
@@ -173,10 +190,14 @@ public final class EventRuleEngine {
     public static void register() {
         load();
         ClientTickEvents.END_CLIENT_TICK.register(EventRuleEngine::pollTick);
-        ClientReceiveMessageEvents.GAME.register((message, overlay) ->
-                fireText(overlay ? Trigger.ACTIONBAR : Trigger.CHAT, message.getString()));
-        ClientReceiveMessageEvents.CHAT.register((message, signed, sender, params, time) ->
-                fireText(Trigger.CHAT, message.getString()));
+        ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
+            fireText(overlay ? Trigger.ACTIONBAR : Trigger.CHAT, message.getString());
+            if (!overlay) fireMention(message.getString());
+        });
+        ClientReceiveMessageEvents.CHAT.register((message, signed, sender, params, time) -> {
+            fireText(Trigger.CHAT, message.getString());
+            fireMention(message.getString());
+        });
         AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
             if (world.isClient()) fireText(Trigger.ATTACK_BLOCK, pos.toShortString());
             return ActionResult.PASS;
@@ -249,6 +270,17 @@ public final class EventRuleEngine {
 
     public static void onSound(String soundId) {
         fireText(Trigger.SOUND, soundId);
+    }
+
+    /** MENTION fires only when a message contains the local player's own name. */
+    private static void fireMention(String message) {
+        ClientPlayerEntity player = MinecraftClient.getInstance().player;
+        if (player == null) return;
+        String name = player.getName().getString();
+        if (!name.isEmpty() && message.toLowerCase(Locale.ROOT)
+                .contains(name.toLowerCase(Locale.ROOT))) {
+            fireText(Trigger.MENTION, message);
+        }
     }
 
     /* ------------------------------------------------------------------ firing */
@@ -393,6 +425,49 @@ public final class EventRuleEngine {
         fireState(Trigger.UNDERWATER, before.underwater, now.underwater, "");
         fireState(Trigger.SLEEPING, before.sleeping, now.sleeping, "");
         fireState(Trigger.WOKE_UP, !before.sleeping, !now.sleeping, "");
+        fireState(Trigger.MOVING, before.moving, now.moving, "");
+        fireState(Trigger.STOPPED, !before.moving, !now.moving, "");
+        fireState(Trigger.CLIMBING, before.climbing, now.climbing, "");
+        fireState(Trigger.BLOCKING, before.blocking, now.blocking, "");
+        fireState(Trigger.USING_ITEM, before.usingItem, now.usingItem, "");
+        fireState(Trigger.COLLIDED, before.collided, now.collided, "");
+        fireState(Trigger.HURT, before.hurt, now.hurt, "");
+        fireState(Trigger.FREEZING, before.freezing, now.freezing, "");
+        fireState(Trigger.PROJECTILE_INCOMING, before.projectileIncoming,
+                now.projectileIncoming, "");
+        fireState(Trigger.WINDOW_FOCUSED, before.windowFocused, now.windowFocused, "");
+        fireState(Trigger.WINDOW_UNFOCUSED, !before.windowFocused, !now.windowFocused, "");
+        fireState(Trigger.HOTBAR_EMPTY, before.hotbarEmpty, now.hotbarEmpty, "");
+        fireState(Trigger.ARMOR_MISSING, before.armorMissing, now.armorMissing, "");
+        fireState(Trigger.CONTAINER_FULL, before.containerFull, now.containerFull, "");
+        fireState(Trigger.CONTAINER_EMPTY, before.containerEmpty, now.containerEmpty, "");
+        if (before.onGround && !now.onGround && now.velocityY > 0.2) {
+            fireText(Trigger.JUMPED, "");
+        }
+        if (!before.onGround && now.onGround) {
+            fireText(Trigger.LANDED, String.format(Locale.ROOT, "%.1f", before.fallDistance));
+        }
+        if (!before.screenName.equals(now.screenName)) {
+            if (!now.screenName.isEmpty()) fireText(Trigger.SCREEN_OPENED, now.screenName);
+            if (!before.screenName.isEmpty()) fireText(Trigger.SCREEN_CLOSED, before.screenName);
+        }
+        if (!before.offhandItem.equals(now.offhandItem)) {
+            fireText(Trigger.OFFHAND_CHANGED, now.offhandItem);
+        }
+        if (!before.lookingAtEntity.equals(now.lookingAtEntity)
+                && !now.lookingAtEntity.isEmpty()) {
+            fireText(Trigger.LOOKING_AT_ENTITY, now.lookingAtEntity);
+        }
+        for (Map.Entry<Integer, String> entry : now.entityIds.entrySet()) {
+            if (!before.entityIds.containsKey(entry.getKey())) {
+                fireText(Trigger.ENTITY_SPAWNED, entry.getValue());
+            }
+        }
+        for (Map.Entry<Integer, String> entry : before.entityIds.entrySet()) {
+            if (!now.entityIds.containsKey(entry.getKey())) {
+                fireText(Trigger.ENTITY_REMOVED, entry.getValue());
+            }
+        }
         if (!before.vehicle.equals(now.vehicle)) {
             if (!now.vehicle.isEmpty()) fireText(Trigger.MOUNTED, now.vehicle);
             if (!before.vehicle.isEmpty()) fireText(Trigger.DISMOUNTED, before.vehicle);
@@ -603,8 +678,85 @@ public final class EventRuleEngine {
             case PLAYERS_ONLINE -> player.networkHandler == null ? 0
                     : player.networkHandler.getPlayerList().size();
             case IDLE_SECONDS -> (tick - lastMovedTick) / 20.0;
+            case VELOCITY_Y -> player.getVelocity().y * 20.0;
+            case MOON_PHASE -> (client.world.getTimeOfDay() / 24000L) % 8L;
+            case DAY_COUNT -> client.world.getTimeOfDay() / 24000L;
+            case EMPTY_SLOTS -> {
+                int empty = 0;
+                for (int i = 0; i < player.getInventory().size(); i++) {
+                    if (player.getInventory().getStack(i).isEmpty()) empty++;
+                }
+                yield empty;
+            }
+            case OCCUPIED_SLOTS -> {
+                int occupied = 0;
+                for (int i = 0; i < player.getInventory().size(); i++) {
+                    if (!player.getInventory().getStack(i).isEmpty()) occupied++;
+                }
+                yield occupied;
+            }
+            case CONTAINER_ITEMS -> player.currentScreenHandler.slots.stream()
+                    .filter(slot -> slot.inventory != player.getInventory())
+                    .filter(slot -> !slot.getStack().isEmpty()).count();
+            case MEMORY_USED_PERCENT -> {
+                Runtime runtime = Runtime.getRuntime();
+                yield (runtime.totalMemory() - runtime.freeMemory()) * 100.0 / runtime.maxMemory();
+            }
+            case NEAREST_PLAYER_DISTANCE -> nearestDistance(client, player,
+                    entity -> entity instanceof PlayerEntity);
+            case NEAREST_HOSTILE_DISTANCE -> nearestDistance(client, player,
+                    entity -> entity instanceof net.minecraft.entity.mob.HostileEntity);
+            case NEAREST_ANIMAL_DISTANCE -> nearestDistance(client, player,
+                    entity -> entity instanceof net.minecraft.entity.passive.AnimalEntity);
+            case NEAREST_ITEM_DISTANCE -> nearestDistance(client, player,
+                    entity -> entity instanceof net.minecraft.entity.ItemEntity);
+            case DROPPED_ITEMS_NEAR -> countNear(client, player, 16.0,
+                    entity -> entity instanceof net.minecraft.entity.ItemEntity);
+            case XP_ORBS_NEAR -> countNear(client, player, 16.0,
+                    entity -> entity instanceof net.minecraft.entity.ExperienceOrbEntity);
+            case ARROWS_NEAR -> countNear(client, player, 16.0,
+                    entity -> entity instanceof net.minecraft.entity.projectile.PersistentProjectileEntity);
+            case CROSSHAIR_DISTANCE -> client.crosshairTarget == null
+                    || client.crosshairTarget.getType() == HitResult.Type.MISS ? 999.0
+                    : client.crosshairTarget.getPos().distanceTo(player.getEyePos());
+            case SPAWN_DISTANCE -> Math.sqrt(player.getBlockPos().getSquaredDistance(
+                    client.world.getSpawnPoint().getPos()));
+            case FIRE_TICKS -> player.getFireTicks();
+            case FROZEN_TICKS -> player.getFrozenTicks();
+            case HURT_TIME -> player.hurtTime;
+            case STUCK_ARROWS -> player.getStuckArrowCount();
+            case VEHICLE_SPEED -> player.getVehicle() == null ? 0.0
+                    : player.getVehicle().getVelocity().horizontalLength() * 20.0;
+            case EFFECT_COUNT -> player.getStatusEffects().size();
             default -> 0.0;
         };
+    }
+
+    /** Public readout used by /glade get; identical to what rules compare against. */
+    public static double metricValue(Trigger trigger, MinecraftClient client,
+            ClientPlayerEntity player) {
+        return metric(trigger, client, player);
+    }
+
+    private static double nearestDistance(MinecraftClient client, ClientPlayerEntity player,
+            java.util.function.Predicate<Entity> filter) {
+        double best = 999.0;
+        for (Entity entity : client.world.getEntities()) {
+            if (entity == player || !filter.test(entity)) continue;
+            best = Math.min(best, Math.sqrt(entity.squaredDistanceTo(player)));
+        }
+        return best;
+    }
+
+    private static int countNear(MinecraftClient client, ClientPlayerEntity player,
+            double radius, java.util.function.Predicate<Entity> filter) {
+        int count = 0;
+        double radiusSquared = radius * radius;
+        for (Entity entity : client.world.getEntities()) {
+            if (entity == player || !filter.test(entity)) continue;
+            if (entity.squaredDistanceTo(player) <= radiusSquared) count++;
+        }
+        return count;
     }
 
     private static int entityCount(Rule rule, MinecraftClient client, ClientPlayerEntity player) {
@@ -686,14 +838,22 @@ public final class EventRuleEngine {
             int selectedSlot, boolean inventoryFull, boolean containerOpen, Set<String> effects,
             Map<String, Integer> itemCounts, String lookingAt, String standingOn,
             String feetBlock, String headBlock, String biome, int chunkX, int chunkZ,
-            boolean day, boolean raining, Set<String> players, BlockPos position) {
+            boolean day, boolean raining, Set<String> players, BlockPos position,
+            boolean moving, boolean climbing, boolean blocking, boolean usingItem,
+            boolean collided, boolean hurt, boolean freezing, boolean onGround,
+            float fallDistance, double velocityY, boolean windowFocused, String screenName,
+            String offhandItem, String lookingAtEntity, boolean hotbarEmpty,
+            boolean armorMissing, boolean containerFull, boolean containerEmpty,
+            boolean projectileIncoming, Map<Integer, String> entityIds) {
 
         static Snapshot capture(MinecraftClient client) {
             ClientPlayerEntity player = client.player;
             if (player == null || client.world == null) {
                 return new Snapshot(false, "", 0, false, 0, 0, 0, false, false, false, false,
                         false, false, false, false, "", "", false, 0, false, false, Set.of(),
-                        Map.of(), "", "", "", "", "", 0, 0, false, false, Set.of(), BlockPos.ORIGIN);
+                        Map.of(), "", "", "", "", "", 0, 0, false, false, Set.of(), BlockPos.ORIGIN,
+                        false, false, false, false, false, false, false, false, 0.0F, 0.0,
+                        false, "", "", "", false, false, false, false, false, Map.of());
             }
             ItemStack held = player.getMainHandStack();
             Set<String> effects = new HashSet<>();
@@ -720,6 +880,41 @@ public final class EventRuleEngine {
                     ? blockId(client, hit.getBlockPos()) : "";
             BlockPos feet = player.getBlockPos();
             long timeOfDay = client.world.getTimeOfDay() % 24000L;
+
+            boolean hotbarEmpty = true;
+            for (int i = 0; i < 9 && hotbarEmpty; i++) {
+                hotbarEmpty = player.getInventory().getStack(i).isEmpty();
+            }
+            boolean armorMissing = false;
+            for (net.minecraft.entity.EquipmentSlot slot : new net.minecraft.entity.EquipmentSlot[] {
+                    net.minecraft.entity.EquipmentSlot.HEAD, net.minecraft.entity.EquipmentSlot.CHEST,
+                    net.minecraft.entity.EquipmentSlot.LEGS, net.minecraft.entity.EquipmentSlot.FEET}) {
+                if (player.getEquippedStack(slot).isEmpty()) armorMissing = true;
+            }
+            int containerSlots = 0;
+            int containerFilled = 0;
+            for (net.minecraft.screen.slot.Slot slot : player.currentScreenHandler.slots) {
+                if (slot.inventory == player.getInventory()) continue;
+                containerSlots++;
+                if (!slot.getStack().isEmpty()) containerFilled++;
+            }
+            String lookingAtEntity = client.crosshairTarget
+                    instanceof net.minecraft.util.hit.EntityHitResult entityHit
+                    ? Registries.ENTITY_TYPE.getId(entityHit.getEntity().getType()).toString() : "";
+            boolean projectileIncoming = false;
+            Map<Integer, String> entityIds = new HashMap<>();
+            for (Entity entity : client.world.getEntities()) {
+                entityIds.put(entity.getId(),
+                        Registries.ENTITY_TYPE.getId(entity.getType()).toString());
+                if (!projectileIncoming
+                        && entity instanceof net.minecraft.entity.projectile.PersistentProjectileEntity
+                        && entity.squaredDistanceTo(player) < 144.0
+                        && entity.getVelocity().lengthSquared() > 0.01) {
+                    var toPlayer = player.getEyePos().subtract(
+                            entity.getX(), entity.getY(), entity.getZ());
+                    projectileIncoming = entity.getVelocity().dotProduct(toPlayer) > 0.0;
+                }
+            }
             return new Snapshot(true,
                     client.world.getRegistryKey().getValue().toString(),
                     player.getHealth(), player.getHealth() <= 0.0F,
@@ -736,7 +931,18 @@ public final class EventRuleEngine {
                     blockId(client, feet.down()), blockId(client, feet), blockId(client, feet.up(2)),
                     client.world.getBiome(feet).getIdAsString(),
                     feet.getX() >> 4, feet.getZ() >> 4,
-                    timeOfDay < 12000L, client.world.isRaining(), players, feet);
+                    timeOfDay < 12000L, client.world.isRaining(), players, feet,
+                    player.getVelocity().horizontalLengthSquared() > 1.0E-4,
+                    player.isClimbing(), player.isBlocking(), player.isUsingItem(),
+                    player.horizontalCollision, player.hurtTime > 0, player.isFrozen(),
+                    player.isOnGround(), (float) player.fallDistance, player.getVelocity().y,
+                    client.isWindowFocused(),
+                    client.currentScreen == null ? "" : client.currentScreen.getClass().getSimpleName(),
+                    Registries.ITEM.getId(player.getOffHandStack().getItem()).toString(),
+                    lookingAtEntity, hotbarEmpty, armorMissing,
+                    containerSlots > 0 && containerFilled == containerSlots,
+                    containerSlots > 0 && containerFilled == 0,
+                    projectileIncoming, entityIds);
         }
 
         private static String blockId(MinecraftClient client, BlockPos pos) {
