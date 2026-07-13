@@ -248,18 +248,11 @@ final class LookCommand {
         return 1;
     }
 
-    /** Sets yaw/pitch/headYaw/bodyYaw so the player faces {@code target} from its eye position. */
+    /** Runs a humanized cube-aim session toward {@code target} (fast->slow, red-X, path). */
     private static void aimAt(ClientPlayerEntity player, Vec3d target) {
-        Vec3d eye = player.getEyePos();
-        double dx = target.x - eye.x;
-        double dy = target.y - eye.y;
-        double dz = target.z - eye.z;
-        double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
-
-        float pitch = (float) (-(MathHelper.atan2(dy, horizontalDistance) * (180.0 / Math.PI)));
-        float yaw = (float) (MathHelper.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0F;
-
-        aim(player, MathHelper.wrapDegrees(yaw), MathHelper.clamp(pitch, -90.0F, 90.0F));
+        dev.glade.client.action.AimController.startTask(
+                net.minecraft.client.MinecraftClient.getInstance(), target,
+                Double.doubleToLongBits(target.x * 31.0 + target.z) ^ player.age);
     }
 
     private static void aim(ClientPlayerEntity player, float yaw, float pitch) {

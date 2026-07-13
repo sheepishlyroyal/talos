@@ -41,6 +41,13 @@ public final class AimController {
     private double fastSensitivity;
     private double slowSensitivity;
     private double currentSensitivity;
+    // Quadratic (parabolic) per-session modulation: both peak mid-approach and vanish at
+    // the ends, so the speed-up/slow-down and the up/down bow are smooth, never linear.
+    private double speedAmplitude;   // +-: randomly faster or slower mid-flight
+    private double bowDegrees;       // +-: the path arcs slightly up or slightly down
+    private double initialMiss = -1.0;
+    private int pathRenderCooldown;
+    private int lastPathCount;
 
     public AimController(MinecraftClient client, RotationHumanizer humanizer,
                          HumanizationProfile profile, long seed) {
@@ -69,6 +76,9 @@ public final class AimController {
         fastSensitivity = 18.0 + rng.nextDouble() * 22.0;   // deg/tick far out
         slowSensitivity = 2.5 + rng.nextDouble() * 3.5;     // deg/tick in the slow zone
         currentSensitivity = fastSensitivity * (0.75 + rng.nextDouble() * 0.25);
+        speedAmplitude = (rng.nextDouble() - 0.5) * 0.36;   // up to +-18%: felt, not flashy
+        bowDegrees = (1.0 + rng.nextDouble() * 3.0) * (rng.nextDouble() < 0.5 ? -1.0 : 1.0);
+        initialMiss = -1.0;
         renderVisuals();
     }
 
@@ -80,15 +90,24 @@ public final class AimController {
 
         Vec3d eye = client.player.getEyePos();
         float[] desired = RotationHumanizer.yawPitchTo(eye, mark);
-        float yawError = MathHelper.wrapDegrees(desired[0] - client.player.getYaw());
-        float pitchError = desired[1] - client.player.getPitch();
-        double angularError = Math.max(Math.abs(yawError), Math.abs(pitchError));
 
         // Where the current look ray passes at the mark's distance: its miss distance in
         // meters is the "how close to the cube" measure that gates the slowdown.
         double distance = eye.distanceTo(mark);
         Vec3d rayPoint = eye.add(client.player.getRotationVecClient().multiply(distance));
         double missMeters = rayPoint.distanceTo(mark);
+        if (initialMiss < 0.0) initialMiss = Math.max(missMeters, 1.0E-3);
+
+        // Progress through the approach drives the parabolic modulation 4p(1-p): zero at
+        // both ends, peaking mid-flight — the quadratic smoothness of a real hand.
+        double progress = MathHelper.clamp(1.0 - missMeters / initialMiss, 0.0, 1.0);
+        double parabola = 4.0 * progress * (1.0 - progress);
+        float pitchTarget = MathHelper.clamp(
+                desired[1] + (float) (bowDegrees * parabola), -90.0F, 90.0F);
+
+        float yawError = MathHelper.wrapDegrees(desired[0] - client.player.getYaw());
+        float pitchError = pitchTarget - client.player.getPitch();
+        double angularError = Math.max(Math.abs(yawError), Math.abs(pitchError));
 
         // Smooth blend, never a step: outside 3x the slow zone -> fast; inside the slow
         // zone -> slow; the sensitivity itself is additionally low-pass filtered.
@@ -100,8 +119,9 @@ public final class AimController {
         currentSensitivity += (targetSensitivity - currentSensitivity) * 0.35;
 
         if (angularError < 1.0E-3) return;
-        // Per-tick jitter keeps successive approaches from tracing identical curves.
-        double step = currentSensitivity * (0.9 + rng.nextDouble() * 0.2);
+        // Per-tick jitter plus the parabolic speed swell/sag chosen for this session.
+        double step = currentSensitivity * (0.9 + rng.nextDouble() * 0.2)
+                * (1.0 + speedAmplitude * parabola);
         double fraction = Math.min(1.0, step / angularError);
         float yaw = client.player.getYaw() + (float) (yawError * fraction);
         float pitch = MathHelper.clamp(
@@ -167,6 +187,81 @@ public final class AimController {
                 new Box(mark.x - 0.07, mark.y - 0.07, mark.z - 0.07,
                         mark.x + 0.07, mark.y + 0.07, mark.z + 0.07),
                 MARK_COLOR, VISUAL_TTL);
+        if (--pathRenderCooldown <= 0) {
+            pathRenderCooldown = 4;
+            renderPath();
+        }
+    }
+
+    /**
+     * The red line: a forward simulation of this exact controller (same sensitivities, same
+     * parabolic bow and speed swell, jitter fixed at its mean) traced as where the look ray
+     * crosses the mark's depth each tick — the curve the crosshair is about to draw.
+     */
+    private void renderPath() {
+        if (client.player == null) return;
+        Vec3d eye = client.player.getEyePos();
+        double distance = eye.distanceTo(mark);
+        float[] desired = RotationHumanizer.yawPitchTo(eye, mark);
+        double yaw = client.player.getYaw();
+        double pitch = client.player.getPitch();
+        double sensitivity = currentSensitivity;
+        double startMiss = initialMiss > 0.0 ? initialMiss : 1.0;
+        int samples = 0;
+        for (int step = 0; step < 48; step++) {
+            Vec3d look = lookVector(yaw, pitch);
+            Vec3d rayPoint = eye.add(look.multiply(distance));
+            double miss = rayPoint.distanceTo(mark);
+            RenderQueue.add("talos-aim-path:" + samples,
+                    new Box(rayPoint.x - 0.02, rayPoint.y - 0.02, rayPoint.z - 0.02,
+                            rayPoint.x + 0.02, rayPoint.y + 0.02, rayPoint.z + 0.02),
+                    MARK_COLOR, VISUAL_TTL);
+            samples++;
+            double progress = MathHelper.clamp(1.0 - miss / startMiss, 0.0, 1.0);
+            double parabola = 4.0 * progress * (1.0 - progress);
+            double pitchTarget = MathHelper.clamp(desired[1] + bowDegrees * parabola, -90.0, 90.0);
+            double yawError = MathHelper.wrapDegrees(desired[0] - yaw);
+            double pitchError = pitchTarget - pitch;
+            double angularError = Math.max(Math.abs(yawError), Math.abs(pitchError));
+            if (angularError < AIM_EPSILON_DEGREES * 0.5) break;
+            double blend = MathHelper.clamp(
+                    (miss - SLOW_ZONE_METERS) / (SLOW_ZONE_METERS * 2.0), 0.0, 1.0);
+            blend = blend * blend * (3.0 - 2.0 * blend);
+            sensitivity += (slowSensitivity + (fastSensitivity - slowSensitivity) * blend
+                    - sensitivity) * 0.35;
+            double stepSize = sensitivity * (1.0 + speedAmplitude * parabola);
+            double fraction = Math.min(1.0, stepSize / angularError);
+            yaw += yawError * fraction;
+            pitch = MathHelper.clamp(pitch + pitchError * fraction, -90.0, 90.0);
+        }
+        for (int i = samples; i < lastPathCount; i++) RenderQueue.remove("talos-aim-path:" + i);
+        lastPathCount = samples;
+    }
+
+    private static Vec3d lookVector(double yawDegrees, double pitchDegrees) {
+        double yaw = Math.toRadians(yawDegrees);
+        double pitch = Math.toRadians(pitchDegrees);
+        double cosPitch = Math.cos(pitch);
+        return new Vec3d(-Math.sin(yaw) * cosPitch, -Math.sin(pitch), Math.cos(yaw) * cosPitch);
+    }
+
+    /** Runs a standalone aim session as a scheduled task until converged (for /talos look). */
+    public static void startTask(MinecraftClient client, Vec3d target, long seed) {
+        AimController controller = new AimController(client, null, null, seed);
+        controller.aimAt(target);
+        dev.glade.client.GladeClient.taskScheduler().addTask("talos-look",
+                new dev.glade.client.task.GladeTask() {
+                    private int ticks;
+                    @Override public void initialize() { }
+                    @Override public boolean condition() {
+                        return client.player != null && ticks < 100 && !controller.isAimed();
+                    }
+                    @Override public void increment() { ticks++; }
+                    @Override public void body() { controller.tick(); scheduleDelay(); }
+                    @Override public java.util.Set<Object> getMutexKeys() {
+                        return java.util.Set.of("talos-aim");
+                    }
+                });
     }
 
     private void snapTo(Vec3d point) {

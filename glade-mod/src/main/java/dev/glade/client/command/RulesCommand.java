@@ -25,6 +25,23 @@ import net.minecraft.text.Text;
 public final class RulesCommand {
     private RulesCommand() {}
 
+    /** Triggers whose event has a subject entity, so @e/@a/@p/@s rules can filter them. */
+    private static final java.util.Set<Trigger> ENTITY_SUBJECT = java.util.Set.of(
+            Trigger.ENTITY_HELD_CHANGED, Trigger.ENTITY_OFFHAND_CHANGED,
+            Trigger.ENTITY_ARMOR_CHANGED, Trigger.ENTITY_HURT, Trigger.ENTITY_DIED,
+            Trigger.ENTITY_DAMAGED, Trigger.ENTITY_HEALED, Trigger.ENTITY_STARTED_BURNING,
+            Trigger.ENTITY_MOUNTED, Trigger.ENTITY_DISMOUNTED, Trigger.ENTITY_SNEAKING,
+            Trigger.ENTITY_SPRINTING, Trigger.ENTITY_USING_ITEM, Trigger.ENTITY_BLOCKING,
+            Trigger.ENTITY_GLIDING, Trigger.ENTITY_SWIMMING, Trigger.ENTITY_SLEEPING,
+            Trigger.ENTITY_BABY_GROWN, Trigger.VILLAGER_PROFESSION_CHANGED,
+            Trigger.VILLAGER_LEVEL_CHANGED, Trigger.PLAYER_HELD_CHANGED,
+            Trigger.PLAYER_OFFHAND_CHANGED, Trigger.PLAYER_ARMOR_CHANGED,
+            Trigger.ENTITY_SPAWNED, Trigger.ENTITY_REMOVED, Trigger.ENTITY_UNLOADED,
+            Trigger.ITEM_PICKED_UP, Trigger.PROJECTILE_LAUNCHED, Trigger.PEARL_THROWN,
+            Trigger.PEARL_LANDED, Trigger.POTION_SPLASHED, Trigger.POTION_DRANK,
+            Trigger.TOTEM_POPPED, Trigger.ENTITY_STATUS, Trigger.LOOKING_AT_ENTITY,
+            Trigger.ATTACK_ENTITY, Trigger.USE_ENTITY);
+
     public static LiteralArgumentBuilder<FabricClientCommandSource> onNode() {
         LiteralArgumentBuilder<FabricClientCommandSource> on = ClientCommandManager.literal("on");
         on.then(ClientCommandManager.literal("list").executes(context -> {
@@ -116,6 +133,19 @@ public final class RulesCommand {
                                                                                         IntegerArgumentType.getInteger(context, "x2"),
                                                                                         IntegerArgumentType.getInteger(context, "y2"),
                                                                                         IntegerArgumentType.getInteger(context, "z2")}))))))));
+            }
+            // Subject-entity triggers: 'on potion_drank @e[type=player] run ...' — the
+            // selector is tested against the event's entity, composable with 'matching'.
+            if (ENTITY_SUBJECT.contains(trigger)) {
+                node.then(ClientCommandManager.argument("selector", SelectorArgumentType.selector())
+                        .then(run(trigger, (context, rule) ->
+                                rule.selector = StringArgumentType.getString(context, "selector")))
+                        .then(ClientCommandManager.literal("matching")
+                                .then(ClientCommandManager.argument("filter", StringArgumentType.string())
+                                        .then(run(trigger, (context, rule) -> {
+                                            rule.selector = StringArgumentType.getString(context, "selector");
+                                            rule.filter = StringArgumentType.getString(context, "filter");
+                                        })))));
             }
             on.then(node);
         }

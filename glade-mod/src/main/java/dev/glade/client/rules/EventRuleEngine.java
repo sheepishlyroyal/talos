@@ -254,11 +254,11 @@ public final class EventRuleEngine {
             return ActionResult.PASS;
         });
         AttackEntityCallback.EVENT.register((player, world, hand, entity, hit) -> {
-            if (world.isClient()) fireText(Trigger.ATTACK_ENTITY, entity.getName().getString());
+            if (world.isClient()) fireEntity(Trigger.ATTACK_ENTITY, entity, entityLabel(entity));
             return ActionResult.PASS;
         });
         UseEntityCallback.EVENT.register((player, world, hand, entity, hit) -> {
-            if (world.isClient()) fireText(Trigger.USE_ENTITY, entity.getName().getString());
+            if (world.isClient()) fireEntity(Trigger.USE_ENTITY, entity, entityLabel(entity));
             return ActionResult.PASS;
         });
         UseItemCallback.EVENT.register((player, world, hand) -> {
@@ -356,8 +356,8 @@ public final class EventRuleEngine {
     /** Entity status bytes: 35 is a totem pop; everything else is exposed generically. */
     public static void onEntityStatus(Entity entity, byte status) {
         String label = entity == null ? "unknown" : entityLabel(entity);
-        if (status == 35) fireText(Trigger.TOTEM_POPPED, label);
-        fireText(Trigger.ENTITY_STATUS, label + ": " + status);
+        if (status == 35) fireEntity(Trigger.TOTEM_POPPED, entity, label);
+        fireEntity(Trigger.ENTITY_STATUS, entity, label + ": " + status);
     }
 
     public static void onParticle(String particleId, double x, double y, double z) {
@@ -386,7 +386,7 @@ public final class EventRuleEngine {
                 : "unknown x" + amount;
         String who = collector == null ? "entity#" + collectorEntityId : entityLabel(collector);
         explainedPickups.add(itemEntityId);
-        fireText(Trigger.ITEM_PICKED_UP, stack + " by " + who);
+        fireEntity(Trigger.ITEM_PICKED_UP, collector, stack + " by " + who);
     }
 
     /** MENTION fires only when a message contains the local player's own name. */
@@ -403,8 +403,21 @@ public final class EventRuleEngine {
     /* ------------------------------------------------------------------ firing */
 
     private static void fireText(Trigger trigger, String value) {
+        fireFiltered(trigger, null, value);
+    }
+
+    /** Entity-valued events also accept @e/@a/@p/@s selector rules against the subject. */
+    private static void fireEntity(Trigger trigger, Entity subject, String value) {
+        fireFiltered(trigger, subject, value);
+    }
+
+    private static void fireFiltered(Trigger trigger, Entity subject, String value) {
         for (Rule rule : RULES) {
             if (rule.triggerType() != trigger) continue;
+            if (rule.selector != null && !rule.selector.isEmpty()
+                    && (subject == null || !selectorMatches(rule, subject))) {
+                continue;
+            }
             if (rule.filter != null && !rule.filter.isEmpty()
                     && !value.toLowerCase(Locale.ROOT).contains(rule.filter.toLowerCase(Locale.ROOT))) {
                 continue;
@@ -742,6 +755,32 @@ public final class EventRuleEngine {
         }
     }
 
+    /** Tests one rule's @-selector against the event's subject entity. */
+    private static boolean selectorMatches(Rule rule, Entity subject) {
+        if (rule.selectorBroken) return false;
+        if (rule.parsedSelector == null) {
+            String[] error = new String[1];
+            rule.parsedSelector = EntitySelector.parse(rule.selector, error);
+            if (rule.parsedSelector == null) {
+                rule.selectorBroken = true;
+                LOGGER.warn("Rule #{} has an invalid selector {}: {}", rule.id, rule.selector, error[0]);
+                return false;
+            }
+        }
+        EntitySelector selector = rule.parsedSelector;
+        ClientPlayerEntity self = MinecraftClient.getInstance().player;
+        if (self != null
+                && !selector.withinDistance(Math.sqrt(subject.squaredDistanceTo(self)))) {
+            return false;
+        }
+        return switch (selector.kind()) {
+            case SELF -> subject == self;
+            case PLAYERS_ALL -> subject instanceof PlayerEntity;
+            case PLAYER_NEAREST -> subject instanceof PlayerEntity && subject != self;
+            case ENTITIES -> selector.matchesFilters(subject);
+        };
+    }
+
     private static boolean compare(Rule rule, double value) {
         if (rule.compare == null) return false;
         return switch (rule.compare) {
@@ -968,7 +1007,8 @@ public final class EventRuleEngine {
     /* ------------------------------------------------------- per-entity deep tracking */
 
     /** Everything the client actually syncs about a foreign entity, one record per tick. */
-    private record TrackedEntity(String type, String label, boolean living, boolean isItem,
+    private record TrackedEntity(Entity handle, Entity ownerHandle, String type, String label,
+            boolean living, boolean isItem,
             boolean isProjectile, boolean isPlayer, boolean isPearl, boolean isPotion,
             String ownerLabel, String hand, String offhand, String armor,
             boolean hurt, boolean burning, int vehicleId, String vehicleType, boolean sneaking,
@@ -1011,13 +1051,17 @@ public final class EventRuleEngine {
                 TrackedEntity current = entry.getValue();
                 TrackedEntity past = before.get(entry.getKey());
                 if (past == null) {
-                    fireText(Trigger.ENTITY_SPAWNED, current.label);
+                    fireEntity(Trigger.ENTITY_SPAWNED, current.handle, current.label);
                     if (current.isItem) fireText(Trigger.ITEM_SPAWNED, current.itemStack);
                     if (current.isProjectile) {
                         String by = current.ownerLabel.isEmpty() ? ""
                                 : " by " + current.ownerLabel;
-                        fireText(Trigger.PROJECTILE_LAUNCHED, current.label + by);
-                        if (current.isPearl) fireText(Trigger.PEARL_THROWN, current.label + by);
+                        // Selector rules test the THROWER, so '@s'/'@a' means whose pearl.
+                        Entity attribution = current.ownerHandle != null
+                                ? current.ownerHandle : current.handle;
+                        fireEntity(Trigger.PROJECTILE_LAUNCHED, attribution, current.label + by);
+                        if (current.isPearl) fireEntity(Trigger.PEARL_THROWN, attribution,
+                                current.label + by);
                     }
                     continue;
                 }
@@ -1043,15 +1087,16 @@ public final class EventRuleEngine {
                     String by = gone.ownerLabel.isEmpty() ? "" : " by " + gone.ownerLabel;
                     String where = String.format(Locale.ROOT, "%.0f %.0f %.0f",
                             gone.x, gone.y, gone.z);
-                    fireText(gone.isPearl ? Trigger.PEARL_LANDED : Trigger.POTION_SPLASHED,
-                            where + by);
+                    Entity attribution = gone.ownerHandle != null ? gone.ownerHandle : gone.handle;
+                    fireEntity(gone.isPearl ? Trigger.PEARL_LANDED : Trigger.POTION_SPLASHED,
+                            attribution, where + by);
                 }
                 if (!chunkStillLoaded) {
-                    fireText(Trigger.ENTITY_UNLOADED, gone.label);
+                    fireEntity(Trigger.ENTITY_UNLOADED, gone.handle, gone.label);
                 } else if (gone.living && gone.health <= 0.0F) {
-                    fireText(Trigger.ENTITY_DIED, gone.label);
+                    fireEntity(Trigger.ENTITY_DIED, gone.handle, gone.label);
                 } else {
-                    fireText(Trigger.ENTITY_REMOVED, gone.label);
+                    fireEntity(Trigger.ENTITY_REMOVED, gone.handle, gone.label);
                 }
             }
         }
@@ -1079,55 +1124,56 @@ public final class EventRuleEngine {
 
     private static void diffEntity(TrackedEntity past, TrackedEntity now) {
         String label = now.label;
+        Entity subject = now.handle;
         if (!past.hand.equals(now.hand)) {
-            fireText(Trigger.ENTITY_HELD_CHANGED, label + ": " + now.hand);
-            if (now.isPlayer) fireText(Trigger.PLAYER_HELD_CHANGED, label + ": " + now.hand);
+            fireEntity(Trigger.ENTITY_HELD_CHANGED, subject, label + ": " + now.hand);
+            if (now.isPlayer) fireEntity(Trigger.PLAYER_HELD_CHANGED, subject, label + ": " + now.hand);
         }
         if (!past.offhand.equals(now.offhand)) {
-            fireText(Trigger.ENTITY_OFFHAND_CHANGED, label + ": " + now.offhand);
-            if (now.isPlayer) fireText(Trigger.PLAYER_OFFHAND_CHANGED, label + ": " + now.offhand);
+            fireEntity(Trigger.ENTITY_OFFHAND_CHANGED, subject, label + ": " + now.offhand);
+            if (now.isPlayer) fireEntity(Trigger.PLAYER_OFFHAND_CHANGED, subject, label + ": " + now.offhand);
         }
         if (!past.armor.equals(now.armor)) {
-            fireText(Trigger.ENTITY_ARMOR_CHANGED, label + ": " + now.armor);
-            if (now.isPlayer) fireText(Trigger.PLAYER_ARMOR_CHANGED, label + ": " + now.armor);
+            fireEntity(Trigger.ENTITY_ARMOR_CHANGED, subject, label + ": " + now.armor);
+            if (now.isPlayer) fireEntity(Trigger.PLAYER_ARMOR_CHANGED, subject, label + ": " + now.armor);
         }
-        if (!past.hurt && now.hurt) fireText(Trigger.ENTITY_HURT, label);
+        if (!past.hurt && now.hurt) fireEntity(Trigger.ENTITY_HURT, subject, label);
         if (now.living && past.health > 0.0F && now.health <= 0.0F) {
-            fireText(Trigger.ENTITY_DIED, label);
+            fireEntity(Trigger.ENTITY_DIED, subject, label);
         }
         if (now.living && now.health < past.health - 0.01F) {
-            fireText(Trigger.ENTITY_DAMAGED, label + ": -" + String.format(Locale.ROOT,
+            fireEntity(Trigger.ENTITY_DAMAGED, subject, label + ": -" + String.format(Locale.ROOT,
                     "%.1f", past.health - now.health));
         }
         if (now.living && now.health > past.health + 0.01F && past.health > 0.0F) {
-            fireText(Trigger.ENTITY_HEALED, label + ": +" + String.format(Locale.ROOT,
+            fireEntity(Trigger.ENTITY_HEALED, subject, label + ": +" + String.format(Locale.ROOT,
                     "%.1f", now.health - past.health));
         }
-        if (!past.burning && now.burning) fireText(Trigger.ENTITY_STARTED_BURNING, label);
+        if (!past.burning && now.burning) fireEntity(Trigger.ENTITY_STARTED_BURNING, subject, label);
         if (past.vehicleId != now.vehicleId) {
-            if (now.vehicleId != -1) fireText(Trigger.ENTITY_MOUNTED,
+            if (now.vehicleId != -1) fireEntity(Trigger.ENTITY_MOUNTED, subject,
                     label + " -> " + now.vehicleType);
-            if (past.vehicleId != -1) fireText(Trigger.ENTITY_DISMOUNTED,
+            if (past.vehicleId != -1) fireEntity(Trigger.ENTITY_DISMOUNTED, subject,
                     label + " <- " + past.vehicleType);
         }
-        if (!past.sneaking && now.sneaking) fireText(Trigger.ENTITY_SNEAKING, label);
-        if (!past.sprinting && now.sprinting) fireText(Trigger.ENTITY_SPRINTING, label);
-        if (!past.usingItem && now.usingItem) fireText(Trigger.ENTITY_USING_ITEM,
+        if (!past.sneaking && now.sneaking) fireEntity(Trigger.ENTITY_SNEAKING, subject, label);
+        if (!past.sprinting && now.sprinting) fireEntity(Trigger.ENTITY_SPRINTING, subject, label);
+        if (!past.usingItem && now.usingItem) fireEntity(Trigger.ENTITY_USING_ITEM, subject,
                 label + ": " + now.hand);
-        if (!past.blocking && now.blocking) fireText(Trigger.ENTITY_BLOCKING, label);
-        if (!past.gliding && now.gliding) fireText(Trigger.ENTITY_GLIDING, label);
-        if (!past.swimming && now.swimming) fireText(Trigger.ENTITY_SWIMMING, label);
-        if (!past.sleeping && now.sleeping) fireText(Trigger.ENTITY_SLEEPING, label);
-        if (past.baby && !now.baby) fireText(Trigger.ENTITY_BABY_GROWN, label);
+        if (!past.blocking && now.blocking) fireEntity(Trigger.ENTITY_BLOCKING, subject, label);
+        if (!past.gliding && now.gliding) fireEntity(Trigger.ENTITY_GLIDING, subject, label);
+        if (!past.swimming && now.swimming) fireEntity(Trigger.ENTITY_SWIMMING, subject, label);
+        if (!past.sleeping && now.sleeping) fireEntity(Trigger.ENTITY_SLEEPING, subject, label);
+        if (past.baby && !now.baby) fireEntity(Trigger.ENTITY_BABY_GROWN, subject, label);
         // Finishing a use-cycle while holding a potion is a completed drink (self included).
         if (past.usingItem && !now.usingItem && past.hand.contains("potion")) {
-            fireText(Trigger.POTION_DRANK, label + ": " + past.hand);
+            fireEntity(Trigger.POTION_DRANK, subject, label + ": " + past.hand);
         }
         if (!past.profession.equals(now.profession) && !now.profession.isEmpty()) {
-            fireText(Trigger.VILLAGER_PROFESSION_CHANGED, label + ": " + now.profession);
+            fireEntity(Trigger.VILLAGER_PROFESSION_CHANGED, subject, label + ": " + now.profession);
         }
         if (past.level != now.level && now.level > 0) {
-            fireText(Trigger.VILLAGER_LEVEL_CHANGED, label + ": " + now.level);
+            fireEntity(Trigger.VILLAGER_LEVEL_CHANGED, subject, label + ": " + now.level);
         }
     }
 
@@ -1184,11 +1230,12 @@ public final class EventRuleEngine {
         }
         boolean isProjectile = entity instanceof net.minecraft.entity.projectile.ProjectileEntity;
         String ownerLabel = "";
+        Entity ownerHandle = null;
         if (isProjectile) {
-            Entity owner = ((net.minecraft.entity.projectile.ProjectileEntity) entity).getOwner();
-            if (owner != null) ownerLabel = entityLabel(owner);
+            ownerHandle = ((net.minecraft.entity.projectile.ProjectileEntity) entity).getOwner();
+            if (ownerHandle != null) ownerLabel = entityLabel(ownerHandle);
         }
-        return new TrackedEntity(type, label, living, isItem, isProjectile,
+        return new TrackedEntity(entity, ownerHandle, type, label, living, isItem, isProjectile,
                 entity instanceof PlayerEntity,
                 entity instanceof net.minecraft.entity.projectile.thrown.EnderPearlEntity,
                 entity instanceof net.minecraft.entity.projectile.thrown.PotionEntity,

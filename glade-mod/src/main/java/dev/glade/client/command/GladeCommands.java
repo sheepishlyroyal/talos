@@ -165,6 +165,7 @@ public final class GladeCommands {
                 .then(RulesCommand.afterNode())
                 .then(MacroCommand.node())
                 .then(GetCommand.node())
+                .then(TrackCommand.node())
                 .then(ClientCommandManager.literal("kill")
                         .then(ClientCommandManager.literal("nearest")
                                 .executes(context -> ActionCommand.killNearest(context, 6.0))
