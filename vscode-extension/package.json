@@ -2,7 +2,7 @@
   "name": "talos",
   "displayName": "Talos Scripting",
   "description": "Push and run Python automation scripts against the Talos Minecraft Fabric mod over a local WebSocket, with live log streaming.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "talos",
   "private": true,
   "engines": {
@@ -32,6 +32,11 @@
         "command": "talos.reconnect",
         "title": "Talos: Reconnect",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "talos.toggleRunOnSave",
+        "title": "Talos: Toggle Run-on-Save Live Reload",
+        "icon": "$(sync)"
       }
     ],
     "keybindings": [
@@ -53,6 +58,29 @@
         },
         {
           "command": "talos.reconnect"
+        },
+        {
+          "command": "talos.toggleRunOnSave",
+          "when": "editorLangId == python"
+        }
+      ],
+      "editor/title/run": [
+        {
+          "command": "talos.runScript",
+          "when": "resourceLangId == python",
+          "group": "talos@1"
+        },
+        {
+          "command": "talos.stopScript",
+          "when": "resourceLangId == python",
+          "group": "talos@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "talos.toggleRunOnSave",
+          "when": "resourceLangId == python",
+          "group": "navigation@99"
         }
       ]
     },
@@ -73,6 +101,11 @@
           "type": "string",
           "default": "~/.talos/token",
           "description": "Path to the per-session auth token file written by the Talos mod. '~' expands to your home directory."
+        },
+        "talos.runOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, saving a Python (.py) file automatically re-pushes and re-runs it in the running Minecraft session (live reload — no game restart). Toggle from the editor title bar or the command palette."
         }
       }
     }

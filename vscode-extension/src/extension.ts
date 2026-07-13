@@ -21,8 +21,21 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand('talos.runScript', () => void runScript()),
         vscode.commands.registerCommand('talos.stopScript', () => void stopScript()),
-        vscode.commands.registerCommand('talos.reconnect', () => void reconnect())
+        vscode.commands.registerCommand('talos.reconnect', () => void reconnect()),
+        vscode.commands.registerCommand('talos.toggleRunOnSave', () => toggleRunOnSave())
     );
+
+    // Live reload: when run-on-save is on, saving a .py re-pushes + re-runs it in
+    // the already-running game — no Minecraft restart, just a fresh script session.
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument((doc) => {
+            if (!runOnSave) return;
+            if (doc.languageId !== 'python' && !doc.fileName.endsWith('.py')) return;
+            void runScript(doc);
+        })
+    );
+
+    renderRunOnSaveStatus();
 
     context.subscriptions.push({
         dispose: () => {
@@ -30,6 +43,35 @@ export function activate(context: vscode.ExtensionContext): void {
             connection = undefined;
         },
     });
+}
+
+/** Whether saving a .py auto-runs it in-game. Mirrors the `talos.runOnSave` setting,
+ *  seeded from config at activation and flipped by the toggle command. */
+let runOnSave = vscode.workspace.getConfiguration('talos').get<boolean>('runOnSave', false);
+let runOnSaveStatus: vscode.StatusBarItem | undefined;
+
+function toggleRunOnSave(): void {
+    runOnSave = !runOnSave;
+    void vscode.workspace
+        .getConfiguration('talos')
+        .update('runOnSave', runOnSave, vscode.ConfigurationTarget.Global);
+    renderRunOnSaveStatus();
+    void vscode.window.setStatusBarMessage(
+        `Talos live reload ${runOnSave ? 'ON — saving a .py runs it in Minecraft' : 'OFF'}`,
+        4000
+    );
+}
+
+function renderRunOnSaveStatus(): void {
+    if (!runOnSaveStatus) {
+        runOnSaveStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+        runOnSaveStatus.command = 'talos.toggleRunOnSave';
+    }
+    runOnSaveStatus.text = runOnSave ? '$(sync) Talos live' : '$(sync-ignored) Talos live';
+    runOnSaveStatus.tooltip = runOnSave
+        ? 'Talos live reload is ON — saving a .py re-runs it in Minecraft. Click to turn off.'
+        : 'Talos live reload is OFF. Click to turn on (save = run in-game).';
+    runOnSaveStatus.show();
 }
 
 export function deactivate(): void {
@@ -98,13 +140,12 @@ function connectAndWaitReady(conn: TalosConnection, timeoutMs = 10_000): Promise
     });
 }
 
-async function runScript(): Promise<void> {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) {
+async function runScript(target?: vscode.TextDocument): Promise<void> {
+    const doc = target ?? vscode.window.activeTextEditor?.document;
+    if (!doc) {
         void vscode.window.showErrorMessage('Talos: no active editor.');
         return;
     }
-    const doc = editor.document;
     if (doc.languageId !== 'python' && !doc.fileName.endsWith('.py')) {
         void vscode.window.showErrorMessage('Talos: active file is not a Python (.py) script.');
         return;
