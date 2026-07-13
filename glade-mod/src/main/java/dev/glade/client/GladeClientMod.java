@@ -44,6 +44,6 @@ public final class GladeClientMod implements ClientModInitializer {
             GladeClient.taskScheduler().onLevelUnload();
             RenderQueue.clear();
         });
-        LOGGER.info("Glade initialized");
+        LOGGER.info("Talos initialized");
     }
 }

@@ -77,7 +77,7 @@ public final class NavigateAndActTask extends GladeTask {
         if (mode.equals(lastStatus)) return;
         lastStatus = mode;
         if (client.player != null) {
-            client.player.sendMessage(net.minecraft.text.Text.literal("§bGlade §7» §f" + mode), true);
+            client.player.sendMessage(net.minecraft.text.Text.literal("§bTalos §7» §f" + mode), true);
         }
     }
 
@@ -777,7 +777,7 @@ public final class NavigateAndActTask extends GladeTask {
     private void finish(boolean success, String detail) {
         if (client.player != null) {
             client.player.sendMessage(net.minecraft.text.Text.literal(
-                    (success ? "§aGlade §7» §f" : "§cGlade §7» §f") + detail), true);
+                    (success ? "§aTalos §7» §f" : "§cTalos §7» §f") + detail), true);
         }
         releaseInputs();
         future.complete(new PathResult(success, detail));

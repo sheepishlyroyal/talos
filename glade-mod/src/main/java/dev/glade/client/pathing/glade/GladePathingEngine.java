@@ -171,7 +171,7 @@ public final class GladePathingEngine implements PathingEngine {
             run.task = task;
             activeTask = task;
             if (client.player != null) client.player.sendMessage(
-                    net.minecraft.text.Text.literal("§bGlade §7» §fplanning"), true);
+                    net.minecraft.text.Text.literal("§bTalos §7» §fplanning"), true);
         }
         try {
             GladeClient.taskScheduler().addTask("native-path-plan", task);

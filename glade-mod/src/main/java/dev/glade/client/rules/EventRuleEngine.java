@@ -55,7 +55,7 @@ public final class EventRuleEngine {
     private static final Logger LOGGER = LoggerFactory.getLogger(EventRuleEngine.class);
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Path RULES_FILE =
-            Path.of(System.getProperty("user.home"), ".glade", "rules.json");
+            Path.of(System.getProperty("user.home"), ".talos", "rules.json");
     private static final int RULE_COOLDOWN_TICKS = 10; // re-entrancy / spam guard
     private static final int BLOCK_SCAN_PERIOD = 20;   // block scans are 1 Hz per rule
     public static final int MAX_BLOCK_RADIUS = 16;
@@ -117,6 +117,24 @@ public final class EventRuleEngine {
         // Interactions.
         ATTACK_BLOCK(Kind.NONE), USE_BLOCK(Kind.NONE), ATTACK_ENTITY(Kind.NONE),
         USE_ENTITY(Kind.NONE), USE_ITEM(Kind.NONE),
+        // Per-entity events — EVERY loaded entity is tracked; {value} is "type[/name]: detail"
+        // so 'matching' can target a species, a name, or an item. (Villager INVENTORIES are
+        // not synced to clients; profession/level/equipment are, and are covered below.)
+        ENTITY_HELD_CHANGED(Kind.TEXT), ENTITY_OFFHAND_CHANGED(Kind.TEXT),
+        ENTITY_ARMOR_CHANGED(Kind.TEXT), ENTITY_HURT(Kind.TEXT), ENTITY_DIED(Kind.TEXT),
+        ENTITY_DAMAGED(Kind.TEXT), ENTITY_HEALED(Kind.TEXT),
+        ENTITY_STARTED_BURNING(Kind.TEXT), ENTITY_MOUNTED(Kind.TEXT),
+        ENTITY_DISMOUNTED(Kind.TEXT), ENTITY_SNEAKING(Kind.TEXT), ENTITY_SPRINTING(Kind.TEXT),
+        ENTITY_USING_ITEM(Kind.TEXT), ENTITY_BLOCKING(Kind.TEXT), ENTITY_GLIDING(Kind.TEXT),
+        ENTITY_SWIMMING(Kind.TEXT), ENTITY_SLEEPING(Kind.TEXT), ENTITY_BABY_GROWN(Kind.TEXT),
+        VILLAGER_PROFESSION_CHANGED(Kind.TEXT), VILLAGER_LEVEL_CHANGED(Kind.TEXT),
+        PLAYER_HELD_CHANGED(Kind.TEXT), PLAYER_OFFHAND_CHANGED(Kind.TEXT),
+        PLAYER_ARMOR_CHANGED(Kind.TEXT), PLAYER_GAMEMODE_CHANGED(Kind.TEXT),
+        ITEM_SPAWNED(Kind.TEXT), ITEM_PICKED_UP(Kind.TEXT), ITEM_DESPAWNED(Kind.TEXT),
+        PROJECTILE_LAUNCHED(Kind.TEXT),
+        // Open-container content diffs — the chest-indexing primitive.
+        CONTAINER_ITEM_GAINED(Kind.TEXT), CONTAINER_ITEM_LOST(Kind.TEXT),
+        CONTAINER_TITLE(Kind.TEXT),
         // Metrics — every one supports instant compares, 'for <seconds>' sustained compares,
         // and 'changes above|below <delta> within <seconds>' windowed net change.
         HEALTH(Kind.COMPARE), HUNGER(Kind.COMPARE), AIR(Kind.COMPARE), XP_LEVEL(Kind.COMPARE),
@@ -136,6 +154,9 @@ public final class EventRuleEngine {
         CROSSHAIR_DISTANCE(Kind.COMPARE), SPAWN_DISTANCE(Kind.COMPARE),
         FIRE_TICKS(Kind.COMPARE), FROZEN_TICKS(Kind.COMPARE), HURT_TIME(Kind.COMPARE),
         STUCK_ARROWS(Kind.COMPARE), VEHICLE_SPEED(Kind.COMPARE), EFFECT_COUNT(Kind.COMPARE),
+        WORLD_BORDER_DISTANCE(Kind.COMPARE), SERVER_TPS(Kind.COMPARE), YAW(Kind.COMPARE),
+        PITCH(Kind.COMPARE), HELD_COUNT(Kind.COMPARE), MAX_HEALTH(Kind.COMPARE),
+        WORLD_AGE(Kind.COMPARE),
         // Clock.
         TICK_EVERY(Kind.NUMBER);
 
@@ -184,6 +205,12 @@ public final class EventRuleEngine {
     private static int tick;
     private static Snapshot previous;
     private static int lastMovedTick;
+    private static Map<Integer, TrackedEntity> trackedEntities = Map.of();
+    private static Map<String, String> playerGamemodes = Map.of();
+    private static Map<String, Integer> containerCounts = Map.of();
+    private static double serverTps = 20.0;
+    private static long tpsWorldTimeAnchor = -1L;
+    private static int tpsClientTickAnchor;
 
     private EventRuleEngine() {}
 
@@ -382,7 +409,16 @@ public final class EventRuleEngine {
                     && !now.position.equals(before.position)) {
                 lastMovedTick = tick;
             }
+            updateServerTps(client);
             evaluateConditionRules(client, client.player);
+            evaluateEntityEvents(client, client.player);
+            evaluateContainerEvents(client, client.player,
+                    before != null && before.containerOpen, now.containerOpen);
+        } else {
+            trackedEntities = Map.of();
+            playerGamemodes = Map.of();
+            containerCounts = Map.of();
+            tpsWorldTimeAnchor = -1L;
         }
 
         if (before == null) return;
@@ -728,6 +764,14 @@ public final class EventRuleEngine {
             case VEHICLE_SPEED -> player.getVehicle() == null ? 0.0
                     : player.getVehicle().getVelocity().horizontalLength() * 20.0;
             case EFFECT_COUNT -> player.getStatusEffects().size();
+            case WORLD_BORDER_DISTANCE -> client.world.getWorldBorder()
+                    .getDistanceInsideBorder(player);
+            case SERVER_TPS -> serverTps;
+            case YAW -> net.minecraft.util.math.MathHelper.wrapDegrees(player.getYaw());
+            case PITCH -> player.getPitch();
+            case HELD_COUNT -> player.getMainHandStack().getCount();
+            case MAX_HEALTH -> player.getMaxHealth();
+            case WORLD_AGE -> client.world.getTime();
             default -> 0.0;
         };
     }
@@ -819,6 +863,247 @@ public final class EventRuleEngine {
             if (stack.getItem() == rule.cachedItem) total += stack.getCount();
         }
         return total;
+    }
+
+    /* ------------------------------------------------------- per-entity deep tracking */
+
+    /** Everything the client actually syncs about a foreign entity, one record per tick. */
+    private record TrackedEntity(String type, String label, boolean living, boolean isItem,
+            boolean isProjectile, boolean isPlayer, String hand, String offhand, String armor,
+            boolean hurt, boolean burning, int vehicleId, String vehicleType, boolean sneaking,
+            boolean sprinting, boolean usingItem, boolean blocking, boolean gliding,
+            boolean swimming, boolean sleeping, boolean baby, float health, String profession,
+            int level, double x, double y, double z, String itemStack) {}
+
+    private static final Set<Trigger> ENTITY_EVENT_TRIGGERS = Set.of(
+            Trigger.ENTITY_HELD_CHANGED, Trigger.ENTITY_OFFHAND_CHANGED,
+            Trigger.ENTITY_ARMOR_CHANGED, Trigger.ENTITY_HURT, Trigger.ENTITY_DIED,
+            Trigger.ENTITY_DAMAGED, Trigger.ENTITY_HEALED, Trigger.ENTITY_STARTED_BURNING,
+            Trigger.ENTITY_MOUNTED, Trigger.ENTITY_DISMOUNTED, Trigger.ENTITY_SNEAKING,
+            Trigger.ENTITY_SPRINTING, Trigger.ENTITY_USING_ITEM, Trigger.ENTITY_BLOCKING,
+            Trigger.ENTITY_GLIDING, Trigger.ENTITY_SWIMMING, Trigger.ENTITY_SLEEPING,
+            Trigger.ENTITY_BABY_GROWN, Trigger.VILLAGER_PROFESSION_CHANGED,
+            Trigger.VILLAGER_LEVEL_CHANGED, Trigger.PLAYER_HELD_CHANGED,
+            Trigger.PLAYER_OFFHAND_CHANGED, Trigger.PLAYER_ARMOR_CHANGED,
+            Trigger.PLAYER_GAMEMODE_CHANGED, Trigger.ITEM_SPAWNED, Trigger.ITEM_PICKED_UP,
+            Trigger.ITEM_DESPAWNED, Trigger.PROJECTILE_LAUNCHED);
+
+    private static void evaluateEntityEvents(MinecraftClient client, ClientPlayerEntity player) {
+        boolean anyRule = false;
+        for (Rule rule : RULES) {
+            if (ENTITY_EVENT_TRIGGERS.contains(rule.triggerType())) { anyRule = true; break; }
+            if (rule.triggerType() == Trigger.PLAYER_GAMEMODE_CHANGED) { anyRule = true; break; }
+        }
+        if (!anyRule) { trackedEntities = Map.of(); playerGamemodes = Map.of(); return; }
+
+        Map<Integer, TrackedEntity> now = new HashMap<>();
+        for (Entity entity : client.world.getEntities()) {
+            now.put(entity.getId(), track(entity));
+        }
+        Map<Integer, TrackedEntity> before = trackedEntities;
+        trackedEntities = now;
+        if (!before.isEmpty()) {
+            for (Map.Entry<Integer, TrackedEntity> entry : now.entrySet()) {
+                TrackedEntity current = entry.getValue();
+                TrackedEntity past = before.get(entry.getKey());
+                if (past == null) {
+                    if (current.isItem) fireText(Trigger.ITEM_SPAWNED, current.itemStack);
+                    if (current.isProjectile) fireText(Trigger.PROJECTILE_LAUNCHED, current.type);
+                    continue;
+                }
+                diffEntity(past, current);
+            }
+            for (Map.Entry<Integer, TrackedEntity> entry : before.entrySet()) {
+                if (now.containsKey(entry.getKey())) continue;
+                TrackedEntity gone = entry.getValue();
+                if (gone.isItem) {
+                    // Someone within pickup range at the item's last position = a pickup.
+                    TrackedEntity collector = null;
+                    double best = 2.5 * 2.5;
+                    for (TrackedEntity candidate : now.values()) {
+                        if (!candidate.living) continue;
+                        double dx = candidate.x - gone.x, dy = candidate.y - gone.y,
+                                dz = candidate.z - gone.z;
+                        double distance = dx * dx + dy * dy + dz * dz;
+                        if (distance < best) { best = distance; collector = candidate; }
+                    }
+                    if (collector != null) fireText(Trigger.ITEM_PICKED_UP,
+                            gone.itemStack + " by " + collector.label);
+                    else fireText(Trigger.ITEM_DESPAWNED, gone.itemStack);
+                }
+                if (gone.living && gone.health <= 0.0F) {
+                    fireText(Trigger.ENTITY_DIED, gone.label);
+                }
+            }
+        }
+
+        // Gamemodes come from the tab list, not the entity, and cover the local player too.
+        Map<String, String> modes = new HashMap<>();
+        if (player.networkHandler != null) {
+            for (PlayerListEntry entry : player.networkHandler.getPlayerList()) {
+                modes.put(entry.getProfile().name(),
+                        entry.getGameMode() == null ? "?" : entry.getGameMode().name());
+            }
+        }
+        if (!playerGamemodes.isEmpty()) {
+            for (Map.Entry<String, String> entry : modes.entrySet()) {
+                String old = playerGamemodes.get(entry.getKey());
+                if (old != null && !old.equals(entry.getValue())) {
+                    fireText(Trigger.PLAYER_GAMEMODE_CHANGED,
+                            entry.getKey() + ": " + entry.getValue().toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        playerGamemodes = modes;
+    }
+
+    private static void diffEntity(TrackedEntity past, TrackedEntity now) {
+        String label = now.label;
+        if (!past.hand.equals(now.hand)) {
+            fireText(Trigger.ENTITY_HELD_CHANGED, label + ": " + now.hand);
+            if (now.isPlayer) fireText(Trigger.PLAYER_HELD_CHANGED, label + ": " + now.hand);
+        }
+        if (!past.offhand.equals(now.offhand)) {
+            fireText(Trigger.ENTITY_OFFHAND_CHANGED, label + ": " + now.offhand);
+            if (now.isPlayer) fireText(Trigger.PLAYER_OFFHAND_CHANGED, label + ": " + now.offhand);
+        }
+        if (!past.armor.equals(now.armor)) {
+            fireText(Trigger.ENTITY_ARMOR_CHANGED, label + ": " + now.armor);
+            if (now.isPlayer) fireText(Trigger.PLAYER_ARMOR_CHANGED, label + ": " + now.armor);
+        }
+        if (!past.hurt && now.hurt) fireText(Trigger.ENTITY_HURT, label);
+        if (now.living && past.health > 0.0F && now.health <= 0.0F) {
+            fireText(Trigger.ENTITY_DIED, label);
+        }
+        if (now.living && now.health < past.health - 0.01F) {
+            fireText(Trigger.ENTITY_DAMAGED, label + ": -" + String.format(Locale.ROOT,
+                    "%.1f", past.health - now.health));
+        }
+        if (now.living && now.health > past.health + 0.01F && past.health > 0.0F) {
+            fireText(Trigger.ENTITY_HEALED, label + ": +" + String.format(Locale.ROOT,
+                    "%.1f", now.health - past.health));
+        }
+        if (!past.burning && now.burning) fireText(Trigger.ENTITY_STARTED_BURNING, label);
+        if (past.vehicleId != now.vehicleId) {
+            if (now.vehicleId != -1) fireText(Trigger.ENTITY_MOUNTED,
+                    label + " -> " + now.vehicleType);
+            if (past.vehicleId != -1) fireText(Trigger.ENTITY_DISMOUNTED,
+                    label + " <- " + past.vehicleType);
+        }
+        if (!past.sneaking && now.sneaking) fireText(Trigger.ENTITY_SNEAKING, label);
+        if (!past.sprinting && now.sprinting) fireText(Trigger.ENTITY_SPRINTING, label);
+        if (!past.usingItem && now.usingItem) fireText(Trigger.ENTITY_USING_ITEM,
+                label + ": " + now.hand);
+        if (!past.blocking && now.blocking) fireText(Trigger.ENTITY_BLOCKING, label);
+        if (!past.gliding && now.gliding) fireText(Trigger.ENTITY_GLIDING, label);
+        if (!past.swimming && now.swimming) fireText(Trigger.ENTITY_SWIMMING, label);
+        if (!past.sleeping && now.sleeping) fireText(Trigger.ENTITY_SLEEPING, label);
+        if (past.baby && !now.baby) fireText(Trigger.ENTITY_BABY_GROWN, label);
+        if (!past.profession.equals(now.profession) && !now.profession.isEmpty()) {
+            fireText(Trigger.VILLAGER_PROFESSION_CHANGED, label + ": " + now.profession);
+        }
+        if (past.level != now.level && now.level > 0) {
+            fireText(Trigger.VILLAGER_LEVEL_CHANGED, label + ": " + now.level);
+        }
+    }
+
+    private static TrackedEntity track(Entity entity) {
+        String type = Registries.ENTITY_TYPE.getId(entity.getType()).toString();
+        String label = entity instanceof PlayerEntity || entity.hasCustomName()
+                ? type + "/" + entity.getName().getString() : type;
+        boolean living = entity instanceof net.minecraft.entity.LivingEntity;
+        String hand = "", offhand = "", armor = "";
+        boolean usingItem = false, blocking = false, sleeping = false, baby = false;
+        float health = 0.0F;
+        String profession = "";
+        int level = 0;
+        if (living) {
+            net.minecraft.entity.LivingEntity livingEntity =
+                    (net.minecraft.entity.LivingEntity) entity;
+            hand = Registries.ITEM.getId(livingEntity.getMainHandStack().getItem()).toString();
+            offhand = Registries.ITEM.getId(livingEntity.getOffHandStack().getItem()).toString();
+            StringBuilder armorBuilder = new StringBuilder();
+            for (net.minecraft.entity.EquipmentSlot slot : new net.minecraft.entity.EquipmentSlot[] {
+                    net.minecraft.entity.EquipmentSlot.HEAD, net.minecraft.entity.EquipmentSlot.CHEST,
+                    net.minecraft.entity.EquipmentSlot.LEGS, net.minecraft.entity.EquipmentSlot.FEET}) {
+                if (!armorBuilder.isEmpty()) armorBuilder.append(',');
+                armorBuilder.append(Registries.ITEM.getId(
+                        livingEntity.getEquippedStack(slot).getItem()).getPath());
+            }
+            armor = armorBuilder.toString();
+            usingItem = livingEntity.isUsingItem();
+            blocking = livingEntity.isBlocking();
+            sleeping = livingEntity.isSleeping();
+            baby = livingEntity.isBaby();
+            health = livingEntity.getHealth();
+            if (entity instanceof net.minecraft.entity.passive.VillagerEntity villager) {
+                profession = villager.getVillagerData().profession().getIdAsString();
+                level = villager.getVillagerData().level();
+            }
+        }
+        String itemStack = "";
+        boolean isItem = entity instanceof net.minecraft.entity.ItemEntity;
+        if (isItem) {
+            ItemStack stack = ((net.minecraft.entity.ItemEntity) entity).getStack();
+            itemStack = Registries.ITEM.getId(stack.getItem()) + " x" + stack.getCount();
+        }
+        return new TrackedEntity(type, label, living, isItem,
+                entity instanceof net.minecraft.entity.projectile.ProjectileEntity,
+                entity instanceof PlayerEntity, hand, offhand, armor,
+                living && ((net.minecraft.entity.LivingEntity) entity).hurtTime > 0,
+                entity.getFireTicks() > 0,
+                entity.getVehicle() == null ? -1 : entity.getVehicle().getId(),
+                entity.getVehicle() == null ? "" : Registries.ENTITY_TYPE.getId(
+                        entity.getVehicle().getType()).toString(),
+                entity.isSneaking(), entity.isSprinting(), usingItem, blocking,
+                living && ((net.minecraft.entity.LivingEntity) entity).isGliding(),
+                entity.isSwimming(), sleeping, baby, health, profession, level,
+                entity.getX(), entity.getY(), entity.getZ(), itemStack);
+    }
+
+    /** Open-container content diffs plus the container's title on open. */
+    private static void evaluateContainerEvents(MinecraftClient client,
+            ClientPlayerEntity player, boolean wasOpen, boolean isOpen) {
+        if (!isOpen) { containerCounts = Map.of(); return; }
+        if (!wasOpen && client.currentScreen != null) {
+            fireText(Trigger.CONTAINER_TITLE, client.currentScreen.getTitle().getString());
+        }
+        Map<String, Integer> now = new HashMap<>();
+        for (net.minecraft.screen.slot.Slot slot : player.currentScreenHandler.slots) {
+            if (slot.inventory == player.getInventory() || slot.getStack().isEmpty()) continue;
+            now.merge(Registries.ITEM.getId(slot.getStack().getItem()).toString(),
+                    slot.getStack().getCount(), Integer::sum);
+        }
+        Map<String, Integer> before = containerCounts;
+        containerCounts = now;
+        if (wasOpen && !before.isEmpty() || wasOpen && !now.isEmpty()) {
+            for (Map.Entry<String, Integer> entry : now.entrySet()) {
+                int delta = entry.getValue() - before.getOrDefault(entry.getKey(), 0);
+                if (delta > 0) fireText(Trigger.CONTAINER_ITEM_GAINED,
+                        entry.getKey() + " x" + delta);
+            }
+            for (Map.Entry<String, Integer> entry : before.entrySet()) {
+                int delta = entry.getValue() - now.getOrDefault(entry.getKey(), 0);
+                if (delta > 0) fireText(Trigger.CONTAINER_ITEM_LOST,
+                        entry.getKey() + " x" + delta);
+            }
+        }
+    }
+
+    /** Server TPS estimated from world-time advancement over a rolling five-second window. */
+    private static void updateServerTps(MinecraftClient client) {
+        long worldTime = client.world.getTime();
+        if (tpsWorldTimeAnchor < 0L) {
+            tpsWorldTimeAnchor = worldTime;
+            tpsClientTickAnchor = tick;
+            return;
+        }
+        int clientTicks = tick - tpsClientTickAnchor;
+        if (clientTicks >= 100) {
+            serverTps = Math.min(20.0, (worldTime - tpsWorldTimeAnchor) * 20.0 / clientTicks);
+            tpsWorldTimeAnchor = worldTime;
+            tpsClientTickAnchor = tick;
+        }
     }
 
     /** Threshold rules fire once on crossing and re-arm only after leaving the zone. */

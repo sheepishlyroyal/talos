@@ -275,7 +275,7 @@ public final class InputCommand {
             done = true;
             binding.setPressed(false);
             if (client.player != null) client.player.sendMessage(
-                    Text.literal("§bGlade §7» §fwalk " + directionName + ": " + detail), true);
+                    Text.literal("§bTalos §7» §fwalk " + directionName + ": " + detail), true);
         }
 
         @Override public void onCompleted() { binding.setPressed(false); }

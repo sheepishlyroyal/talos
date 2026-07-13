@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "id": "glade",
+  "id": "talos",
   "version": "${version}",
-  "name": "Glade",
+  "name": "Talos",
   "environment": "client",
   "entrypoints": {
     "client": ["dev.glade.client.GladeClientMod", "dev.glade.client.script.ScriptClientInit"],

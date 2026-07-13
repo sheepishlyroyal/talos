@@ -607,7 +607,7 @@ public final class SimFollowTask extends GladeTask {
         if (mode.equals(lastStatus)) return;
         lastStatus = mode;
         if (client.player != null) client.player.sendMessage(
-                Text.literal("§bGlade §7» §f" + mode), true);
+                Text.literal("§bTalos §7» §f" + mode), true);
     }
 
     public void cancel() { finish(false, "Pathing cancelled"); _break(); }
@@ -615,7 +615,7 @@ public final class SimFollowTask extends GladeTask {
     private void finish(boolean success, String detail) {
         releaseInputs();
         if (client.player != null) client.player.sendMessage(Text.literal(
-                (success ? "§aGlade §7» §f" : "§cGlade §7» §f") + detail), true);
+                (success ? "§aTalos §7» §f" : "§cTalos §7» §f") + detail), true);
         future.complete(new PathResult(success, detail));
     }
 

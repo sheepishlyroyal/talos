@@ -32,7 +32,7 @@ public final class GladeCommands {
     private static void registerCommands(
             com.mojang.brigadier.CommandDispatcher<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> dispatcher,
             CommandRegistryAccess registryAccess) {
-        dispatcher.register(ClientCommandManager.literal("glade")
+        var talosRoot = dispatcher.register(ClientCommandManager.literal("talos")
                 .then(ClientCommandManager.literal("find")
                         .then(ClientCommandManager.literal("block")
                                 .then(ClientCommandManager.argument(
@@ -172,6 +172,8 @@ public final class GladeCommands {
                                                 "radius", DoubleArgumentType.doubleArg(1.0, 64.0))
                                         .executes(context -> ActionCommand.killNearest(context,
                                                 DoubleArgumentType.getDouble(context, "radius")))))));
+        // Legacy alias: every /talos subcommand keeps working as /glade.
+        dispatcher.register(ClientCommandManager.literal("glade").redirect(talosRoot));
     }
 
     /**

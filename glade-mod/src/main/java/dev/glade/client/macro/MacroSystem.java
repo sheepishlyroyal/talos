@@ -28,7 +28,7 @@ public final class MacroSystem {
     private static final Logger LOGGER = LoggerFactory.getLogger(MacroSystem.class);
     private static final Gson GSON = new GsonBuilder().create();
     private static final Path MACRO_DIR =
-            Path.of(System.getProperty("user.home"), ".glade", "macros");
+            Path.of(System.getProperty("user.home"), ".talos", "macros");
     private static final int MAX_RECORD_TICKS = 20 * 300; // five minutes
 
     /** One tick of input. Bit order matches {@link #bindings(GameOptions)}. */
@@ -152,7 +152,7 @@ public final class MacroSystem {
         if (target.size() >= MAX_RECORD_TICKS) {
             int frames = stopRecording();
             client.player.sendMessage(Text.literal(
-                    "§bGlade §7» §fmacro recording auto-stopped at " + frames + " ticks"), false);
+                    "§bTalos §7» §fmacro recording auto-stopped at " + frames + " ticks"), false);
         }
     }
 
@@ -273,7 +273,7 @@ public final class MacroSystem {
             done = true;
             release();
             if (client.player != null) client.player.sendMessage(
-                    Text.literal("§bGlade §7» §fmacro '" + name + "' finished"), true);
+                    Text.literal("§bTalos §7» §fmacro '" + name + "' finished"), true);
         }
 
         private void release() {
