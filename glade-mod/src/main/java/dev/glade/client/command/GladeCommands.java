@@ -165,6 +165,13 @@ public final class GladeCommands {
                 .then(RulesCommand.afterNode())
                 .then(MacroCommand.node())
                 .then(GetCommand.node())
+                // Merged into the same /talos get literal by brigadier: block id at explicit
+                // (~-relative) coordinates, or along a (^-relative) look direction.
+                .then(ClientCommandManager.literal("get")
+                        .then(ClientCommandManager.literal("block")
+                                .then(coordinates(GetCommand::blockAtPos))
+                                .then(ClientCommandManager.literal("direction")
+                                        .then(directionNode(GetCommand::blockAtPos)))))
                 .then(TrackCommand.node())
                 .then(ClientCommandManager.literal("kill")
                         .then(ClientCommandManager.literal("nearest")

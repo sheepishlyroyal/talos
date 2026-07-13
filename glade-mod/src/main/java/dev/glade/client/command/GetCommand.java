@@ -416,6 +416,22 @@ public final class GetCommand {
         return 1;
     }
 
+    /** {@code /talos get block <x> <y> <z>} (~-relative) or {@code ... direction <yaw> <pitch>}. */
+    public static int blockAtPos(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context,
+            net.minecraft.util.math.BlockPos pos) {
+        MinecraftClient client = context.getSource().getClient();
+        if (client.world == null) {
+            context.getSource().sendError(Text.literal("No world is loaded"));
+            return 0;
+        }
+        var state = client.world.getBlockState(pos);
+        context.getSource().sendFeedback(Text.literal(String.format(Locale.ROOT,
+                "§bblock[%d %d %d]§f = %s", pos.getX(), pos.getY(), pos.getZ(),
+                Registries.BLOCK.getId(state.getBlock()))));
+        return 1;
+    }
+
     private static net.minecraft.block.entity.BlockEntity crosshairBlockEntity(
             MinecraftClient client) {
         if (client.crosshairTarget instanceof net.minecraft.util.hit.BlockHitResult hit
