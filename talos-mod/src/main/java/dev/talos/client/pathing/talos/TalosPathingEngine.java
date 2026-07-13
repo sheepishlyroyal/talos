@@ -342,16 +342,26 @@ public final class TalosPathingEngine implements PathingEngine {
 
     private static int lastRenderedRouteNodes;
 
-    /** Render every simulation waypoint as the exact player AABB for its planned pose. */
+    /**
+     * Blue boxes are CHECKPOINTS, not the whole plan: rendering every rollout endpoint made
+     * the route read as visual noise with no discernible order. Draw sparse ordered marks —
+     * every few waypoints, every edit/turn, and always the goal — while steering still
+     * consumes the full-resolution route.
+     */
     private static void renderRouteNodes(PlannedRoute route) {
         final int waypointColor = 0x66CCFF; // Keep route boxes distinct from orange predictions.
         int count = route.waypoints().size();
+        int drawn = 0;
         for (int i = 0; i < count; i++) {
             PlannedRoute.Waypoint waypoint = route.waypoints().get(i);
-            RenderQueue.add("talos-path-node:" + i,
+            boolean edit = waypoint.via() == dev.talos.client.pathing.sim.Primitive.MINE
+                    || waypoint.via() == dev.talos.client.pathing.sim.Primitive.PLACE;
+            if (i != count - 1 && !edit && i % 4 != 0) continue;
+            RenderQueue.add("talos-path-node:" + drawn++,
                     MotionState.box(waypoint.pose(), waypoint.position()),
                     waypointColor, 20 * 30);
         }
+        count = drawn;
         // Two overlapping plans on screen read as the pathfinder having "two ideas": always
         // drop the previous route's leftover boxes the moment a fresh plan is drawn.
         for (int i = count; i < lastRenderedRouteNodes; i++) {

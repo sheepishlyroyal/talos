@@ -185,12 +185,17 @@ public final class SimFollowTask extends TalosTask {
         renderAim(player, aim);
         float yaw = yawTo(feet, aim);
         Input selected = chooseInput(live, profile, waypoint, yaw);
-        renderPrediction(live, selected, profile);
         if (live.fluid() == MotionState.Fluid.WATER) {
             updateAirMode(player);
             player.setPitch(swimPitch(player, waypoint));
         }
         apply(player, selected, live, waypoint);
+        // Predict AFTER the humanized view is applied, using the yaw the player actually
+        // faces this tick — the orange hitbox trail then shows where the body will really
+        // be (friction, effects, momentum included), not where an instantly-snapped view
+        // would have taken it.
+        renderPrediction(live, new Input(selected.forward(), selected.strafe(),
+                selected.jump(), selected.sprint(), selected.sneak(), player.getYaw()), profile);
         status(live.inFluid()
                 ? live.fluid() == MotionState.Fluid.LAVA ? "swimming (lava)" : "swimming"
                 : isBrake(selected) ? "braking (final approach)"
@@ -412,7 +417,7 @@ public final class SimFollowTask extends TalosTask {
     /** Refresh a short-lived, exact-hitbox trail for the input selected from this live state. */
     private void renderPrediction(MotionState live, Input selected, MovementProfile profile) {
         MotionState predicted = live;
-        for (int i = 0; i < ROLLOUT_TICKS; i++) {
+        for (int i = 0; i < ROLLOUT_TICKS * 2; i++) {
             predicted = PlayerMotion.step(client.world, predicted, selected, profile);
             RenderQueue.add("talos-sim-tick:" + i,
                     predicted.box(predicted.position()), PREDICTION_COLOR, PREDICTION_TTL);
