@@ -45,7 +45,8 @@ public final class ScriptEngine {
     public enum State { RUNNING, STOPPING, STOPPED }
     private static final ScriptEngine INSTANCE = new ScriptEngine();
     private static final CompletableFuture<Engine> SHARED_ENGINE = new CompletableFuture<>();
-    private static final List<String> API_FILES = List.of("actions.py", "events.py", "humanize.py", "__init__.py");
+    private static final List<String> API_FILES = List.of(
+            "errors.py", "actions.py", "engine.py", "events.py", "humanize.py", "__init__.py");
     private static final int MAX_SESSIONS = 8;
 
     static {

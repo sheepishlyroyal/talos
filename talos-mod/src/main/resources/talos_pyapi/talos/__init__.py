@@ -1,7 +1,14 @@
 """Talos's curated embedded API. pip, native packages, host classes, IO, and environment access are unavailable."""
 
-from .actions import (goto, goto_near, goto_xz, find_block, find_entity, find_item,
-                      place_block, break_block, kill_nearest, look_at, player_pos)
+from .errors import (TalosError, PathFailedError, OutOfReachError, NotFoundError,
+                     TargetLostError, ActionCancelledError, WorldClosedError)
+from .actions import (goto, goto_near, goto_xz, set_node_count, find_block, find_entity,
+                      find_item, place_block, place_look, break_block, mine, mine_looking_at,
+                      left_click, right_click, select_slot, click_slot, container_slot_count,
+                      move_stack, take_stack, armor_item, equip_armor, kill_nearest, look_at,
+                      player_pos, Pos, Entity)
+from .engine import (on_start, on_tick, task, start, run, cancel_all, sleep, ticks,
+                     next_tick, tick_count, aio, TaskHandle)
 from .events import on
 from .humanize import wait_between, set_profile, set_seed
 
@@ -100,6 +107,13 @@ def log(message):
     print(text)
     return text
 
-__all__ = ["goto", "goto_near", "goto_xz", "find_block", "find_entity", "find_item",
-           "place_block", "break_block", "kill_nearest", "look_at", "player_pos", "log",
-           "wait_between", "set_profile", "set_seed", "on", "parallel", "spawn"]
+__all__ = ["goto", "goto_near", "goto_xz", "set_node_count", "find_block", "find_entity",
+           "find_item", "place_block", "place_look", "break_block", "mine", "mine_looking_at",
+           "left_click", "right_click", "select_slot", "click_slot", "container_slot_count",
+           "move_stack", "take_stack", "armor_item", "equip_armor", "kill_nearest", "look_at",
+           "player_pos", "Pos", "Entity", "log",
+           "wait_between", "set_profile", "set_seed", "on", "parallel", "spawn",
+           "on_start", "on_tick", "task", "start", "run", "cancel_all",
+           "sleep", "ticks", "next_tick", "tick_count", "aio", "TaskHandle",
+           "TalosError", "PathFailedError", "OutOfReachError", "NotFoundError",
+           "TargetLostError", "ActionCancelledError", "WorldClosedError"]

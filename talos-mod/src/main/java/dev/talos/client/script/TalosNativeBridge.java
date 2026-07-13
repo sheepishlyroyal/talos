@@ -7,9 +7,11 @@ import dev.talos.client.action.KillEntityAction;
 import dev.talos.client.action.PlaceBlockAction;
 import dev.talos.client.humanize.HumanizationProfile;
 import dev.talos.client.humanize.RotationHumanizer;
+import dev.talos.client.pathing.Goal;
 import dev.talos.client.pathing.GoalBlock;
 import dev.talos.client.pathing.GoalNear;
 import dev.talos.client.pathing.GoalXZ;
+import dev.talos.client.pathing.PathResult;
 import dev.talos.client.pathing.PathingOptions;
 import dev.talos.client.scan.ScanTask;
 import dev.talos.client.task.SimpleTask;
@@ -59,16 +61,59 @@ public final class TalosNativeBridge {
     }
 
     @HostAccess.Export public String gotoBlock(int x, int y, int z) {
-        return await(await(game.submit(() -> TalosClient.pathingEngine()
-                .goTo(new GoalBlock(x, y, z), PathingOptions.DEFAULT)))).toString();
+        return await(pathFuture(new GoalBlock(x, y, z)));
     }
     @HostAccess.Export public String gotoNear(int x, int y, int z, int range) {
-        return await(await(game.submit(() -> TalosClient.pathingEngine()
-                .goTo(new GoalNear(x, y, z, range), PathingOptions.DEFAULT)))).toString();
+        return await(pathFuture(new GoalNear(x, y, z, range)));
     }
     @HostAccess.Export public String gotoXZ(int x, int z) {
-        return await(await(game.submit(() -> TalosClient.pathingEngine()
-                .goTo(new GoalXZ(x, z), PathingOptions.DEFAULT)))).toString();
+        return await(pathFuture(new GoalXZ(x, z)));
+    }
+
+    @HostAccess.Export public FutureHandle submitGoto(int x, int y, int z) {
+        return handle(pathFuture(new GoalBlock(x, y, z)));
+    }
+    @HostAccess.Export public FutureHandle submitGotoNear(int x, int y, int z, int range) {
+        return handle(pathFuture(new GoalNear(x, y, z, range)));
+    }
+    @HostAccess.Export public FutureHandle submitGotoXZ(int x, int z) {
+        return handle(pathFuture(new GoalXZ(x, z)));
+    }
+    @HostAccess.Export public FutureHandle submitFindBlock(String predicate, int radius) {
+        return handle(game.submit(() -> scheduleBlockScan(predicate, radius)).thenCompose(f -> f));
+    }
+    @HostAccess.Export public FutureHandle submitPlaceBlock(int x, int y, int z) {
+        return handle(actionFuture(new PlaceBlockAction(new BlockPos(x, y, z)), "place"));
+    }
+    @HostAccess.Export public FutureHandle submitPlaceBlockAs(int x, int y, int z, String blockId) {
+        return handle(actionFuture(placeAsAction(x, y, z, blockId), "place"));
+    }
+    @HostAccess.Export public FutureHandle submitBreakBlock(int x, int y, int z) {
+        return handle(actionFuture(new BreakBlockAction(new BlockPos(x, y, z)), "break"));
+    }
+    @HostAccess.Export public FutureHandle submitMineLookingAt() {
+        return handle(bridgeTaskFuture("script-mine-looking", new MineLookingTask()));
+    }
+    @HostAccess.Export public FutureHandle submitKillNearest(double radius) {
+        return handle(killFuture(radius));
+    }
+
+    private CompletableFuture<String> pathFuture(Goal goal) {
+        return game.submit(() -> TalosClient.pathingEngine().goTo(goal, PathingOptions.DEFAULT))
+                .thenCompose(f -> f)
+                .thenApply(TalosNativeBridge::requirePath);
+    }
+    private static String requirePath(PathResult result) {
+        if (!result.successful()) throw new IllegalStateException("Path failed: " + result.detail());
+        return result.detail();
+    }
+
+    /** Registers a not-yet-awaited future for invalidation and hands Python a pollable handle. */
+    private FutureHandle handle(CompletableFuture<?> future) {
+        checkValid();
+        inFlight.add(future);
+        future.whenComplete((result, error) -> inFlight.remove(future));
+        return new FutureHandle(future);
     }
 
     @HostAccess.Export public void setNodeCount(int count) {
@@ -114,12 +159,16 @@ public final class TalosNativeBridge {
     }
 
     @HostAccess.Export public String placeBlockAs(int x, int y, int z, String blockId) {
+        return action(placeAsAction(x, y, z, blockId), "place");
+    }
+
+    private static PlaceBlockAction placeAsAction(int x, int y, int z, String blockId) {
         Identifier id = Identifier.tryParse(blockId);
         if (id == null || !Registries.BLOCK.containsId(id)) throw new IllegalArgumentException("Unknown block: " + blockId);
         net.minecraft.block.Block wanted = Registries.BLOCK.get(id);
         java.util.function.Predicate<net.minecraft.item.ItemStack> selector = stack ->
                 stack.getItem() instanceof net.minecraft.item.BlockItem blockItem && blockItem.getBlock() == wanted;
-        return action(new PlaceBlockAction(new BlockPos(x, y, z), selector, net.minecraft.util.math.Direction.UP, null), "place");
+        return new PlaceBlockAction(new BlockPos(x, y, z), selector, net.minecraft.util.math.Direction.UP, null);
     }
     @HostAccess.Export public String breakBlock(int x, int y, int z) {
         return action(new BreakBlockAction(new BlockPos(x, y, z)), "break");
@@ -173,7 +222,11 @@ public final class TalosNativeBridge {
         return awaitBridgeTask("script-equip-armor", new EquipArmorTask(fromSlot, parseArmorSlot(armorSlot)));
     }
     @HostAccess.Export public String killNearest(double radius) {
-        CompletableFuture<ActionResult> result = await(game.submit(() -> {
+        return await(killFuture(radius));
+    }
+
+    private CompletableFuture<String> killFuture(double radius) {
+        return game.submit(() -> {
             MinecraftClient client = requireWorld();
             Entity nearest = client.world.getEntitiesByClass(HostileEntity.class,
                             client.player.getBoundingBox().expand(radius), Entity::isAlive)
@@ -182,8 +235,7 @@ public final class TalosNativeBridge {
             KillEntityAction action = new KillEntityAction(nearest);
             TalosClient.taskScheduler().addTask("script-kill", action);
             return action.future();
-        }));
-        return requireSuccess(await(result));
+        }).thenCompose(f -> f).thenApply(TalosNativeBridge::requireSuccess);
     }
 
     @HostAccess.Export public void lookAt(double x, double y, double z) {
@@ -213,6 +265,12 @@ public final class TalosNativeBridge {
         await(game.submit(() -> { TalosClient.humanizer().setDefaultProfile(HumanizationProfile.byName(profile)); return null; }));
     }
     @HostAccess.Export public void setSeed(long seed) { checkValid(); random = new Random(seed); }
+    @HostAccess.Export public double randomBetween(double a, double b) {
+        checkValid();
+        if (!Double.isFinite(a) || !Double.isFinite(b) || a < 0 || b < a)
+            throw new IllegalArgumentException("Expected 0 <= a <= b");
+        return a + random.nextDouble() * (b - a);
+    }
     @HostAccess.Export public void on(String event, org.graalvm.polyglot.Value handler) { events.register(event, handler); }
 
     void invalidate() {
@@ -222,22 +280,28 @@ public final class TalosNativeBridge {
     }
 
     private String action(dev.talos.client.task.TalosTask task, String name) {
-        CompletableFuture<ActionResult> future = await(game.submit(() -> {
+        return await(actionFuture(task, name));
+    }
+
+    private CompletableFuture<String> actionFuture(dev.talos.client.task.TalosTask task, String name) {
+        return game.submit(() -> {
             CompletableFuture<ActionResult> f = task instanceof PlaceBlockAction p ? p.future()
                     : ((BreakBlockAction) task).future();
             TalosClient.taskScheduler().addTask("script-" + name, task);
             return f;
-        }));
-        return requireSuccess(await(future));
+        }).thenCompose(f -> f).thenApply(TalosNativeBridge::requireSuccess);
     }
 
     private String awaitBridgeTask(String name, BridgeTask task) {
-        CompletableFuture<String> future = await(game.submit(() -> {
+        return await(bridgeTaskFuture(name, task));
+    }
+
+    private CompletableFuture<String> bridgeTaskFuture(String name, BridgeTask task) {
+        return game.submit(() -> {
             requireWorld();
             TalosClient.taskScheduler().addTask(name, task);
             return task.future;
-        }));
-        return await(future);
+        }).thenCompose(f -> f);
     }
 
     private static EquipmentSlot parseArmorSlot(String name) {
@@ -295,6 +359,18 @@ public final class TalosNativeBridge {
     private static String requireSuccess(ActionResult result) {
         if (!result.success()) throw new IllegalStateException(result.message());
         return result.message();
+    }
+
+    /** Pollable host future backing the awaitable Python actions (talos.aio). */
+    public static final class FutureHandle {
+        private final CompletableFuture<?> future;
+        FutureHandle(CompletableFuture<?> future) { this.future = future; }
+        @HostAccess.Export public boolean done() { return future.isDone(); }
+        @HostAccess.Export public Object result() {
+            try { return future.join(); }
+            catch (CompletionException error) { throw error.getCause() instanceof RuntimeException r ? r : error; }
+        }
+        @HostAccess.Export public void cancel() { future.cancel(true); }
     }
 
     public record Pos(double x, double y, double z) {
