@@ -40,7 +40,9 @@ public final class RulesCommand {
             Trigger.ITEM_PICKED_UP, Trigger.PROJECTILE_LAUNCHED, Trigger.PEARL_THROWN,
             Trigger.PEARL_LANDED, Trigger.POTION_SPLASHED, Trigger.POTION_DRANK,
             Trigger.TOTEM_POPPED, Trigger.ENTITY_STATUS, Trigger.LOOKING_AT_ENTITY,
-            Trigger.ATTACK_ENTITY, Trigger.USE_ENTITY);
+            Trigger.ATTACK_ENTITY, Trigger.USE_ENTITY, Trigger.PROJECTILE_HIT,
+            Trigger.PROJECTILE_STOPPED, Trigger.SNOWBALL_THROWN, Trigger.SNOWBALL_HIT,
+            Trigger.EGG_THROWN, Trigger.EGG_HIT);
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> onNode() {
         LiteralArgumentBuilder<FabricClientCommandSource> on = ClientCommandManager.literal("on");

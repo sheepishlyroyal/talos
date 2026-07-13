@@ -150,6 +150,10 @@ public final class EventRuleEngine {
         TOTEM_POPPED(Kind.TEXT), ENTITY_STATUS(Kind.TEXT), PARTICLE_SEEN(Kind.TEXT),
         PEARL_THROWN(Kind.TEXT), PEARL_LANDED(Kind.TEXT), TELEPORTED(Kind.TEXT),
         POTION_SPLASHED(Kind.TEXT), POTION_DRANK(Kind.TEXT),
+        // Generic projectile lifecycle (covers every throwable via matching) + named sugar.
+        PROJECTILE_HIT(Kind.TEXT), PROJECTILE_STOPPED(Kind.TEXT),
+        SNOWBALL_THROWN(Kind.TEXT), SNOWBALL_HIT(Kind.TEXT),
+        EGG_THROWN(Kind.TEXT), EGG_HIT(Kind.TEXT),
         // Metrics — every one supports instant compares, 'for <seconds>' sustained compares,
         // and 'changes above|below <delta> within <seconds>' windowed net change.
         HEALTH(Kind.COMPARE), HUNGER(Kind.COMPARE), AIR(Kind.COMPARE), XP_LEVEL(Kind.COMPARE),
@@ -315,8 +319,26 @@ public final class EventRuleEngine {
         if (subtitle != null) fireText(Trigger.SUBTITLE, subtitle.getString());
     }
 
+    private static final java.util.ArrayDeque<Object[]> RECENT_SOUNDS = new java.util.ArrayDeque<>();
+
     public static void onSound(String soundId) {
+        synchronized (RECENT_SOUNDS) {
+            RECENT_SOUNDS.addLast(new Object[] {tick, soundId});
+            while (RECENT_SOUNDS.size() > 256) RECENT_SOUNDS.removeFirst();
+        }
         fireText(Trigger.SOUND, soundId);
+    }
+
+    /** Distinct sound ids the client played within the last {@code seconds}. */
+    public static java.util.List<String> recentSounds(double seconds) {
+        int horizon = tick - (int) (seconds * 20.0);
+        java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+        synchronized (RECENT_SOUNDS) {
+            for (Object[] entry : RECENT_SOUNDS) {
+                if ((Integer) entry[0] >= horizon) ids.add((String) entry[1]);
+            }
+        }
+        return java.util.List.copyOf(ids);
     }
 
     /** Generic S2C packet trigger (netty thread; skipped entirely unless a rule wants it). */
@@ -1010,6 +1032,7 @@ public final class EventRuleEngine {
     private record TrackedEntity(Entity handle, Entity ownerHandle, String type, String label,
             boolean living, boolean isItem,
             boolean isProjectile, boolean isPlayer, boolean isPearl, boolean isPotion,
+            boolean isSnowball, boolean isEgg, double speed,
             String ownerLabel, String hand, String offhand, String armor,
             boolean hurt, boolean burning, int vehicleId, String vehicleType, boolean sneaking,
             boolean sprinting, boolean usingItem, boolean blocking, boolean gliding,
@@ -1062,6 +1085,10 @@ public final class EventRuleEngine {
                         fireEntity(Trigger.PROJECTILE_LAUNCHED, attribution, current.label + by);
                         if (current.isPearl) fireEntity(Trigger.PEARL_THROWN, attribution,
                                 current.label + by);
+                        if (current.isSnowball) fireEntity(Trigger.SNOWBALL_THROWN, attribution,
+                                current.label + by);
+                        if (current.isEgg) fireEntity(Trigger.EGG_THROWN, attribution,
+                                current.label + by);
                     }
                     continue;
                 }
@@ -1083,13 +1110,18 @@ public final class EventRuleEngine {
                             gone.itemStack);
                     continue;
                 }
-                if (chunkStillLoaded && (gone.isPearl || gone.isPotion)) {
+                if (chunkStillLoaded && gone.isProjectile) {
                     String by = gone.ownerLabel.isEmpty() ? "" : " by " + gone.ownerLabel;
                     String where = String.format(Locale.ROOT, "%.0f %.0f %.0f",
                             gone.x, gone.y, gone.z);
                     Entity attribution = gone.ownerHandle != null ? gone.ownerHandle : gone.handle;
-                    fireEntity(gone.isPearl ? Trigger.PEARL_LANDED : Trigger.POTION_SPLASHED,
-                            attribution, where + by);
+                    // A throwable vanishing in a loaded chunk IS its impact.
+                    fireEntity(Trigger.PROJECTILE_HIT, attribution,
+                            gone.label + " @ " + where + by);
+                    if (gone.isPearl) fireEntity(Trigger.PEARL_LANDED, attribution, where + by);
+                    if (gone.isPotion) fireEntity(Trigger.POTION_SPLASHED, attribution, where + by);
+                    if (gone.isSnowball) fireEntity(Trigger.SNOWBALL_HIT, attribution, where + by);
+                    if (gone.isEgg) fireEntity(Trigger.EGG_HIT, attribution, where + by);
                 }
                 if (!chunkStillLoaded) {
                     fireEntity(Trigger.ENTITY_UNLOADED, gone.handle, gone.label);
@@ -1165,6 +1197,10 @@ public final class EventRuleEngine {
         if (!past.swimming && now.swimming) fireEntity(Trigger.ENTITY_SWIMMING, subject, label);
         if (!past.sleeping && now.sleeping) fireEntity(Trigger.ENTITY_SLEEPING, subject, label);
         if (past.baby && !now.baby) fireEntity(Trigger.ENTITY_BABY_GROWN, subject, label);
+        if (past.isProjectile && past.speed > 0.2 && now.speed < 0.05) {
+            fireEntity(Trigger.PROJECTILE_STOPPED, subject, label + String.format(Locale.ROOT,
+                    " @ %.0f %.0f %.0f", now.x, now.y, now.z));
+        }
         // Finishing a use-cycle while holding a potion is a completed drink (self included).
         if (past.usingItem && !now.usingItem && past.hand.contains("potion")) {
             fireEntity(Trigger.POTION_DRANK, subject, label + ": " + past.hand);
@@ -1239,6 +1275,9 @@ public final class EventRuleEngine {
                 entity instanceof PlayerEntity,
                 entity instanceof net.minecraft.entity.projectile.thrown.EnderPearlEntity,
                 entity instanceof net.minecraft.entity.projectile.thrown.PotionEntity,
+                entity instanceof net.minecraft.entity.projectile.thrown.SnowballEntity,
+                entity instanceof net.minecraft.entity.projectile.thrown.EggEntity,
+                isProjectile ? entity.getVelocity().length() : 0.0,
                 ownerLabel, hand, offhand, armor,
                 living && ((net.minecraft.entity.LivingEntity) entity).hurtTime > 0,
                 entity.getFireTicks() > 0,

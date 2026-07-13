@@ -147,6 +147,10 @@ public final class GetCommand {
         });
         map.put("spawn_point", (client, player) ->
                 client.world.getSpawnPoint().getPos().toShortString());
+        map.put("sounds", (client, player) -> {
+            var recent = dev.glade.client.rules.EventRuleEngine.recentSounds(5.0);
+            return recent.isEmpty() ? "none in the last 5s" : String.join(", ", recent);
+        });
 
         // Booleans.
         map.put("sneaking", bool((client, player) -> player.isSneaking()));
