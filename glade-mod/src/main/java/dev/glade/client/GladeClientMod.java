@@ -31,6 +31,8 @@ public final class GladeClientMod implements ClientModInitializer {
         GladeBridge.start();
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> GladeBridge.stop());
         RenderQueue.register();
+        dev.glade.client.rules.EventRuleEngine.register();
+        dev.glade.client.macro.MacroSystem.register();
         ClientTickEvents.START_CLIENT_TICK.register(client -> {
             GameThreadExecutor.instance().drain(client);
             ScriptEngine.instance().tick();
