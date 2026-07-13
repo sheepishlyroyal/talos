@@ -158,9 +158,12 @@ public final class TalosPathingEngine implements PathingEngine {
         if (run.planner != null) return; // one background search at a time
         MotionState start = SimFollowTask.liveState(client.player);
         MovementProfile profile = MovementProfile.capture(client.player);
+        // Mining runs think further ahead: a partial dig plan can commit the player into a
+        // cave dead end, so buy a deeper search before the first block is ever broken.
+        boolean edits = run.options.allowMining();
         SimPathfinder.Options simOptions = new SimPathfinder.Options(
-                run.options.allowMining(), run.options.allowMining(), SIM_NODE_CAP,
-                SIM_SEARCH_NANOS, SIM_MAX_ROLLOUT_TICKS);
+                edits, edits, edits ? SIM_NODE_CAP * 2 : SIM_NODE_CAP,
+                edits ? SIM_SEARCH_NANOS * 3 : SIM_SEARCH_NANOS, SIM_MAX_ROLLOUT_TICKS);
         SimPathfinder.Search search = SimPathfinder.begin(client.world, start, profile,
                 run.snapshot.target(), run.snapshot.test(), simOptions);
         PlanningTask task = new PlanningTask(run, search);

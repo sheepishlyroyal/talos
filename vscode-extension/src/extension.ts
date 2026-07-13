@@ -36,6 +36,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     renderRunOnSaveStatus();
+    void ensureStubPath(context);
 
     context.subscriptions.push({
         dispose: () => {
@@ -43,6 +44,29 @@ export function activate(context: vscode.ExtensionContext): void {
             connection = undefined;
         },
     });
+}
+
+/**
+ * Points Pylance at the bundled `talos.pyi` stubs so `import talos` resolves with full
+ * autocomplete instead of a missing-import squiggle. Only an empty or stale (previous
+ * extension version) stubPath is touched — a user's own stubPath is never overwritten.
+ */
+async function ensureStubPath(context: vscode.ExtensionContext): Promise<void> {
+    const stubsDir = vscode.Uri.joinPath(context.extensionUri, 'stubs').fsPath;
+    const analysis = vscode.workspace.getConfiguration('python.analysis');
+    const current = analysis.get<string>('stubPath', '');
+    if (current === stubsDir) return;
+    if (current && !/[\\/]talos[^\\/]*[\\/]stubs$/.test(current)) return; // user-managed
+    const target = vscode.workspace.workspaceFolders?.length
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+    try {
+        await analysis.update('stubPath', stubsDir, target);
+        outputChannel.appendLine(`[talos] Pylance stubPath set to ${stubsDir}`);
+    } catch {
+        // No settings write access (e.g. restricted workspace) — autocomplete still works
+        // wherever a talos.pyi sits next to the script.
+    }
 }
 
 /** Whether saving a .py auto-runs it in-game. Mirrors the `talos.runOnSave` setting,

@@ -171,8 +171,13 @@ public final class SimPathfinder {
                 add(result, rollout(world, node, profile, opts, Primitive.WALK, direction,
                         new Input(1.0F, 0.0F, false, false, false, yaw), false, false));
             }
-            add(result, rollout(world, node, profile, opts, Primitive.SPRINT_JUMP, direction,
-                    new Input(1.0F, 0.0F, true, true, false, yaw), true, false));
+            // Jump arcs are billed a flat surcharge so the plan only contains SPRINT_JUMP
+            // where it is genuinely required (gaps, climbs) — being a tick or two faster on
+            // open ground is not worth the convoluted zigzag routes time-optimal arcs create.
+            // Opportunistic hops on flat runs are the follower's on-the-go decision instead.
+            Edge arc = rollout(world, node, profile, opts, Primitive.SPRINT_JUMP, direction,
+                    new Input(1.0F, 0.0F, true, true, false, yaw), true, false);
+            add(result, arc == null ? null : arc.withAddedCost(6.0));
 
             MotionState fluidStart = withPose(node.state(), MotionState.Pose.SWIM);
             // Merely wet feet do not enable vanilla's compact swimming movement. A new swim
@@ -332,7 +337,10 @@ public final class SimPathfinder {
     private static Edge placeUp(World world, Node node) {
         if (!node.state().onGround()) return null;
         if (!empty(world, node.cell().up(2))) return null;
-        if (empty(world, node.cell().down())) return null; // needs an anchor face below
+        // The anchor face below may be real, or the block this chain just virtually placed —
+        // planner edges never mutate the world, so demanding a real block capped every
+        // planned pillar at exactly one block tall ("nodes ended" on goto ~ ~10 ~).
+        if (empty(world, node.cell().down()) && node.via() != Primitive.PLACE) return null;
         MotionState state = new MotionState(bottomCenter(node.cell().up()), Vec3d.ZERO, true,
                 MotionState.Pose.STAND);
         return new Edge(state, Primitive.PLACE, 12, 12.0 + EDIT_PENALTY, node.heading());

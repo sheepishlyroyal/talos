@@ -21,6 +21,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
@@ -40,6 +41,8 @@ public final class SimFollowTask extends TalosTask {
     private static final double SURFACE_FEET_DEPTH = 0.45;
     private static final int PREDICTION_COLOR = 0xFF9F1C;
     private static final int PREDICTION_TTL = 3;
+    private static final int AIM_TARGET_COLOR = 0xFFE14D; // yellow: where we WANT to look
+    private static final int AIM_GAZE_COLOR = 0xFF3333;   // red: where we look right now
     private static final int STUCK_TICKS = 100;
 
     private final MinecraftClient client;
@@ -154,6 +157,18 @@ public final class SimFollowTask extends TalosTask {
             return;
         }
 
+        // Think ahead before committing to an edit: near the frayed end of a PARTIAL route,
+        // a MINE waypoint may be a dig toward a dead end the planner never saw past (caves).
+        // The extension request above has already fired — hold position until the fresher,
+        // deeper plan is swapped in rather than tunneling blind.
+        boolean nearRouteEnd = route.waypoints().size() - index
+                <= Math.max(6, route.waypoints().size() / 4);
+        if (waypoint.via() == Primitive.MINE && !route.reachedGoal() && nearRouteEnd) {
+            status("planning ahead (mining)");
+            releaseInputs();
+            scheduleDelay();
+            return;
+        }
         if (waypoint.via() == Primitive.MINE && mine(player, waypoint.position())) {
             scheduleDelay();
             return;
@@ -166,7 +181,9 @@ public final class SimFollowTask extends TalosTask {
         MotionState live = liveState(player);
         MovementProfile profile = MovementProfile.capture(player); // Effects/attributes are live.
         Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
-        float yaw = yawTo(feet, aimPoint(feet, waypoint));
+        Vec3d aim = aimPoint(feet, waypoint);
+        renderAim(player, aim);
+        float yaw = yawTo(feet, aim);
         Input selected = chooseInput(live, profile, waypoint, yaw);
         renderPrediction(live, selected, profile);
         if (live.fluid() == MotionState.Fluid.WATER) {
@@ -275,6 +292,12 @@ public final class SimFollowTask extends TalosTask {
         for (float heading : steeringYaws(live, waypoint, yaw, drag)) {
             candidates.add(new Input(1, 0, wantsJump,
                     wantsSprint && (!brakeNeeded || precisionLaunch), wantsSneak, heading));
+        }
+        // Opportunistic hop, decided on the go: plans no longer contain SPRINT_JUMP for
+        // open ground, so during a plain sprint the follower may offer a jump variant and
+        // let the rollout prove it is safe and faster here (a gap edge, a slope lip).
+        if (primitive == Primitive.SPRINT && live.onGround() && !brakeNeeded && !approachingFinal) {
+            candidates.add(new Input(1, 0, true, true, false, yaw));
         }
         // Never offer a one-tick jump release during a committed sprint-jump or ledge climb.
         if ((!continuousRun || brakeNeeded) && primitive != Primitive.STEP_UP) {
@@ -426,6 +449,15 @@ public final class SimFollowTask extends TalosTask {
         }
         if (block == null) { breaking = null; return false; }
         status("mining");
+        // Same aim language as the action cube-aim: yellow cube = the block being worked,
+        // red X = the face point under attack.
+        RenderQueue.add("talos-aim-cube", new Box(block).expand(0.002),
+                AIM_TARGET_COLOR, PREDICTION_TTL * 3);
+        Vec3d face = Vec3d.ofCenter(block).add(0.0, 0.5, 0.0);
+        RenderQueue.add("talos-aim-mark",
+                new Box(face.x - 0.07, face.y - 0.07, face.z - 0.07,
+                        face.x + 0.07, face.y + 0.07, face.z + 0.07),
+                AIM_GAZE_COLOR, PREDICTION_TTL * 3);
         releaseInputs();
         BlockState state = client.world.getBlockState(block);
         int best = player.getInventory().getSelectedSlot();
@@ -582,6 +614,27 @@ public final class SimFollowTask extends TalosTask {
         if (distance >= 1.6) return target;
         double blend = Math.min(0.6, (1.6 - distance) / 1.6);
         return target.lerp(route.waypoints().get(index + 1).position(), blend);
+    }
+
+    /**
+     * Always-visible aim readout while navigating: yellow marker = the point steering wants
+     * to face (the blended look-ahead target), red dot = where the crosshair points right
+     * now at that same depth. The red dot easing onto the yellow marker IS the humanized
+     * look, made visible.
+     */
+    private void renderAim(ClientPlayerEntity player, Vec3d aim) {
+        Vec3d eyeTarget = aim.add(0.0, 0.35, 0.0);
+        RenderQueue.add("talos-goto-aim",
+                new Box(eyeTarget.x - 0.09, eyeTarget.y - 0.09, eyeTarget.z - 0.09,
+                        eyeTarget.x + 0.09, eyeTarget.y + 0.09, eyeTarget.z + 0.09),
+                AIM_TARGET_COLOR, PREDICTION_TTL);
+        Vec3d eye = player.getEyePos();
+        Vec3d gaze = eye.add(player.getRotationVecClient()
+                .multiply(Math.max(eye.distanceTo(eyeTarget), 1.0)));
+        RenderQueue.add("talos-goto-gaze",
+                new Box(gaze.x - 0.05, gaze.y - 0.05, gaze.z - 0.05,
+                        gaze.x + 0.05, gaze.y + 0.05, gaze.z + 0.05),
+                AIM_GAZE_COLOR, PREDICTION_TTL);
     }
 
     private void apply(ClientPlayerEntity player, Input input, MotionState live,

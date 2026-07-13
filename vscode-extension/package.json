@@ -2,7 +2,7 @@
   "name": "talos",
   "displayName": "Talos Scripting",
   "description": "Push and run Python automation scripts against the Talos Minecraft Fabric mod over a local WebSocket, with live log streaming.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "talos",
   "private": true,
   "engines": {
@@ -21,7 +21,7 @@
       {
         "command": "talos.runScript",
         "title": "Talos: Run Script in Minecraft",
-        "icon": "$(play)"
+        "icon": "$(rocket)"
       },
       {
         "command": "talos.stopScript",
@@ -64,23 +64,21 @@
           "when": "editorLangId == python"
         }
       ],
-      "editor/title/run": [
+      "editor/title": [
         {
           "command": "talos.runScript",
           "when": "resourceLangId == python",
-          "group": "talos@1"
+          "group": "navigation@1"
         },
         {
           "command": "talos.stopScript",
           "when": "resourceLangId == python",
-          "group": "talos@2"
-        }
-      ],
-      "editor/title": [
+          "group": "navigation@2"
+        },
         {
           "command": "talos.toggleRunOnSave",
           "when": "resourceLangId == python",
-          "group": "navigation@99"
+          "group": "navigation@3"
         }
       ]
     },
