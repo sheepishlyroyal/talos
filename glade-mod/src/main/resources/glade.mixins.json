@@ -3,7 +3,8 @@
   "package": "dev.glade.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
-    "InGameHudTitleMixin"
+    "InGameHudTitleMixin",
+    "SoundSystemMixin"
   ],
   "injectors": {
     "defaultRequire": 1

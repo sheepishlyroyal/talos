@@ -16,18 +16,24 @@ public final class MacroCommand {
         return ClientCommandManager.literal("macro")
                 .then(ClientCommandManager.literal("record")
                         .then(ClientCommandManager.argument("name", StringArgumentType.word())
-                                .executes(context -> {
-                                    String name = StringArgumentType.getString(context, "name");
-                                    if (!MacroSystem.startRecording(name)) {
-                                        context.getSource().sendError(Text.literal(
-                                                "Already recording '" + MacroSystem.recordingName()
-                                                        + "' — /glade macro stop first"));
-                                        return 0;
-                                    }
-                                    context.getSource().sendFeedback(Text.literal(
-                                            "Recording macro '" + name + "' — play normally, then /glade macro stop"));
-                                    return 1;
-                                })))
+                                .executes(context -> record(context.getSource(),
+                                        StringArgumentType.getString(context, "name"),
+                                        MacroSystem.CH_ALL))
+                                .then(ClientCommandManager.argument("channels", StringArgumentType.word())
+                                        .executes(context -> {
+                                            int channels = MacroSystem.parseChannels(
+                                                    StringArgumentType.getString(context, "channels"));
+                                            if (channels < 0) {
+                                                context.getSource().sendError(Text.literal(
+                                                        "Unknown channel — use move, jump, sneak, sprint, "
+                                                                + "clicks, look, hotbar, keys, input, all "
+                                                                + "or combos like clicks+look"));
+                                                return 0;
+                                            }
+                                            return record(context.getSource(),
+                                                    StringArgumentType.getString(context, "name"),
+                                                    channels);
+                                        }))))
                 .then(ClientCommandManager.literal("stop").executes(context -> {
                     int frames = MacroSystem.stopRecording();
                     if (frames < 0) {
@@ -41,11 +47,25 @@ public final class MacroCommand {
                 .then(ClientCommandManager.literal("play")
                         .then(ClientCommandManager.argument("name", StringArgumentType.word())
                                 .executes(context -> play(context.getSource(),
-                                        StringArgumentType.getString(context, "name"), 1))
+                                        StringArgumentType.getString(context, "name"), 1, 0))
                                 .then(ClientCommandManager.argument("times", IntegerArgumentType.integer(1, 1000))
                                         .executes(context -> play(context.getSource(),
                                                 StringArgumentType.getString(context, "name"),
-                                                IntegerArgumentType.getInteger(context, "times"))))))
+                                                IntegerArgumentType.getInteger(context, "times"), 0))
+                                        .then(ClientCommandManager.argument("channels", StringArgumentType.word())
+                                                .executes(context -> {
+                                                    int channels = MacroSystem.parseChannels(
+                                                            StringArgumentType.getString(context, "channels"));
+                                                    if (channels < 0) {
+                                                        context.getSource().sendError(
+                                                                Text.literal("Unknown channel spec"));
+                                                        return 0;
+                                                    }
+                                                    return play(context.getSource(),
+                                                            StringArgumentType.getString(context, "name"),
+                                                            IntegerArgumentType.getInteger(context, "times"),
+                                                            channels);
+                                                })))))
                 .then(ClientCommandManager.literal("list").executes(context -> {
                     var names = MacroSystem.list();
                     context.getSource().sendFeedback(Text.literal(names.isEmpty()
@@ -65,14 +85,28 @@ public final class MacroCommand {
                                 })));
     }
 
-    private static int play(FabricClientCommandSource source, String name, int times) {
+    private static int record(FabricClientCommandSource source, String name, int channels) {
+        if (!MacroSystem.startRecording(name, channels)) {
+            source.sendError(Text.literal("Already recording '" + MacroSystem.recordingName()
+                    + "' — /glade macro stop first"));
+            return 0;
+        }
+        source.sendFeedback(Text.literal("Recording macro '" + name + "' ("
+                + MacroSystem.channelNames(channels)
+                + ") — play normally, then /glade macro stop"));
+        return 1;
+    }
+
+    private static int play(FabricClientCommandSource source, String name, int times,
+            int channels) {
         if (MacroSystem.isRecording()) {
             source.sendError(Text.literal("Stop recording before playing a macro"));
             return 0;
         }
         try {
-            if (!MacroSystem.play(source.getClient(), name, times)) {
-                source.sendError(Text.literal("No macro '" + name + "' (or it is empty)"));
+            if (!MacroSystem.play(source.getClient(), name, times, channels)) {
+                source.sendError(Text.literal(
+                        "No macro '" + name + "' (or no overlap with those channels)"));
                 return 0;
             }
         } catch (RuntimeException exception) {

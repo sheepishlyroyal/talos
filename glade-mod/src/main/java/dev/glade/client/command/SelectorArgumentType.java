@@ -24,7 +24,7 @@ final class SelectorArgumentType implements ArgumentType<String> {
     private SelectorArgumentType() {
     }
 
-    static SelectorArgumentType selector() {
+    public static SelectorArgumentType selector() {
         return INSTANCE;
     }
 

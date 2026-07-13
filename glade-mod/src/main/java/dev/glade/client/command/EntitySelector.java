@@ -16,8 +16,8 @@ import net.minecraft.util.Identifier;
  * {@code 5..}, {@code 5..16}), {@code limit=} and {@code sort=nearest|furthest}. An empty
  * {@code @e[]} (or bare {@code @e}) matches any entity.</p>
  */
-final class EntitySelector {
-    enum Kind { SELF, PLAYERS_ALL, PLAYER_NEAREST, ENTITIES }
+public final class EntitySelector {
+    public enum Kind { SELF, PLAYERS_ALL, PLAYER_NEAREST, ENTITIES }
 
     private final Kind kind;
     private Identifier typeId;
@@ -34,7 +34,7 @@ final class EntitySelector {
         this.kind = kind;
     }
 
-    Kind kind() {
+    public Kind kind() {
         return kind;
     }
 
@@ -51,7 +51,7 @@ final class EntitySelector {
      * {@code @e[type=cow,distance=..16]}. On failure, writes a human-readable message to
      * {@code error[0]} and returns {@code null}.
      */
-    static EntitySelector parse(String token, String[] error) {
+    public static EntitySelector parse(String token, String[] error) {
         if (token.isEmpty() || token.charAt(0) != '@') {
             error[0] = "Selector must start with @";
             return null;
@@ -168,7 +168,7 @@ final class EntitySelector {
      * filters. Distance is checked separately via {@link #withinDistance} since it needs the
      * executing player's position.
      */
-    boolean matchesFilters(Entity entity) {
+    public boolean matchesFilters(Entity entity) {
         if (typeId != null) {
             boolean isType = Registries.ENTITY_TYPE.get(typeId) == entity.getType();
             if (isType == typeNegate) {
@@ -188,7 +188,7 @@ final class EntitySelector {
         return name == null || name.equals(entity.getName().getString());
     }
 
-    boolean withinDistance(double distance) {
+    public boolean withinDistance(double distance) {
         if (minDistance != null && distance < minDistance) {
             return false;
         }

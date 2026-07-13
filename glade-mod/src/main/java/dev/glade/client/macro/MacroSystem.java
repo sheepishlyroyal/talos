@@ -34,8 +34,66 @@ public final class MacroSystem {
     /** One tick of input. Bit order matches {@link #bindings(GameOptions)}. */
     public record Frame(int keys, float yaw, float pitch, int slot) {}
 
+    /** Saved macro: which channels were recorded plus the per-tick frames. */
+    public record MacroData(int channels, List<Frame> frames) {}
+
+    /*
+     * Channels — record or replay any combination. A replay only touches its channels: a
+     * clicks-only macro leaves WASD to the player (or to /glade goto) while it clicks.
+     */
+    public static final int CH_MOVE = 1;      // WASD
+    public static final int CH_JUMP = 2;
+    public static final int CH_SNEAK = 4;
+    public static final int CH_SPRINT = 8;
+    public static final int CH_CLICKS = 16;   // attack + use
+    public static final int CH_LOOK = 32;     // yaw + pitch
+    public static final int CH_HOTBAR = 64;   // selected slot
+    public static final int CH_ALL = 127;
+
+    /** Parses "clicks+look", "move", "all", "keys" (all keyboard), "input" (keys+clicks). */
+    public static int parseChannels(String spec) {
+        int mask = 0;
+        for (String part : spec.toLowerCase(java.util.Locale.ROOT).split("\\+")) {
+            mask |= switch (part.trim()) {
+                case "move", "wasd", "movement" -> CH_MOVE;
+                case "jump" -> CH_JUMP;
+                case "sneak" -> CH_SNEAK;
+                case "sprint" -> CH_SPRINT;
+                case "clicks", "click", "mouse-buttons" -> CH_CLICKS;
+                case "look", "turn", "mouse", "camera" -> CH_LOOK;
+                case "hotbar", "slots" -> CH_HOTBAR;
+                case "keys", "keyboard" -> CH_MOVE | CH_JUMP | CH_SNEAK | CH_SPRINT;
+                case "input" -> CH_MOVE | CH_JUMP | CH_SNEAK | CH_SPRINT | CH_CLICKS;
+                case "all", "" -> CH_ALL;
+                default -> -1;
+            };
+            if (mask < 0) return -1;
+        }
+        return mask == 0 ? CH_ALL : mask;
+    }
+
+    public static String channelNames(int mask) {
+        if ((mask & CH_ALL) == CH_ALL) return "all";
+        List<String> names = new ArrayList<>();
+        if ((mask & CH_MOVE) != 0) names.add("move");
+        if ((mask & CH_JUMP) != 0) names.add("jump");
+        if ((mask & CH_SNEAK) != 0) names.add("sneak");
+        if ((mask & CH_SPRINT) != 0) names.add("sprint");
+        if ((mask & CH_CLICKS) != 0) names.add("clicks");
+        if ((mask & CH_LOOK) != 0) names.add("look");
+        if ((mask & CH_HOTBAR) != 0) names.add("hotbar");
+        return String.join("+", names);
+    }
+
+    /** Channel owning each index of {@link #bindings(GameOptions)}. */
+    private static final int[] KEY_CHANNEL = {
+            CH_MOVE, CH_MOVE, CH_MOVE, CH_MOVE, CH_JUMP, CH_SNEAK, CH_SPRINT,
+            CH_CLICKS, CH_CLICKS
+    };
+
     private static List<Frame> recording;
     private static String recordingName;
+    private static int recordingChannels = CH_ALL;
 
     private MacroSystem() {}
 
@@ -53,10 +111,11 @@ public final class MacroSystem {
 
     /* ------------------------------------------------------------------ recording */
 
-    public static synchronized boolean startRecording(String name) {
+    public static synchronized boolean startRecording(String name, int channels) {
         if (recording != null) return false;
         recording = new ArrayList<>();
         recordingName = name;
+        recordingChannels = channels;
         return true;
     }
 
@@ -64,11 +123,12 @@ public final class MacroSystem {
         if (recording == null) return -1;
         List<Frame> frames = recording;
         String name = recordingName;
+        int channels = recordingChannels;
         recording = null;
         recordingName = null;
         try {
             Files.createDirectories(MACRO_DIR);
-            Files.writeString(file(name), GSON.toJson(frames));
+            Files.writeString(file(name), GSON.toJson(new MacroData(channels, frames)));
         } catch (IOException exception) {
             LOGGER.warn("Could not save macro {}", name, exception);
             return -1;
@@ -117,12 +177,18 @@ public final class MacroSystem {
         }
     }
 
-    public static List<Frame> loadFrames(String name) {
+    public static MacroData load(String name) {
         try {
-            Frame[] frames = GSON.fromJson(Files.readString(file(name)), Frame[].class);
-            return frames == null ? List.of() : List.of(frames);
+            String json = Files.readString(file(name));
+            if (json.stripLeading().startsWith("[")) {
+                // Legacy channel-less format: a bare frame array means every channel.
+                Frame[] frames = GSON.fromJson(json, Frame[].class);
+                return frames == null ? null : new MacroData(CH_ALL, List.of(frames));
+            }
+            MacroData data = GSON.fromJson(json, MacroData.class);
+            return data == null || data.frames() == null ? null : data;
         } catch (IOException | RuntimeException exception) {
-            return List.of();
+            return null;
         }
     }
 
@@ -133,11 +199,16 @@ public final class MacroSystem {
 
     /* ------------------------------------------------------------------ replay */
 
-    public static boolean play(MinecraftClient client, String name, int repeats) {
-        List<Frame> frames = loadFrames(name);
-        if (frames.isEmpty()) return false;
+    /** channelOverride limits playback further; 0 means play the recorded channels. */
+    public static boolean play(MinecraftClient client, String name, int repeats,
+            int channelOverride) {
+        MacroData data = load(name);
+        if (data == null || data.frames().isEmpty()) return false;
+        int channels = channelOverride == 0 ? data.channels()
+                : data.channels() & channelOverride;
+        if (channels == 0) return false;
         GladeClient.taskScheduler().addTask("glade-macro-" + name,
-                new PlayTask(client, name, frames, repeats));
+                new PlayTask(client, name, data.frames(), repeats, channels));
         return true;
     }
 
@@ -146,16 +217,19 @@ public final class MacroSystem {
         private final String name;
         private final List<Frame> frames;
         private final int repeats;
+        private final int channels;
         private int index;
         private int loop;
         private int previousMask;
         private boolean done;
 
-        PlayTask(MinecraftClient client, String name, List<Frame> frames, int repeats) {
+        PlayTask(MinecraftClient client, String name, List<Frame> frames, int repeats,
+                int channels) {
             this.client = client;
             this.name = name;
             this.frames = frames;
             this.repeats = Math.max(1, repeats);
+            this.channels = channels;
         }
 
         @Override public void initialize() { }
@@ -170,6 +244,9 @@ public final class MacroSystem {
             Frame frame = frames.get(index++);
             KeyBinding[] keys = bindings(client.options);
             for (int i = 0; i < keys.length; i++) {
+                // Keys outside the played channels are left untouched, so a clicks-only
+                // macro can run WHILE the player (or the pathfinder) drives movement.
+                if ((KEY_CHANNEL[i] & channels) == 0) continue;
                 boolean pressed = (frame.keys() & (1 << i)) != 0;
                 keys[i].setPressed(pressed);
                 // A rising edge is a fresh press event so single attack/use clicks replay.
@@ -180,11 +257,15 @@ public final class MacroSystem {
                 }
             }
             previousMask = frame.keys();
-            client.player.setYaw(frame.yaw());
-            client.player.setHeadYaw(frame.yaw());
-            client.player.setBodyYaw(frame.yaw());
-            client.player.setPitch(frame.pitch());
-            client.player.getInventory().setSelectedSlot(frame.slot());
+            if ((channels & CH_LOOK) != 0) {
+                client.player.setYaw(frame.yaw());
+                client.player.setHeadYaw(frame.yaw());
+                client.player.setBodyYaw(frame.yaw());
+                client.player.setPitch(frame.pitch());
+            }
+            if ((channels & CH_HOTBAR) != 0) {
+                client.player.getInventory().setSelectedSlot(frame.slot());
+            }
             scheduleDelay();
         }
 
@@ -196,10 +277,19 @@ public final class MacroSystem {
         }
 
         private void release() {
-            for (KeyBinding key : bindings(client.options)) key.setPressed(false);
+            KeyBinding[] keys = bindings(client.options);
+            for (int i = 0; i < keys.length; i++) {
+                if ((KEY_CHANNEL[i] & channels) != 0) keys[i].setPressed(false);
+            }
         }
 
         @Override public void onCompleted() { release(); }
-        @Override public Set<Object> getMutexKeys() { return Set.of("glade-player-movement"); }
+
+        @Override public Set<Object> getMutexKeys() {
+            // Only movement-channel macros contend with pathing; a clicks/look macro
+            // composes with /glade goto instead of cancelling it.
+            boolean movement = (channels & (CH_MOVE | CH_JUMP | CH_SNEAK | CH_SPRINT)) != 0;
+            return movement ? Set.of("glade-player-movement") : Set.of("glade-macro-aux");
+        }
     }
 }
