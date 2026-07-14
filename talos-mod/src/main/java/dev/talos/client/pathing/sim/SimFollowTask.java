@@ -58,9 +58,6 @@ public final class SimFollowTask extends TalosTask {
     private double bestRemaining = Double.POSITIVE_INFINITY;
     private BlockPos breaking;
     private BlockPos pillarOrigin;
-    private BlockPos lastPlacement;
-    private int lastPlacementTick = Integer.MIN_VALUE;
-    private int placeFaceOffset;
     private String lastStatus = "";
     private Primitive committedPrimitive;
     private int committedStrafe;
@@ -100,6 +97,9 @@ public final class SimFollowTask extends TalosTask {
 
     /** The route currently being followed (full resolution, immutable). */
     public PlannedRoute currentRoute() { return route; }
+
+    /** Waypoints left in front of the follower; the engine cuts searches early when low. */
+    public int remainingWaypoints() { return Math.max(0, route.waypoints().size() - index); }
 
     /** Hot-swap in a fresher plan without releasing keys; passed waypoints self-advance. */
     public void swapRoute(PlannedRoute replacement) {
@@ -160,14 +160,29 @@ public final class SimFollowTask extends TalosTask {
         }
         // A PARTIAL route means the planner ran out of budget, not that the route is good:
         // extend in the background while moving. Rate-limited so back-to-back searches
-        // don't churn plans faster than the follower can consume them.
+        // don't churn plans faster than the follower can consume them — except when the
+        // remaining route is short, where a fresh extension is the difference between
+        // flowing onward and grinding to a halt at the frayed end.
+        int remaining = route.waypoints().size() - index;
         if (!route.reachedGoal() && replanRequest != null && !replanRequested
-                && ticks - lastExtensionTick >= 25) {
+                && ticks - lastExtensionTick >= (remaining <= 12 ? 5 : 25)) {
             replanRequested = true;
             lastExtensionTick = ticks;
             replanRequest.run();
         }
         if (index >= route.waypoints().size()) {
+            if (!route.reachedGoal()) {
+                // A dried-up PARTIAL route is not a failure: the extension search is already
+                // running. Hold here and let the stitched continuation swap in — failing the
+                // segment forced a full stop and a from-scratch replan, the visible stutter.
+                status("extending route");
+                releaseInputs();
+                if (ticks - lastProgressTick > STUCK_TICKS) {
+                    finish(false, "Route ran out and no extension arrived");
+                }
+                scheduleDelay();
+                return;
+            }
             finish(false, "Nodes ended before the goal was reached");
             return;
         }
@@ -182,9 +197,9 @@ public final class SimFollowTask extends TalosTask {
         // Think ahead before committing to an edit: near the frayed end of a PARTIAL route,
         // a MINE waypoint may be a dig toward a dead end the planner never saw past (caves).
         // The extension request above has already fired — hold position until the fresher,
-        // deeper plan is swapped in rather than tunneling blind.
-        boolean nearRouteEnd = route.waypoints().size() - index
-                <= Math.max(6, route.waypoints().size() / 4);
+        // deeper plan is swapped in rather than tunneling blind. A fixed 6-waypoint margin:
+        // the old size/4 rule froze long routes a quarter of the way from their end.
+        boolean nearRouteEnd = route.waypoints().size() - index <= 6;
         if (waypoint.via() == Primitive.MINE && !route.reachedGoal() && nearRouteEnd) {
             status("planning ahead (mining)");
             releaseInputs();
@@ -325,10 +340,14 @@ public final class SimFollowTask extends TalosTask {
                     wantsSprint && (!brakeNeeded || precisionLaunch), wantsSneak, heading));
         }
         // Opportunistic hop, decided on the go: plans no longer contain SPRINT_JUMP for
-        // open ground, so during a plain sprint the follower may offer a jump variant and
-        // let the rollout prove it is safe and faster here (a gap edge, a slope lip).
-        if (primitive == Primitive.SPRINT && live.onGround() && !brakeNeeded && !approachingFinal) {
-            candidates.add(new Input(1, 0, true, true, false, yaw));
+        // open ground, so during plain travel the follower offers a HELD-jump variant and
+        // lets the rollout prove it is safe and faster here. Because the jump key stays
+        // held in the simulation, the rollout literally plays out spam-jumping — including
+        // under low ceilings, where the head-bonk shortens the arc and the ticks tell the
+        // truth about whether hopping gains anything. The physics decide, not a heuristic.
+        if ((primitive == Primitive.SPRINT || primitive == Primitive.WALK)
+                && live.onGround() && !brakeNeeded && !approachingFinal) {
+            candidates.add(new Input(1, 0, true, primitive == Primitive.SPRINT, false, yaw));
         }
         // Never offer a one-tick jump release during a committed sprint-jump or ledge climb.
         if ((!continuousRun || brakeNeeded) && primitive != Primitive.STEP_UP) {
@@ -565,7 +584,11 @@ public final class SimFollowTask extends TalosTask {
         return true;
     }
 
-    /** Place the missing support from an existing solid neighbor while sneak-guarding the lip. */
+    /**
+     * PLACE waypoints are pillar cells only — horizontal bridging was removed from the
+     * planner (unreliable in execution; scripts can still place blocks explicitly). Any
+     * non-vertical PLACE waypoint is stale and is walked like an ordinary node.
+     */
     private boolean place(ClientPlayerEntity player, Vec3d target) {
         BlockPos destination = BlockPos.ofFloored(target);
         BlockPos feet = player.getBlockPos();
@@ -573,53 +596,7 @@ public final class SimFollowTask extends TalosTask {
                 && destination.getY() > feet.getY()) {
             return pillar(player);
         }
-        int dx = Integer.compare(destination.getX(), feet.getX());
-        int dz = Integer.compare(destination.getZ(), feet.getZ());
-        // PLACE waypoints are normally the far-side landing; the missing support is the
-        // first cell across the lip, not necessarily destination.down().
-        BlockPos support = feet.add(dx, 0, dz).down();
-        if (!client.world.getBlockState(support).getCollisionShape(client.world, support).isEmpty()) {
-            support = destination.down();
-        }
-        if (!client.world.getBlockState(support).getCollisionShape(client.world, support).isEmpty()) {
-            return false;
-        }
-        status("bridging");
-        releaseInputs();
-        client.options.sneakKey.setPressed(true);
-        int slot = findBlockSlot(player);
-        if (slot < 0) { finish(false, "Ran out of bridge blocks"); return true; }
-        if (support.equals(lastPlacement) && ticks - lastPlacementTick < 2) return true;
-        // Anchor preference: the top face of the block below the support (most reliable),
-        // then the side faces of the horizontal neighbors (sneak-bridge against the lip),
-        // then a ceiling. A rejected placement rotates to the next face next tick instead
-        // of blindly spamming the same failing click.
-        Direction[] sides = {Direction.UP, Direction.NORTH, Direction.SOUTH,
-                Direction.WEST, Direction.EAST, Direction.DOWN};
-        for (int i = 0; i < sides.length; i++) {
-            Direction side = sides[(i + placeFaceOffset) % sides.length];
-            BlockPos anchor = support.offset(side.getOpposite());
-            if (client.world.getBlockState(anchor).getCollisionShape(client.world, anchor).isEmpty()) continue;
-            Vec3d hit = Vec3d.ofCenter(anchor).add(side.getOffsetX() * .5,
-                    side.getOffsetY() * .5, side.getOffsetZ() * .5);
-            // Look at the actual anchor face (eased) before the click lands on it.
-            if (!steerLook(player, hit, 14.0)) return true;
-            player.getInventory().setSelectedSlot(slot);
-            net.minecraft.util.ActionResult interaction = client.interactionManager
-                    .interactBlock(player, Hand.MAIN_HAND, new BlockHitResult(hit, side, anchor, false));
-            player.swingHand(Hand.MAIN_HAND);
-            if (interaction.isAccepted()) {
-                placeFaceOffset = 0;
-                lastPlacement = support.toImmutable();
-                lastPlacementTick = ticks;
-            } else {
-                placeFaceOffset++;
-                status("placement rejected - trying another face");
-            }
-            return true; // one attempt per tick, accepted or not
-        }
-        finish(false, "No solid face is available for bridging");
-        return true;
+        return false;
     }
 
     /** Nerdpole: hold jump and place under the feet once they clear the origin cell. */
@@ -987,7 +964,7 @@ public final class SimFollowTask extends TalosTask {
             case SWIM -> "swimming";
             case CRAWL -> "crawling";
             case MINE -> "mining";
-            case PLACE -> "bridging";
+            case PLACE -> "pillaring";
         };
     }
 

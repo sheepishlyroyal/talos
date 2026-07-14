@@ -11,6 +11,6 @@ public final class TalosConfig {
     public double blurStrength = 1.0;
     public int uiPanelX = -1;
     public int uiPanelY = -1;
-    public boolean bridgeAutoAccept = false;
+    public boolean bridgeAutoAccept = true;
     public long seed = 0L;
 }

@@ -33,7 +33,10 @@ public final class TalosWebSocketServer extends WebSocketServer {
     private final ConcurrentHashMap<WebSocket, Set<String>> pushed = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<WebSocket, String> pendingRuns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<WebSocket, CompletableFuture<Void>> activeRuns = new ConcurrentHashMap<>();
-    private volatile boolean sessionAllowed;
+    // The bridge is allowed by default: it only ever binds 127.0.0.1, requires the local
+    // token file, and rejects browser origins — the remaining risk is the local user, who
+    // is exactly who is pressing Run in VS Code. /talos bridge allow stays as a no-op arm.
+    private volatile boolean sessionAllowed = true;
     private volatile boolean confirmationRequested;
 
     public TalosWebSocketServer(BridgeAuth auth) throws IOException {

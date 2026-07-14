@@ -41,6 +41,13 @@ public final class TalosPathingEngine implements PathingEngine {
     // of one 50ms tick. Worst-case plan latency is therefore ~10 ticks (0.5s), usually 1-3.
     private static final long SIM_TICK_SLICE_NANOS = 15_000_000L;
     private static final int SIM_MAX_ROLLOUT_TICKS = 20;
+    // Continuity beats completeness: rather than standing still while a deep search runs to
+    // its full budget, the search is CUT the moment movement needs it — after ~8 slices for
+    // the initial plan (start walking on the best partial), or whenever the moving follower's
+    // remaining route runs short (append whatever the extension has found so far). Depth
+    // still accumulates, one stitched extension at a time, while the player never stops.
+    private static final long INITIAL_MOVE_NANOS = 120_000_000L;
+    private static final int FOLLOWER_STARVING_WAYPOINTS = 12;
     private volatile TalosTask activeTask;
     private volatile NavigationRun activeRun;
     private volatile String lastPartialDetail = "";
@@ -215,9 +222,15 @@ public final class TalosPathingEngine implements PathingEngine {
         LOGGER.debug("Simulation path search attempt {}: {}", run.attempts, route.detail());
         // A partial plan is worth explaining out loud: WHY the planner stopped short (node
         // cap, time budget, frontier exhausted) is the difference between "needs a deeper
-        // search" and "that goal is genuinely unreachable".
-        if (!route.reachedGoal() && !route.detail().equals(lastPartialDetail)) {
-            lastPartialDetail = route.detail();
+        // search" and "that goal is genuinely unreachable". Deliberate keep-moving cuts are
+        // routine and stay silent; other reasons are announced once per distinct cause (the
+        // detail's expanded-node count varies every search and would spam chat otherwise).
+        String cause = route.detail();
+        int separator = cause.indexOf(';');
+        if (separator > 0) cause = cause.substring(0, separator);
+        if (!route.reachedGoal() && !cause.startsWith("cut early")
+                && !cause.startsWith("stitched: cut early") && !cause.equals(lastPartialDetail)) {
+            lastPartialDetail = cause;
             if (run.client.player != null) run.client.player.sendMessage(
                     net.minecraft.text.Text.literal(
                             "§6Talos §7» §fpartial plan: " + route.detail()), false);
@@ -424,7 +437,7 @@ public final class TalosPathingEngine implements PathingEngine {
             case SWIM -> 0x3355FF;              // deep blue: swimming leg
             case CRAWL -> 0xCCCCFF;             // pale: crawl
             case MINE -> 0xFF9955;              // orange-brown: dig here
-            case PLACE -> 0xCC66FF;             // purple: place/bridge here
+            case PLACE -> 0xCC66FF;             // purple: pillar up here
         };
     }
 
@@ -502,6 +515,9 @@ public final class TalosPathingEngine implements PathingEngine {
             // throttled a 150ms search to many seconds of standing still. The fixed slice
             // itself is the freeze guard (15ms of a 50ms tick).
             search.advance(SIM_TICK_SLICE_NANOS, () -> true);
+            if (!search.isFinished() && search.hasUsefulPartial() && movementNeedsRouteNow()) {
+                search.cut("cut early to keep moving");
+            }
             if (search.isFinished()) {
                 done = true;
                 PlannedRoute route = search.route();
@@ -510,6 +526,16 @@ public final class TalosPathingEngine implements PathingEngine {
             } else {
                 scheduleDelay();
             }
+        }
+
+        /** True when waiting any longer would visibly stall the player. */
+        private boolean movementNeedsRouteNow() {
+            SimFollowTask follower = run.follower;
+            if (follower != null && follower.isActive()) {
+                return follower.remainingWaypoints() <= FOLLOWER_STARVING_WAYPOINTS;
+            }
+            // No follower: the player is standing still RIGHT NOW waiting on this plan.
+            return search.elapsedNanos() >= INITIAL_MOVE_NANOS;
         }
     }
 

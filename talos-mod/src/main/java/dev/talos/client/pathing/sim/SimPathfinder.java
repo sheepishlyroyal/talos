@@ -94,7 +94,7 @@ public final class SimPathfinder {
             this.opts = opts;
             BlockPos startCell = cell(start.position());
             Node root = new Node(start, startCell, heading(start.velocity(), 0), null, null,
-                    0, 0.0, heuristic(startCell, goal, profile), sequence++);
+                    0, 0.0, heuristic(startCell, goal, profile), sequence++, 0);
             open.add(root);
             bestCost.put(key(root), 0.0);
             closest = root;
@@ -127,7 +127,7 @@ public final class SimPathfinder {
                             + 0.75 * headingSteps(node.heading(), edgeHeading);
                     Node next = new Node(edge.state(), edgeCell, edgeHeading, node,
                             edge.primitive(), edge.ticks(), g,
-                            heuristic(edgeCell, goal, profile), sequence++);
+                            heuristic(edgeCell, goal, profile), sequence++, node.depth() + 1);
                     Key key = key(next);
                     if (g + EPSILON < bestCost.getOrDefault(key, Double.POSITIVE_INFINITY)) {
                         bestCost.put(key, g);
@@ -146,6 +146,22 @@ public final class SimPathfinder {
 
         public boolean isFinished() { return result != null || reason != null; }
         public int expandedNodes() { return expanded; }
+        public long elapsedNanos() { return spentNanos; }
+
+        /**
+         * Stops the search at the end of this slice; {@link #route()} then returns the best
+         * partial found so far. This is how the engine trades depth for continuity: a moving
+         * player with a short route needs ANY forward continuation now, not a perfect one
+         * later — the next extension search deepens from the new tail anyway.
+         */
+        public void cut(String why) {
+            if (!isFinished()) reason = why;
+        }
+
+        /** A partial worth following: the best node is a real multi-edge route, not the start. */
+        public boolean hasUsefulPartial() {
+            return result != null || (closest != null && closest.depth() >= 6);
+        }
 
         public PlannedRoute route() {
             if (!isFinished()) throw new IllegalStateException("search is still running");
@@ -209,10 +225,12 @@ public final class SimPathfinder {
 
             add(result, stepUp(world, node, profile, opts, dx, dz, direction, yaw));
             add(result, drop(world, node, profile, opts, dx, dz, direction, yaw));
-            // Edits are cardinal-only: a diagonal doorway/bridge has no shared face to act on.
-            if (dx * dz == 0) {
-                if (opts.allowMining()) add(result, mine(world, node, dx, dz, direction));
-                if (opts.allowPlacing()) add(result, place(world, node, dx, dz, direction));
+            // Edits are cardinal-only: a diagonal doorway has no shared face to act on.
+            // Horizontal bridging is deliberately NOT an edge: its execution was unreliable
+            // enough to be a net loss, and scripts can still place blocks explicitly. The
+            // only placement the planner emits is the vertical nerdpole (placeUp).
+            if (dx * dz == 0 && opts.allowMining()) {
+                add(result, mine(world, node, dx, dz, direction));
             }
         }
         if (opts.allowMining()) add(result, mineDown(world, node));
@@ -323,19 +341,6 @@ public final class SimPathfinder {
         MotionState state = new MotionState(bottomCenter(below), Vec3d.ZERO, true,
                 MotionState.Pose.STAND);
         return new Edge(state, Primitive.MINE, 8, 8.0 + EDIT_PENALTY, node.heading());
-    }
-
-    /*
-     * Placement likewise ends ON the newly placed support in the gap cell, so bridging
-     * chains across a span of any width one block at a time.
-     */
-    private static Edge place(World world, Node node, int dx, int dz, int direction) {
-        if (!node.state().onGround()) return null;
-        BlockPos gap = node.cell().add(dx, 0, dz);
-        if (!empty(world, gap.down()) || !empty(world, gap) || !empty(world, gap.up())) return null;
-        MotionState state = new MotionState(bottomCenter(gap), Vec3d.ZERO, true,
-                MotionState.Pose.STAND);
-        return new Edge(state, Primitive.PLACE, 8, 8.0 + EDIT_PENALTY, direction);
     }
 
     /** Nerdpole: jump and place under your own feet. Requires head clearance two above. */
@@ -454,7 +459,7 @@ public final class SimPathfinder {
     private record Key(BlockPos cell, MotionState.Pose pose, int heading) {}
 
     private record Node(MotionState state, BlockPos cell, int heading, Node parent,
-            Primitive via, int edgeTicks, double g, double h, long sequence) {
+            Primitive via, int edgeTicks, double g, double h, long sequence, int depth) {
         // Weighted A*: goal-directedness matters more than provable optimality for a live
         // game bot. w=2 finds deep routes in a fraction of the expansions.
         double f() { return g + 2.0 * h; }
@@ -462,7 +467,7 @@ public final class SimPathfinder {
         Node withState(MotionState replacement) {
             return new Node(replacement, SimPathfinder.cell(replacement.position()), heading,
                     parent, via,
-                    edgeTicks, g, h, sequence);
+                    edgeTicks, g, h, sequence, depth);
         }
     }
 

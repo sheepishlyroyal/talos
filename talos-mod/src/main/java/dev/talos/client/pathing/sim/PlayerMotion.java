@@ -138,27 +138,9 @@ public final class PlayerMotion {
             }
         }
 
-        // Mirrors the tail of Entity.move(): soul sand, honey, and similar blocks scale the
-        // retained horizontal velocity. Slow ground therefore costs the planner real ticks —
-        // the negative weight emerges from simulation instead of a hand-tuned block list.
-        double velocityMultiplier = velocityMultiplierAt(world, newPosition);
-        if (velocityMultiplier != 1.0) {
-            vx *= velocityMultiplier;
-            vz *= velocityMultiplier;
-        }
-
         MotionState.Fluid resultingFluid = fluidAt(world, state.box(newPosition));
         return new MotionState(newPosition, new Vec3d(vx, vy, vz), onGround,
                 state.pose(), resultingFluid, bumped);
-    }
-
-    /** Entity.getVelocityMultiplier(): the occupied block, else the velocity-affecting block. */
-    private static double velocityMultiplierAt(World world, Vec3d position) {
-        BlockPos feet = BlockPos.ofFloored(position.x, position.y + 1.0E-4, position.z);
-        float multiplier = world.getBlockState(feet).getBlock().getVelocityMultiplier();
-        if ((double) multiplier != 1.0) return multiplier;
-        BlockPos affecting = BlockPos.ofFloored(position.x, position.y - 0.5000001, position.z);
-        return world.getBlockState(affecting).getBlock().getVelocityMultiplier();
     }
 
     /** True iff the exact pose AABB has no intersection with a block collision shape. */
