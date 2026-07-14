@@ -82,6 +82,14 @@ class Player(Entity):
     name: str
     distance: float
 
+class Hit:
+    """A raycast hit: .type ("block"|"entity"), .id (registry id), .pos (exact
+    impact point, >=3-decimal precision), .distance (blocks from the eyes)."""
+    type: str
+    id: str
+    pos: Pos
+    distance: float
+
 class SlotEntry(TypedDict):
     """One non-empty stack: its slot number, item registry id, and count."""
     slot: int
@@ -473,6 +481,31 @@ def looking_at() -> Optional[Pos]:
 
 def block_at(x: Union[float, str, _PosLike], y: Union[float, str] = ..., z: Union[float, str] = ...) -> str:
     """Block id at a cell, e.g. "minecraft:stone" ("minecraft:air" if empty)."""
+    ...
+
+def local(left: float, up: float, forward: float) -> Pos:
+    """World Pos of the caret coordinate ^left ^up ^forward (look-relative, from
+    the eyes). local(0, 0, 5) is 5 blocks ahead; same frame as goto("^ ^ 5")."""
+    ...
+
+def ahead(distance: float) -> Pos:
+    """World Pos `distance` blocks along the gaze — local(0, 0, distance). Follows
+    pitch; use move_ahead() to actually walk forward on the horizontal."""
+    ...
+
+def raytrace(max_distance: float = ...) -> Optional[Hit]:
+    """Cast a ray from the eyes along the look; the first block/entity Hit, or None.
+    The entity-aware, sub-block-precise version of looking_at()."""
+    ...
+
+def raytrace_if(block: Optional[str] = ..., entity: Optional[str] = ..., max_distance: float = ...) -> bool:
+    """True when the first thing the look ray hits matches. Pass exactly one of
+    block="minecraft:stone" or entity="zombie"."""
+    ...
+
+def move_ahead(distance: float) -> str:
+    """Walk `distance` blocks forward along your horizontal heading (pitch ignored)
+    and wait for arrival. Raises PathFailedError if unreachable."""
     ...
 
 def input(prompt: str = ...) -> str:

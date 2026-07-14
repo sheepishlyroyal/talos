@@ -13,6 +13,44 @@ local WebSocket to the running game client and streams its logs back into a
 3. To produce a shareable `.vsix`: `npx vsce package` (requires `vsce`;
    `npm install -g @vscode/vsce` or `npx` will fetch it on demand).
 
+## Compatible editors
+
+Talos Scripting uses **only stable VS Code APIs** (commands, output channel,
+status bar, configuration, workspace) plus a plain `ws` WebSocket — no proposed
+or proprietary APIs — so the same `.vsix` runs unmodified on any VS Code-compatible
+host at engine `^1.85.0`.
+
+**Fully supported** (install the `.vsix` as-is):
+
+| Editor | Notes |
+|---|---|
+| **Visual Studio Code** | Reference target. |
+| **Cursor** | VS Code fork — full extension API. |
+| **Windsurf** (Codeium) | VS Code fork. |
+| **VSCodium** | Open-source VS Code build. |
+| **Trae** (ByteDance) | VS Code fork. |
+| **Google Antigravity** | VS Code fork. |
+| **Eclipse Theia** | Via Open VSX; stable-API extensions like this one work. |
+| **code-server / Gitpod / GitHub Codespaces** | Browser-hosted VS Code. |
+
+Install on any of them via the CLI:
+
+```
+<editor> --install-extension talos-<version>.vsix --force
+```
+
+(`code`, `cursor`, `windsurf`, `codium`, …) or the GUI **Extensions → “Install from
+VSIX…”**. Talos isn't on a marketplace, so sideload the `.vsix` directly (or its
+Open VSX listing if/when published).
+
+**Not supported** — these use a different extension system entirely, so a native
+client would have to be written against the mod's WebSocket protocol
+([`PROTOCOL.md`](./PROTOCOL.md)), which is small and documented:
+
+- JetBrains IDEs (IntelliJ IDEA, PyCharm, …) — different plugin platform.
+- Zed — its own Rust/WASM extension system.
+- Neovim / Vim, Sublime Text, Emacs — no VSIX support.
+
 ## Usage
 
 1. Launch Minecraft with the Talos mod loaded. On startup the mod writes a

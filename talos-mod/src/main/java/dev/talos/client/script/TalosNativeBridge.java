@@ -53,6 +53,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import dev.talos.client.command.RaycastMath;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.screen.slot.Slot;
 import net.minecraft.item.ItemStack;
@@ -640,6 +641,35 @@ public final class TalosNativeBridge {
             return null;
         }));
     }
+    /**
+     * Resolves a caret local coordinate ({@code ^left ^up ^forward}) to a world point using the
+     * player's current look. {@code localCoords(0, 0, 5)} is the point 5 blocks forward.
+     */
+    @HostAccess.Export public Pos localCoords(double left, double up, double forward) {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            Vec3d p = RaycastMath.local(client.player.getEyePos(),
+                    client.player.getYaw(), client.player.getPitch(), left, up, forward);
+            return new Pos(p.x, p.y, p.z);
+        }));
+    }
+
+    /**
+     * Casts a ray from the eyes along the current look up to {@code maxDist} blocks; returns the
+     * nearer of the first block and first entity hit, or null on a miss.
+     */
+    @HostAccess.Export public HitInfo raycast(double maxDist) {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            RaycastMath.Hit hit = RaycastMath.cast(client.player, client.world, maxDist);
+            if (hit.isMiss()) {
+                return null;
+            }
+            return new HitInfo(hit.type().name().toLowerCase(Locale.ROOT), hit.id(),
+                    new Pos(hit.point().x, hit.point().y, hit.point().z), hit.distance());
+        }));
+    }
+
     /** Blocks the script until the user's next plain chat message, which never reaches chat. */
     @HostAccess.Export public String userInput(String prompt) {
         return await(inputFuture(prompt));
@@ -895,6 +925,13 @@ public final class TalosNativeBridge {
     public record PlayerInfo(String name, String uuid, Pos pos, double distance) {
         @HostAccess.Export public String name() { return name; }
         @HostAccess.Export public String uuid() { return uuid; }
+        @HostAccess.Export public Pos pos() { return pos; }
+        @HostAccess.Export public double distance() { return distance; }
+    }
+    /** One raycast hit: "block" or "entity", the struck id, the exact point, and eye distance. */
+    public record HitInfo(String type, String id, Pos pos, double distance) {
+        @HostAccess.Export public String type() { return type; }
+        @HostAccess.Export public String id() { return id; }
         @HostAccess.Export public Pos pos() { return pos; }
         @HostAccess.Export public double distance() { return distance; }
     }

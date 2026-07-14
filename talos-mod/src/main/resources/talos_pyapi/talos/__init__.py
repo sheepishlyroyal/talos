@@ -9,9 +9,10 @@ from .actions import (goto, goto_near, goto_xz, goto_block, follow, set_node_cou
                       left_click, right_click, select_slot, click_slot, container_slot_count,
                       move_stack, take_stack, armor_item, equip_armor, kill_nearest, look_at,
                       player_pos, player_feet, key, tap, release_keys, look, look_angle,
-                      looking_at, block_at, on_edge, input, inventory, hotbar, selected_slot,
+                      looking_at, block_at, local, ahead, raytrace, raytrace_if, move_ahead,
+                      on_edge, input, inventory, hotbar, selected_slot,
                       count, has, find_slot, container_items, deposit, withdraw, craft,
-                      screen, close_screen, hud, hud_remove, hud_clear, Pos, Entity, Player)
+                      screen, close_screen, hud, hud_remove, hud_clear, Pos, Entity, Player, Hit)
 from .engine import (on_start, on_tick, task, every, start, run, cancel_all, sleep, ticks,
                      next_tick, tick_count, aio, TaskHandle, command, state)
 from .events import on
@@ -165,10 +166,11 @@ __all__ = ["args", "require",
            "left_click", "right_click", "select_slot", "click_slot", "container_slot_count",
            "move_stack", "take_stack", "armor_item", "equip_armor", "kill_nearest", "look_at",
            "player_pos", "player_feet", "key", "tap", "release_keys", "look", "look_angle",
-           "looking_at", "block_at", "on_edge", "input", "inventory", "hotbar", "selected_slot",
+           "looking_at", "block_at", "local", "ahead", "raytrace", "raytrace_if", "move_ahead",
+           "on_edge", "input", "inventory", "hotbar", "selected_slot",
            "count", "has", "find_slot", "container_items", "deposit", "withdraw", "craft",
            "screen", "close_screen", "hud", "hud_remove", "hud_clear",
-           "Pos", "Entity", "Player", "log",
+           "Pos", "Entity", "Player", "Hit", "log",
            "wait", "wait_between", "set_profile", "set_seed", "on", "parallel", "spawn", "command",
            "on_start", "on_tick", "task", "every", "start", "run", "cancel_all",
            "sleep", "ticks", "next_tick", "tick_count", "aio", "TaskHandle", "state",

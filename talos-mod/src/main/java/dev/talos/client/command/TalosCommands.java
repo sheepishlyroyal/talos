@@ -172,6 +172,7 @@ public final class TalosCommands {
                 .then(ClientCommandManager.literal("coords")
                         .then(ClientCommandManager.literal("direction")
                                 .then(directionNode(CoordsCommand::executeDirection))))
+                .then(raytraceNode())
                 .then(ClientCommandManager.literal("ui")
                         .executes(UiCommand::execute))
                 .then(ClientCommandManager.literal("script")
@@ -804,6 +805,64 @@ public final class TalosCommands {
             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource,
             RelativeCoordinateArgumentType.Coordinate> coordinate(String name) {
         return ClientCommandManager.argument(name, RelativeCoordinateArgumentType.coordinate());
+    }
+
+    /** Default look-ray reach for {@code /talos raytrace where|if} when no distance is given. */
+    private static final double DEFAULT_RAY_DIST = 64.0;
+
+    /** One caret-capable axis ({@code ^}/{@code ~}/absolute) for {@code /talos raytrace get}. */
+    private static com.mojang.brigadier.builder.RequiredArgumentBuilder<FabricClientCommandSource,
+            LocalCoordinateArgumentType.Axis> localCoord(String name) {
+        return ClientCommandManager.argument(name, LocalCoordinateArgumentType.localCoordinate());
+    }
+
+    /**
+     * {@code /talos raytrace} — look-relative coordinate + raycast queries (see
+     * {@link RaytraceCommand}). Bare {@code raytrace <x> <y> <z>} is shorthand for {@code get}.
+     */
+    private static com.mojang.brigadier.builder.LiteralArgumentBuilder<FabricClientCommandSource>
+            raytraceNode() {
+        com.mojang.brigadier.builder.LiteralArgumentBuilder<FabricClientCommandSource> raytrace =
+                ClientCommandManager.literal("raytrace");
+
+        // get / bare form: resolve a coordinate triple to a world point.
+        raytrace.then(localCoord("x").then(localCoord("y").then(localCoord("z")
+                .executes(RaytraceCommand::get))));
+        raytrace.then(ClientCommandManager.literal("get")
+                .then(localCoord("x").then(localCoord("y").then(localCoord("z")
+                        .executes(RaytraceCommand::get)))));
+
+        // where [maxDist]: first block/entity hit along the look.
+        raytrace.then(ClientCommandManager.literal("where")
+                .executes(context -> RaytraceCommand.where(context, DEFAULT_RAY_DIST))
+                .then(ClientCommandManager.argument("maxDist",
+                                DoubleArgumentType.doubleArg(0.1, 256.0))
+                        .executes(context -> RaytraceCommand.where(context,
+                                DoubleArgumentType.getDouble(context, "maxDist")))));
+
+        // if block <id> [maxDist] | if entity <selector> [maxDist]: predicate on the first hit.
+        raytrace.then(ClientCommandManager.literal("if")
+                .then(ClientCommandManager.literal("block")
+                        .then(ClientCommandManager.argument("blockId", StringArgumentType.word())
+                                .suggests((context, builder) -> CommandSource.suggestIdentifiers(
+                                        net.minecraft.registry.Registries.BLOCK.getIds(), builder))
+                                .executes(context -> RaytraceCommand.ifBlock(context,
+                                        StringArgumentType.getString(context, "blockId"), DEFAULT_RAY_DIST))
+                                .then(ClientCommandManager.argument("maxDist",
+                                                DoubleArgumentType.doubleArg(0.1, 256.0))
+                                        .executes(context -> RaytraceCommand.ifBlock(context,
+                                                StringArgumentType.getString(context, "blockId"),
+                                                DoubleArgumentType.getDouble(context, "maxDist"))))))
+                .then(ClientCommandManager.literal("entity")
+                        .then(ClientCommandManager.argument("selector", SelectorArgumentType.selector())
+                                .executes(context -> RaytraceCommand.ifEntity(context,
+                                        selectorArg(context), DEFAULT_RAY_DIST))
+                                .then(ClientCommandManager.argument("maxDist",
+                                                DoubleArgumentType.doubleArg(0.1, 256.0))
+                                        .executes(context -> RaytraceCommand.ifEntity(context,
+                                                selectorArg(context),
+                                                DoubleArgumentType.getDouble(context, "maxDist")))))));
+        return raytrace;
     }
 
     /** The player's current eye position, used as the base for {@code ~}-relative coordinate args. */

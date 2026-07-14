@@ -72,6 +72,25 @@ class Player(Entity):
         return f"Player(name={self.name!r}, pos={self.pos!r}, distance={self.distance:.3f})"
 
 
+class Hit:
+    """A raycast hit snapshot: .type, .id, .pos and .distance.
+
+    .type is "block" or "entity"; .id the struck registry id
+    ("minecraft:stone", "minecraft:cow"); .pos the exact hit point (a Pos, at
+    least 3-decimal precision); .distance the blocks from the eyes to that point.
+    """
+    __slots__ = ("type", "id", "pos", "distance")
+
+    def __init__(self, type, id, pos, distance):
+        self.type = type
+        self.id = id
+        self.pos = pos
+        self.distance = float(distance)
+
+    def __repr__(self):
+        return f"Hit(type={self.type!r}, id={self.id!r}, pos={self.pos!r}, distance={self.distance:.3f})"
+
+
 def _axis(snapshot, name):
     value = getattr(snapshot, name)
     return value() if callable(value) else value
@@ -500,6 +519,68 @@ def block_at(x, y=None, z=None):
     """Return the block id at a cell, e.g. "minecraft:stone" ("minecraft:air" if empty)."""
     x, y, z = _coords(x, y, z)
     return _call(_talos_host.blockAt, int(x), int(y), int(z))
+
+def local(left, up, forward):
+    """World Pos of the caret coordinate ^left ^up ^forward (look-relative, from the eyes).
+
+    Same frame vanilla's ^ ^ ^ uses: +forward is along your gaze (negative is
+    behind), +up is above your view, +left is to your left. local(0, 0, 5) is
+    the point 5 blocks ahead; pass it straight to goto()/look_at()/block_at().
+    Equivalent to the string form goto("^ ^ 5").
+    """
+    return _wrap_pos(_call(_talos_host.localCoords, float(left), float(up), float(forward)))
+
+def ahead(distance):
+    """World Pos `distance` blocks straight along the gaze — local(0, 0, distance).
+
+    Follows pitch, so looking down aims into the ground; use move_ahead() to
+    actually WALK forward on the horizontal.
+    """
+    return local(0.0, 0.0, float(distance))
+
+def raytrace(max_distance=64.0):
+    """Cast a ray from the eyes along the look; return the first Hit, or None.
+
+    Returns a Hit with .type ("block"/"entity"), .id, .pos (the exact impact
+    point, ≥3-decimal precision) and .distance. Unlike looking_at(), this sees
+    ENTITIES too and gives the precise sub-block hit position, out to
+    max_distance blocks (default 64).
+    """
+    raw = _call(_talos_host.raycast, float(max_distance))
+    if raw is None:
+        return None
+    return Hit(str(_axis(raw, "type")), str(_axis(raw, "id")),
+               _wrap_pos(_axis(raw, "pos")), float(_axis(raw, "distance")))
+
+def raytrace_if(block=None, entity=None, max_distance=64.0):
+    """True when the first thing the look ray hits matches. Pass exactly one of:
+
+    block="minecraft:stone" (exact block id) or entity="zombie" (entity type;
+    bare names get a minecraft: prefix). The predicate form of raytrace().
+    """
+    if (block is None) == (entity is None):
+        raise ValueError("pass exactly one of block= or entity=")
+    hit = raytrace(max_distance)
+    if hit is None:
+        return False
+    if block is not None:
+        want = block if ":" in str(block) else "minecraft:" + str(block)
+        return hit.type == "block" and hit.id == want
+    want = entity if ":" in str(entity) else "minecraft:" + str(entity)
+    return hit.type == "entity" and hit.id == want
+
+def move_ahead(distance):
+    """Walk `distance` blocks forward along your HORIZONTAL heading, and wait for arrival.
+
+    Uses your yaw only (pitch ignored), so looking up or down never sends the
+    path into the air or ground. Equivalent to pathing to the projected point;
+    raises PathFailedError if it can't get there.
+    """
+    yaw, _ = look_angle()
+    feet = player_feet()
+    yaw_r = _math.radians(yaw)
+    return goto(feet.x - _math.sin(yaw_r) * float(distance), feet.y,
+                feet.z + _math.cos(yaw_r) * float(distance))
 
 def input(prompt="Script is waiting for input"):
     """Ask the user for input via chat and block until they answer.

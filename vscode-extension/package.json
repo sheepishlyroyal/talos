@@ -1,8 +1,8 @@
 {
   "name": "talos",
   "displayName": "Talos Scripting",
-  "description": "Push and run Python automation scripts against the Talos Minecraft Fabric mod over a local WebSocket, with live log streaming.",
-  "version": "0.3.8",
+  "description": "Push and run Python automation scripts against the Talos Minecraft Fabric mod over a local WebSocket, with live log streaming. Runs in VS Code and its forks (Cursor, Windsurf, VSCodium, Trae, Antigravity, Theia, code-server).",
+  "version": "0.3.9",
   "publisher": "talos",
   "private": true,
   "engines": {
