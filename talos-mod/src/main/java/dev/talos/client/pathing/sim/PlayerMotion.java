@@ -30,6 +30,9 @@ public final class PlayerMotion {
     private static final double SPRINT_JUMP_IMPULSE = 0.2;
     private static final double WATER_FLOW_PUSH = 0.014;   // Entity.updateMovementInFluid
     private static final double LAVA_FLOW_PUSH = 0.0023333333333333335;
+    // Entity.updateMovementInFluid boosts a sub-threshold push on a near-still player up to
+    // this magnitude so a swimmer at rest still drifts with the current (vanilla literal).
+    private static final double MIN_FLUID_PUSH = 0.0045000000000000005;
     private PlayerMotion() {}
 
     /** Baseline-compatible overload for callers that do not yet have a live snapshot. */
@@ -71,11 +74,18 @@ public final class PlayerMotion {
 
         Vec3d velocity = state.velocity().add(inputVelocity(input, acceleration, inputFactor));
 
-        // Flowing-fluid push (river currents): vanilla Entity.updateMovementInFluid adds the
-        // averaged, normalized flow of every overlapped fluid cell to the velocity each tick.
-        if (env.flow().lengthSquared() > 1.0E-8) {
-            velocity = velocity.add(env.flow().normalize().multiply(
-                    fluid == MotionState.Fluid.LAVA ? LAVA_FLOW_PUSH : WATER_FLOW_PUSH));
+        // Flowing-fluid push (river currents): vanilla Entity.updateMovementInFluid scales the
+        // averaged, depth-scaled flow (see scanEnvironment) by the fluid's push strength — it
+        // does NOT normalize for players — then boosts a sub-threshold push on a near-still
+        // player to MIN_FLUID_PUSH so currents always dislodge a resting swimmer.
+        if (env.flow().lengthSquared() > 0.0) {
+            Vec3d push = env.flow().multiply(
+                    fluid == MotionState.Fluid.LAVA ? LAVA_FLOW_PUSH : WATER_FLOW_PUSH);
+            if (Math.abs(velocity.x) < 0.003 && Math.abs(velocity.z) < 0.003
+                    && push.length() < MIN_FLUID_PUSH && push.lengthSquared() > 0.0) {
+                push = push.normalize().multiply(MIN_FLUID_PUSH);
+            }
+            velocity = velocity.add(push);
         }
 
         // Vanilla LivingEntity jump velocity is 0.42 for an unmodified player, scaled by the
@@ -225,6 +235,9 @@ public final class PlayerMotion {
             int bubble) {}
 
     private static Environment scanEnvironment(CollisionView world, Box box) {
+        // Vanilla Entity.updateMovementInFluid scans the hitbox contracted by 0.001 so a
+        // player flush against a fluid cell boundary does not count the neighboring cell.
+        box = box.contract(0.001);
         int minX = floor(box.minX);
         int minY = floor(box.minY);
         int minZ = floor(box.minZ);
@@ -235,6 +248,7 @@ public final class PlayerMotion {
         Vec3d slow = null;
         Vec3d flow = Vec3d.ZERO;
         int flowCells = 0;
+        double depth = 0.0;
         int bubble = 0;
         for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
@@ -248,9 +262,14 @@ public final class PlayerMotion {
                         fluid = MotionState.Fluid.WATER;
                     }
                     if (!fluidState.isEmpty()) {
-                        Vec3d cellFlow = fluidState.getVelocity(world, pos);
-                        if (cellFlow.lengthSquared() > 1.0E-8) {
-                            flow = flow.add(cellFlow);
+                        // Vanilla Entity.updateMovementInFluid: a cell only pushes when its
+                        // fluid surface reaches the hitbox bottom. Every included cell counts
+                        // toward the average (even zero-flow sources), and the deepest
+                        // submersion above minY drives the shallow-contact scaling below.
+                        double surface = pos.getY() + fluidState.getHeight(world, pos);
+                        if (surface >= box.minY) {
+                            depth = Math.max(depth, surface - box.minY);
+                            flow = flow.add(fluidState.getVelocity(world, pos));
                             flowCells++;
                         }
                     }
@@ -266,7 +285,12 @@ public final class PlayerMotion {
                 }
             }
         }
-        if (flowCells > 1) flow = flow.multiply(1.0 / flowCells);
+        if (flowCells > 0) {
+            flow = flow.multiply(1.0 / flowCells);
+            // Vanilla scales weak/shallow contact down: less than 0.4 blocks submerged
+            // multiplies the averaged flow by the submerged depth.
+            if (depth < 0.4) flow = flow.multiply(depth);
+        }
         return new Environment(fluid, slow, flow, bubble);
     }
 

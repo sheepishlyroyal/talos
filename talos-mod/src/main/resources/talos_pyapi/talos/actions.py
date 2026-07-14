@@ -246,6 +246,29 @@ def player_feet():
     """Return the player's feet (bottom-center) position — the block-space coordinate."""
     return _wrap_pos(_call(_talos_host.playerFeet))
 
+def key(name, pressed=True):
+    """Hold (or release) one of the player's logical keys, like a physical press.
+
+    Names: forward, back, left, right, jump, sneak, sprint, attack, use. The
+    binding stays pressed until key(name, False) or release_keys(), so pair
+    every press with a release (try/finally) - a crashed script that held
+    "forward" would otherwise keep walking. Rebound controls are honored.
+    """
+    return _call(_talos_host.setKey, str(name), bool(pressed))
+
+def release_keys():
+    """Release every key that key() can press. Safe to call unconditionally."""
+    return _call(_talos_host.releaseKeys)
+
+def look(yaw, pitch):
+    """Snap the view to absolute yaw/pitch degrees (same convention as look_angle()).
+
+    Yaw 0 = south, 90 = west; pitch -90 (up) to 90 (down). For smooth, human-ish
+    turning, step the yaw a few degrees toward the target each tick instead of
+    jumping straight to it - see the custom_goto example script.
+    """
+    return _call(_talos_host.setLook, float(yaw), float(pitch))
+
 def look_angle():
     """Return the current view rotation as a (yaw, pitch) tuple in degrees.
 

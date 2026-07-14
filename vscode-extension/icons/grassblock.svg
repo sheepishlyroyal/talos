@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Isometric pixel grass block: green top, dirt sides -->
+  <!-- top face -->
+  <polygon points="8,1 14.5,4.5 8,8 1.5,4.5" fill="#7CC94E"/>
+  <polygon points="8,1 11.2,2.7 8,4.5 4.8,2.7" fill="#8FD95F"/>
+  <polygon points="11.2,2.7 14.5,4.5 11.2,6.2 8,4.5" fill="#6DBA41"/>
+  <!-- left face (dirt with grass fringe) -->
+  <polygon points="1.5,4.5 8,8 8,15 1.5,11.5" fill="#8A5A32"/>
+  <polygon points="1.5,4.5 8,8 8,9.6 1.5,6.1" fill="#5FA838"/>
+  <rect x="3" y="8.2" width="1.4" height="1.4" fill="#6E4527" transform="skewY(28)" transform-origin="3 8.2"/>
+  <polygon points="4.6,9.4 6,10.2 6,11.6 4.6,10.8" fill="#9C6B3D"/>
+  <polygon points="2.4,9.9 3.4,10.5 3.4,11.7 2.4,11.1" fill="#6E4527"/>
+  <!-- right face (dirt with grass fringe, darker) -->
+  <polygon points="8,8 14.5,4.5 14.5,11.5 8,15" fill="#6E4527"/>
+  <polygon points="8,8 14.5,4.5 14.5,6.1 8,9.6" fill="#4E8C2E"/>
+  <polygon points="9.4,10.4 10.8,9.6 10.8,11 9.4,11.8" fill="#8A5A32"/>
+  <polygon points="12,8.4 13.2,7.7 13.2,9 12,9.7" fill="#5C3A20"/>
+</svg>

@@ -123,6 +123,13 @@ public final class ScriptEngine {
 
     public State state() { Session current = session; return current == null ? State.STOPPED : current.state.get(); }
 
+    /** Cheap client-thread guard so game hooks can skip snapshot work when no script runs. */
+    public boolean hasRunningSession() {
+        for (Session current : sessions.values())
+            if (current.state.get() == State.RUNNING) return true;
+        return false;
+    }
+
     private Session createSession(LogSink sink, boolean primary) {
         synchronized (lock) {
             sessions.values().removeIf(current -> current.state.get() == State.STOPPED);

@@ -10,6 +10,7 @@ import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
+import dev.talos.client.script.ScriptCommandRegistry;
 import dev.talos.client.script.ScriptEngine;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.minecraft.command.argument.IdentifierArgumentType;
@@ -51,7 +52,8 @@ public final class TalosCommands {
                                                 .then(coordinate("z")
                                                         .then(ClientCommandManager.argument(
                                                                         "range", IntegerArgumentType.integer(0))
-                                                                .executes(context -> GotoCommand.execute(
+                                                                .executes(context -> scriptOverride(context, "goto") ? 1
+                                                                        : GotoCommand.execute(
                                                                         context,
                                                                         new GoalNear(
                                                                                 coordValue(context, "x", eyePos(context).x),
@@ -65,11 +67,12 @@ public final class TalosCommands {
                         // chaining a shared node here would silently swap Y and Z.
                         .then(coordinate("x")
                                 .then(coordinate("z")
-                                        .executes(context -> GotoCommand.execute(
-                                                context, xzGoal(context))))
+                                        .executes(context -> scriptOverride(context, "goto") ? 1
+                                                : GotoCommand.execute(context, xzGoal(context))))
                                 .then(coordinate("y")
                                         .then(coordinate("z")
-                                                .executes(context -> GotoCommand.execute(
+                                                .executes(context -> scriptOverride(context, "goto") ? 1
+                                                        : GotoCommand.execute(
                                                         context,
                                                         new GoalBlock(
                                                                 coordValue(context, "x", eyePos(context).x),
@@ -96,16 +99,21 @@ public final class TalosCommands {
                                                                 blockPos(context),
                                                                 value(context, "seconds"))))))))
                 .then(ClientCommandManager.literal("mine")
-                        .then(coordinates((context, pos) -> ActionCommand.mine(context, pos)))
+                        .then(coordinates((context, pos) -> scriptOverride(context, "mine") ? 1
+                                : ActionCommand.mine(context, pos)))
                         .then(ClientCommandManager.literal("direction")
-                                .then(directionNode((context, pos) -> ActionCommand.mine(context, pos))))
+                                .then(directionNode((context, pos) -> scriptOverride(context, "mine") ? 1
+                                        : ActionCommand.mine(context, pos))))
                         .then(ClientCommandManager.literal("block")
                                 .then(ClientCommandManager.argument(
                                                 "blockPredicate", BlockStatePredicate.argument(registryAccess))
-                                        .executes(context -> ActionCommand.mineBlock(context, 0))
-                                        .then(indexArgument(n -> ActionCommand.mineBlock(n.context(), n.n()))))))
+                                        .executes(context -> scriptOverride(context, "mine") ? 1
+                                                : ActionCommand.mineBlock(context, 0))
+                                        .then(indexArgument(n -> scriptOverride(n.context(), "mine") ? 1
+                                                : ActionCommand.mineBlock(n.context(), n.n()))))))
                 .then(ClientCommandManager.literal("place")
-                        .then(coordinates((context, pos) -> ActionCommand.place(context, pos))))
+                        .then(coordinates((context, pos) -> scriptOverride(context, "place") ? 1
+                                : ActionCommand.place(context, pos))))
                 .then(ClientCommandManager.literal("coords")
                         .then(ClientCommandManager.literal("direction")
                                 .then(directionNode(CoordsCommand::executeDirection))))
@@ -167,11 +175,52 @@ public final class TalosCommands {
                 .then(TrackCommand.node())
                 .then(ClientCommandManager.literal("kill")
                         .then(ClientCommandManager.literal("nearest")
-                                .executes(context -> ActionCommand.killNearest(context, 6.0))
+                                .executes(context -> scriptOverride(context, "kill") ? 1
+                                        : ActionCommand.killNearest(context, 6.0))
                                 .then(ClientCommandManager.argument(
                                                 "radius", DoubleArgumentType.doubleArg(1.0, 64.0))
-                                        .executes(context -> ActionCommand.killNearest(context,
-                                                DoubleArgumentType.getDouble(context, "radius")))))));
+                                        .executes(context -> scriptOverride(context, "kill") ? 1
+                                                : ActionCommand.killNearest(context,
+                                                DoubleArgumentType.getDouble(context, "radius"))))))
+                // `/talos cmd <name> [args]` — invoke a script-registered command whose name
+                // doesn't collide with (or shadow) a built-in subcommand's argument shape.
+                .then(ClientCommandManager.literal("cmd")
+                        .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                                .executes(context -> runScriptCommand(context, ""))
+                                .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
+                                        .executes(context -> runScriptCommand(
+                                                context, StringArgumentType.getString(context, "args")))))));
+    }
+
+    /**
+     * If a running script claimed this built-in via {@code @talos.command("<name>")},
+     * forward the raw argument text to it and skip the built-in. Forwarding only QUEUES
+     * the invocation (the script worker drains it on the next tick) — the client thread
+     * never touches Python. The built-in stays reachable from Python as talos.goto(...)
+     * etc., so an override can prepare, then delegate to the original.
+     */
+    private static boolean scriptOverride(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context, String name) {
+        if (!ScriptCommandRegistry.has(name)) return false;
+        return ScriptCommandRegistry.dispatch(name, rawArgs(context.getInput(), name));
+    }
+
+    /** Everything after the subcommand name in the typed command line, trimmed. */
+    private static String rawArgs(String input, String name) {
+        int at = input.indexOf(name);
+        return at < 0 ? "" : input.substring(at + name.length()).trim();
+    }
+
+    /** Executes {@code /talos cmd <name> [args]} against the script command registry. */
+    private static int runScriptCommand(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context, String args) {
+        String name = StringArgumentType.getString(context, "name");
+        if (!ScriptCommandRegistry.dispatch(name, args)) {
+            context.getSource().sendError(Text.literal("No script command '" + name
+                    + "' is registered — a running script must declare @talos.command(\"" + name + "\")"));
+            return 0;
+        }
+        return 1;
     }
 
     /**

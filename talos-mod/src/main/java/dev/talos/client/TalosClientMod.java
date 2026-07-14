@@ -36,6 +36,7 @@ public final class TalosClientMod implements ClientModInitializer {
         ClientTickEvents.START_CLIENT_TICK.register(client -> {
             GameThreadExecutor.instance().drain(client);
             ScriptEngine.instance().tick();
+            dev.talos.client.script.ScriptGameEvents.tick(client);
             TalosClient.tickBudget().beginTick();
             TalosClient.taskScheduler().tick();
         });

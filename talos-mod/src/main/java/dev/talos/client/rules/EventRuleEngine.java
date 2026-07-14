@@ -450,6 +450,14 @@ public final class EventRuleEngine {
                 : "unknown x" + amount;
         String who = collector == null ? "entity#" + collectorEntityId : entityLabel(collector);
         explainedPickups.add(itemEntityId);
+        // Additive script hook: only the LOCAL player's pickups become "item_pickup"
+        // script events; ScriptGameEvents guards on a running session before posting.
+        if (collector != null && collector == client.player) {
+            String itemId = itemEntity instanceof net.minecraft.entity.ItemEntity item
+                    ? Registries.ITEM.getId(item.getStack().getItem()).toString()
+                    : "unknown";
+            dev.talos.client.script.ScriptGameEvents.onLocalItemPickup(itemId, amount);
+        }
         fireEntity(Trigger.ITEM_PICKED_UP, collector, stack + " by " + who);
     }
 

@@ -169,6 +169,43 @@ class PlayerMotionPhysicsTest {
     }
 
     @Test
+    void slimeBouncesDecayAndSettle() {
+        // Vanilla SlimeBlock.bounce is a full -vy inversion with no cap; the real-world
+        // decay comes from the (vy - 0.08) * 0.98 gravity/drag applied to the bounced
+        // velocity that same tick and on every airborne tick after. Peaks must therefore
+        // shrink monotonically and the player must settle — never bounce forever.
+        FakeWorld world = new FakeWorld();
+        world.fill(-2, 63, -2, 2, 63, 2, Blocks.SLIME_BLOCK.getDefaultState());
+        MotionState state = new MotionState(new Vec3d(0.5, 72, 0.5), Vec3d.ZERO, false,
+                MotionState.Pose.STAND);
+        java.util.List<Double> peaks = new java.util.ArrayList<>();
+        boolean landedOnce = false; // ignore the initial drop arc — it is not a bounce
+        double peak = Double.NEGATIVE_INFINITY;
+        boolean settled = true;
+        for (int i = 0; i < 400; i++) {
+            state = PlayerMotion.step(world, state, IDLE);
+            if (state.onGround()) {
+                // A ground contact closes the current airborne arc; record its apex.
+                if (landedOnce && peak > 64.01) peaks.add(peak);
+                landedOnce = true;
+                peak = Double.NEGATIVE_INFINITY;
+            } else {
+                peak = Math.max(peak, state.position().y);
+            }
+            if (i >= 350 && (state.position().y >= 64.7
+                    || Math.abs(state.velocity().y) >= 0.15)) {
+                settled = false;
+            }
+        }
+        assertTrue(peaks.size() >= 3, "at least 3 bounces, got " + peaks.size());
+        for (int i = 1; i < peaks.size(); i++) {
+            assertTrue(peaks.get(i) < peaks.get(i - 1), "peaks decay: bounce " + i + " rose to "
+                    + peaks.get(i) + " after " + peaks.get(i - 1));
+        }
+        assertTrue(settled, "at rest over the final 50 ticks");
+    }
+
+    @Test
     void slimeBounceIsCancelledBySneaking() {
         FakeWorld world = new FakeWorld();
         world.fill(-2, 63, -2, 2, 63, 2, Blocks.SLIME_BLOCK.getDefaultState());

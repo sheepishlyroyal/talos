@@ -280,6 +280,25 @@ def player_feet() -> Pos:
     """The player's feet (bottom-center) position — the block-space coordinate."""
     ...
 
+def key(name: str, pressed: bool = True) -> None:
+    """Hold (or release) one of the player's logical keys, like a physical press.
+
+    Names: forward, back, left, right, jump, sneak, sprint, attack, use. The
+    binding stays pressed until key(name, False) or release_keys(), so pair
+    every press with a release (try/finally). Rebound controls are honored."""
+    ...
+
+def release_keys() -> None:
+    """Release every key that key() can press. Safe to call unconditionally."""
+    ...
+
+def look(yaw: float, pitch: float) -> None:
+    """Snap the view to absolute yaw/pitch degrees (same convention as look_angle()).
+
+    Yaw 0 = south, 90 = west; pitch -90 (up) to 90 (down). For smooth turning,
+    step the yaw a few degrees toward the target each tick."""
+    ...
+
 def look_angle() -> tuple[float, float]:
     """Current view rotation as (yaw, pitch) in degrees.
 
@@ -311,6 +330,24 @@ def on_edge(margin: float = 0.3) -> bool:
     ...
 
 # --- events / misc ------------------------------------------------------------
+
+def command(name: str) -> Callable[[_F], _F]:
+    """Decorator registering a handler for `/talos <name> ...` while this script
+    session runs. If `name` matches a built-in subcommand (goto, mine, place,
+    kill), the chat command is forwarded here INSTEAD of the built-in — which
+    stays reachable as talos.goto(...) etc., so an override can wrap the
+    original. Other names are invoked via `/talos cmd <name> [args]`.
+
+    The handler receives the argument text split on whitespace (list[str]) and
+    runs on the script worker. Returning a coroutine (an `async def` handler)
+    starts it as a task so it can await talos.aio actions.
+
+        @talos.command("pygoto")
+        async def pygoto(args: list[str]) -> None:
+            x, y, z = (int(a) for a in args)
+            await talos.aio.goto(x, y, z)
+    """
+    ...
 
 def on(event: str) -> Callable[[_EventHandler], _EventHandler]:
     """Decorator registering a handler for a raw game event:

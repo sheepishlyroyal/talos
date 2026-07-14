@@ -24,6 +24,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.option.GameOptions;
+import net.minecraft.client.option.KeyBinding;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.mob.HostileEntity;
@@ -53,6 +55,8 @@ public final class TalosNativeBridge {
     private final EventDispatcher events;
     private final AtomicBoolean valid = new AtomicBoolean(true);
     private final java.util.Set<CompletableFuture<?>> inFlight = ConcurrentHashMap.newKeySet();
+    private final java.util.Queue<CommandInvocation> pendingCommands =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
     private Random random = new Random();
 
     public TalosNativeBridge(GameThreadExecutor game, EventDispatcher events) {
@@ -238,6 +242,62 @@ public final class TalosNativeBridge {
         }).thenCompose(f -> f).thenApply(TalosNativeBridge::requireSuccess);
     }
 
+    /**
+     * Hold or release one of the player's logical {@link KeyBinding}s (never raw key
+     * codes, so rebound controls keep working — the same contract /talos key honors).
+     * The key stays pressed until released; {@link #releaseKeys()} clears everything.
+     */
+    @HostAccess.Export public void setKey(String name, boolean pressed) {
+        await(game.submit(() -> {
+            keyBinding(requireWorld().options, name).setPressed(pressed);
+            return null;
+        }));
+    }
+
+    /** Releases every key {@link #setKey} can press; safe to call unconditionally. */
+    @HostAccess.Export public void releaseKeys() {
+        await(game.submit(() -> {
+            GameOptions options = requireWorld().options;
+            for (KeyBinding key : scriptKeys(options)) key.setPressed(false);
+            return null;
+        }));
+    }
+
+    /** Set the view rotation to absolute yaw/pitch degrees (yaw also turns head and body). */
+    @HostAccess.Export public void setLook(float yaw, float pitch) {
+        await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            float clamped = net.minecraft.util.math.MathHelper.clamp(pitch, -90.0f, 90.0f);
+            client.player.setYaw(yaw);
+            client.player.setHeadYaw(yaw);
+            client.player.setBodyYaw(yaw);
+            client.player.setPitch(clamped);
+            return null;
+        }));
+    }
+
+    private static KeyBinding keyBinding(GameOptions options, String name) {
+        return switch (name.toLowerCase(Locale.ROOT)) {
+            case "forward" -> options.forwardKey;
+            case "back", "backward" -> options.backKey;
+            case "left" -> options.leftKey;
+            case "right" -> options.rightKey;
+            case "jump" -> options.jumpKey;
+            case "sneak" -> options.sneakKey;
+            case "sprint" -> options.sprintKey;
+            case "attack" -> options.attackKey;
+            case "use" -> options.useKey;
+            default -> throw new IllegalArgumentException(
+                    "key must be forward/back/left/right/jump/sneak/sprint/attack/use");
+        };
+    }
+
+    private static KeyBinding[] scriptKeys(GameOptions options) {
+        return new KeyBinding[]{options.forwardKey, options.backKey, options.leftKey,
+                options.rightKey, options.jumpKey, options.sneakKey, options.sprintKey,
+                options.attackKey, options.useKey};
+    }
+
     @HostAccess.Export public void lookAt(double x, double y, double z) {
         await(game.submit(() -> {
             MinecraftClient client = requireWorld();
@@ -330,8 +390,41 @@ public final class TalosNativeBridge {
     }
     @HostAccess.Export public void on(String event, org.graalvm.polyglot.Value handler) { events.register(event, handler); }
 
+    /**
+     * Claims {@code /talos <name>} for this session. Only the NAME crosses the boundary:
+     * the handler stays in Python (talos.command keeps it), and the client thread merely
+     * queues invocations that the worker-side pump drains via {@link #pollCommand()} —
+     * the client tick thread never calls into the GraalPy Context.
+     */
+    @HostAccess.Export public void registerCommand(String name) {
+        checkValid();
+        if (name == null || !name.matches("[A-Za-z0-9_-]+"))
+            throw new IllegalArgumentException("Command names must match [A-Za-z0-9_-]+");
+        ScriptCommandRegistry.register(name, this);
+    }
+
+    /** Drops every command this session registered (Python calls this on each fresh run). */
+    @HostAccess.Export public void clearCommands() {
+        ScriptCommandRegistry.unregisterAll(this);
+        pendingCommands.clear();
+    }
+
+    /** Next queued command invocation for the worker-side pump, or null when drained. */
+    @HostAccess.Export public CommandInvocation pollCommand() {
+        return pendingCommands.poll();
+    }
+
+    /** Client-thread entry: queue one invocation; false once the session is invalidated. */
+    boolean enqueueCommand(String name, String rawArgs) {
+        if (!valid.get()) return false;
+        pendingCommands.add(new CommandInvocation(name, rawArgs == null ? "" : rawArgs));
+        return true;
+    }
+
     void invalidate() {
         valid.set(false);
+        ScriptCommandRegistry.unregisterAll(this);
+        pendingCommands.clear();
         IllegalStateException error = new IllegalStateException("Script session invalidated");
         for (CompletableFuture<?> future : inFlight) future.completeExceptionally(error);
     }
@@ -462,6 +555,12 @@ public final class TalosNativeBridge {
             catch (CompletionException error) { throw error.getCause() instanceof RuntimeException r ? r : error; }
         }
         @HostAccess.Export public void cancel() { future.cancel(true); }
+    }
+
+    /** One queued {@code /talos <name> <args>} call: the name plus its raw argument text. */
+    public record CommandInvocation(String name, String args) {
+        @HostAccess.Export public String name() { return name; }
+        @HostAccess.Export public String args() { return args; }
     }
 
     public record Pos(double x, double y, double z) {

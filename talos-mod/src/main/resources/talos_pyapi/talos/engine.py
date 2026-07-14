@@ -208,6 +208,78 @@ def run():
     _ensure_running()
 
 
+# --- script commands (/talos <name> ...) ---------------------------------------
+
+# This module is re-executed on every script run, so handlers registered by the
+# PREVIOUS run are gone; drop their Java-side claims too or /talos <name> would
+# queue invocations nothing ever drains.
+_errors.call(_talos_host.clearCommands)
+
+_commands = {}
+_commands_pumping = False
+
+
+def command(name):
+    """Register a handler for `/talos <name> ...` while this script session runs.
+
+    If `name` matches a built-in subcommand (goto, mine, place, kill), the chat
+    command is forwarded here INSTEAD of the built-in - and the built-in stays
+    reachable as talos.goto(...) etc., so an override can wrap the original.
+    Any other name is invoked via `/talos <name>`-style `/talos cmd <name> [args]`.
+
+    The handler receives the argument text split on whitespace, as a list of
+    strings. It always runs on the script worker (never the client thread). A
+    plain `def` should return quickly; returning a coroutine (or using an
+    `async def` handler) starts it as a task so it can await talos.aio actions.
+
+        @talos.command("pygoto")
+        async def pygoto(args):
+            x, y, z = (int(a) for a in args)
+            await talos.aio.goto(x, y, z)
+    """
+    def decorate(handler):
+        if not callable(handler):
+            raise TypeError("@talos.command needs a callable handler")
+        _commands[str(name)] = handler
+        _errors.call(_talos_host.registerCommand, str(name))
+        _ensure_command_pump()
+        return handler
+    return decorate
+
+
+def _ensure_command_pump():
+    global _commands_pumping
+    if _commands_pumping:
+        return
+    _commands_pumping = True
+    # Invocations are queued host-side by the client tick thread; this pump
+    # drains them HERE, on the single script worker, through the same tick-event
+    # path everything else uses - Python is never entered from the client thread.
+    _talos_host.on("tick", _pump_commands)
+
+
+def _pump_commands(*_ignored):
+    while True:
+        invocation = _talos_host.pollCommand()
+        if invocation is None:
+            return
+        name = str(invocation.name())
+        handler = _commands.get(name)
+        if handler is None:
+            continue
+        args = str(invocation.args()).split()
+        try:
+            result = handler(args)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as error:
+            # Same one-clean-line contract as on_tick/task failures.
+            _report(f"command {name!r}", error)
+            continue
+        if _inspect.iscoroutine(result):
+            start(result, name=f"command {name}")
+
+
 # --- scheduler ---------------------------------------------------------------
 
 def _ensure_running():

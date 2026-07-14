@@ -66,6 +66,21 @@ public final class MacroCommand {
                                                             IntegerArgumentType.getInteger(context, "times"),
                                                             channels);
                                                 })))))
+                .then(ClientCommandManager.literal("export")
+                        .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                                .executes(context -> {
+                                    try {
+                                        context.getSource().sendFeedback(Text.literal(
+                                                "Exported to " + dev.talos.client.macro
+                                                        .RecordingExporter.export(
+                                                        StringArgumentType.getString(context, "name"))));
+                                        return 1;
+                                    } catch (java.io.IOException error) {
+                                        context.getSource().sendError(Text.literal(
+                                                "Export failed: " + error.getMessage()));
+                                        return 0;
+                                    }
+                                })))
                 .then(ClientCommandManager.literal("list").executes(context -> {
                     var names = MacroSystem.list();
                     context.getSource().sendFeedback(Text.literal(names.isEmpty()
