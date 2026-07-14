@@ -14,6 +14,7 @@ import net.minecraft.registry.entry.RegistryEntry;
 public record MovementProfile(
         double movementSpeed,
         double jumpVelocity,
+        double jumpBoost,
         double gravity,
         double waterHorizontalDrag,
         double lavaDrag,
@@ -30,7 +31,7 @@ public record MovementProfile(
     private static final double BASE_LAVA_DRAG = 0.5;
 
     public MovementProfile {
-        if (movementSpeed < 0.0 || jumpVelocity < 0.0 || gravity < 0.0
+        if (movementSpeed < 0.0 || jumpVelocity < 0.0 || jumpBoost < 0.0 || gravity < 0.0
                 || waterHorizontalDrag < 0.0 || waterHorizontalDrag > 1.0
                 || lavaDrag < 0.0 || lavaDrag > 1.0 || soulSpeedLevel < 0
                 || levitationLevel < 0 || sneakSlowFactor < 0.0 || stepHeight < 0.0) {
@@ -44,11 +45,18 @@ public record MovementProfile(
 
         double movementSpeed = attribute(player, EntityAttributes.MOVEMENT_SPEED,
                 BASE_MOVEMENT_SPEED);
-        // Players expose JUMP_STRENGTH in 1.21.11. Jump Boost remains additive on top of it.
+        // Vanilla setSprinting() installs a MULTIPLY_TOTAL 0.3 modifier on MOVEMENT_SPEED,
+        // so a mid-sprint capture already contains the sprint boost. The simulator applies
+        // its own x1.3 per sprinting input; keeping both made every sprint rollout ~30%
+        // too fast (predictions ran ahead of the real player all run long).
+        if (player.isSprinting()) movementSpeed /= 1.3;
+        // Players expose JUMP_STRENGTH in 1.21.11. Jump Boost is additive AFTER the block
+        // jump multiplier (vanilla: base * multiplier + boost), so it is carried separately.
         double jumpVelocity = attribute(player, EntityAttributes.JUMP_STRENGTH,
                 BASE_JUMP_VELOCITY);
-        StatusEffectInstance jumpBoost = player.getStatusEffect(StatusEffects.JUMP_BOOST);
-        if (jumpBoost != null) jumpVelocity += 0.1 * (jumpBoost.getAmplifier() + 1);
+        StatusEffectInstance jumpBoostEffect = player.getStatusEffect(StatusEffects.JUMP_BOOST);
+        double jumpBoost = jumpBoostEffect == null ? 0.0
+                : 0.1 * (jumpBoostEffect.getAmplifier() + 1);
 
         double gravity = attribute(player, EntityAttributes.GRAVITY, BASE_GRAVITY);
         boolean slowFalling = player.getStatusEffect(StatusEffects.SLOW_FALLING) != null;
@@ -67,14 +75,14 @@ public record MovementProfile(
 
         double sneakFactor = attribute(player, EntityAttributes.SNEAKING_SPEED, 1.0);
         double stepHeight = attribute(player, EntityAttributes.STEP_HEIGHT, 0.6);
-        return new MovementProfile(movementSpeed, jumpVelocity, gravity, waterDrag,
+        return new MovementProfile(movementSpeed, jumpVelocity, jumpBoost, gravity, waterDrag,
                 BASE_LAVA_DRAG, soulSpeed, slowFalling, levitationLevel,
                 sneakFactor, stepHeight);
     }
 
     /** Baseline profile for tests and callers without a live player. */
     public static MovementProfile vanilla() {
-        return new MovementProfile(BASE_MOVEMENT_SPEED, BASE_JUMP_VELOCITY, BASE_GRAVITY,
+        return new MovementProfile(BASE_MOVEMENT_SPEED, BASE_JUMP_VELOCITY, 0.0, BASE_GRAVITY,
                 BASE_WATER_DRAG, BASE_LAVA_DRAG, 0, false, 0, 1.0, 0.6);
     }
 

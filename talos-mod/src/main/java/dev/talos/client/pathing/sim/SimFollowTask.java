@@ -101,6 +101,13 @@ public final class SimFollowTask extends TalosTask {
     /** Waypoints left in front of the follower; the engine cuts searches early when low. */
     public int remainingWaypoints() { return Math.max(0, route.waypoints().size() - index); }
 
+    /**
+     * An extension search finished WITHOUT producing a swappable route. Re-arm the request
+     * flag so the adaptive re-request cadence (5 ticks when starving) keeps firing; leaving
+     * it latched silenced extensions exactly while the route was fraying.
+     */
+    public void extensionSettled() { replanRequested = false; }
+
     /** Hot-swap in a fresher plan without releasing keys; passed waypoints self-advance. */
     public void swapRoute(PlannedRoute replacement) {
         if (replacement == null || replacement.waypoints().size() <= 1) return;
@@ -116,13 +123,20 @@ public final class SimFollowTask extends TalosTask {
         // The search began from a snapshot several ticks old, so the route's early waypoints
         // are typically behind the player by now. Fast-forward to the first waypoint AFTER
         // the nearest one, or the follower would steer backwards onto the stale prefix.
+        // For a STITCHED route (identical shared prefix — same first waypoint object) the
+        // scan is floored just behind the current index: a route that folds back near the
+        // player must not teleport progress onto a spatially-close but distant leg.
         int nearest = 0;
         ClientPlayerEntity player = client.player;
         if (player != null) {
+            List<PlannedRoute.Waypoint> waypoints = replacement.waypoints();
+            int floor = !route.waypoints().isEmpty() && !waypoints.isEmpty()
+                    && waypoints.getFirst() == route.waypoints().getFirst()
+                    ? Math.max(0, Math.min(index, waypoints.size() - 1) - 4) : 0;
+            nearest = floor;
             Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
             double best = Double.MAX_VALUE;
-            List<PlannedRoute.Waypoint> waypoints = replacement.waypoints();
-            for (int i = 0; i < waypoints.size(); i++) {
+            for (int i = floor; i < waypoints.size(); i++) {
                 double distance = waypoints.get(i).position().squaredDistanceTo(feet);
                 if (distance < best) { best = distance; nearest = i; }
             }

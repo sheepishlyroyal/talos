@@ -214,6 +214,9 @@ public final class TalosPathingEngine implements PathingEngine {
         if (run.planner == planningTask) run.planner = null;
         if (activeTask == planningTask) activeTask = null;
         if (run.task == planningTask) run.task = null;
+        // An abandoned planner's result is dead: a recovery replan superseded it, and using
+        // its stale-origin route here would spawn a second follower next to the fresh one.
+        if (planningTask.abandoned) return;
         if (run.cancelled || run.future.isDone()) return;
         if (run.client.player == null || run.client.world == null) {
             run.future.complete(new PathResult(false, "World unloaded while re-pathing"));
@@ -236,6 +239,10 @@ public final class TalosPathingEngine implements PathingEngine {
                             "§6Talos §7» §fpartial plan: " + route.detail()), false);
         }
         if (route.waypoints().size() <= 1) {
+            // No swap will happen, so re-arm the follower's extension-request flag — it is
+            // otherwise only reset inside swapRoute, and a latched flag mutes the fast
+            // starving-cadence re-requests for the rest of the route.
+            if (run.follower != null && run.follower.isActive()) run.follower.extensionSettled();
             scheduleReplan(run);
             return;
         }
@@ -294,6 +301,14 @@ public final class TalosPathingEngine implements PathingEngine {
         if (run.cancelled || run.future.isDone()) return;
         if (error != null) { run.future.completeExceptionally(error); return; }
         if (segment.successful()) { run.future.complete(segment); return; }
+        // The follower is gone; an extension search still in flight was planned from the
+        // DEAD route's tail. Abandon it, or launchSimSegment's one-planner guard silently
+        // swallows the recovery replan and nobody owns the player (frozen until that stale
+        // search finishes — and its route would then start from the wrong place anyway).
+        if (run.planner != null) {
+            run.planner.abandon();
+            run.planner = null;
+        }
         // Every non-terminal follower outcome gets a fresh live-state plan indefinitely.
         scheduleReplan(run);
     }
@@ -499,10 +514,17 @@ public final class TalosPathingEngine implements PathingEngine {
         private final NavigationRun run;
         private final SimPathfinder.Search search;
         private boolean done;
+        private boolean abandoned;
 
         PlanningTask(NavigationRun run, SimPathfinder.Search search) {
             this.run = run;
             this.search = search;
+        }
+
+        /** Supersede this search: it stops expanding and its result is discarded. */
+        void abandon() {
+            abandoned = true;
+            done = true;
         }
 
         @Override public void initialize() { }

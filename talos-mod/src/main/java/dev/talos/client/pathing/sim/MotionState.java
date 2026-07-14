@@ -10,17 +10,28 @@ public record MotionState(
         boolean onGround,
         Pose pose,
         Fluid fluid,
-        boolean bumpedHorizontally) {
+        boolean bumpedHorizontally,
+        int jumpCooldown) {
 
     public MotionState {
         if (position == null || velocity == null || pose == null || fluid == null) {
             throw new IllegalArgumentException("MotionState fields must not be null");
         }
+        if (jumpCooldown < 0) throw new IllegalArgumentException("jumpCooldown must be >= 0");
     }
 
     /** Convenience constructor for a state before any simulated collision outcome exists. */
     public MotionState(Vec3d position, Vec3d velocity, boolean onGround, Pose pose) {
-        this(position, velocity, onGround, pose, Fluid.NONE, false);
+        this(position, velocity, onGround, pose, Fluid.NONE, false, 0);
+    }
+
+    /**
+     * Cooldown-free constructor kept for callers snapshotting the live player, whose vanilla
+     * jumpingCooldown is not readable client-side; starting at 0 errs one hop early at most.
+     */
+    public MotionState(Vec3d position, Vec3d velocity, boolean onGround, Pose pose,
+            Fluid fluid, boolean bumpedHorizontally) {
+        this(position, velocity, onGround, pose, fluid, bumpedHorizontally, 0);
     }
 
     public boolean inFluid() {

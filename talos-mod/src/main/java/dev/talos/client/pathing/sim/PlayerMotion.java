@@ -52,19 +52,25 @@ public final class PlayerMotion {
         } else {
             acceleration = 0.02;
         }
-        if (input.sprint()) acceleration *= 1.3;
-        if (input.sneak() || state.pose() == MotionState.Pose.CRAWL) {
-            acceleration *= profile.sneakSlowFactor();
-        }
+        // Vanilla applies the sprint boost only on land (water sprint changes drag instead),
+        // and applies the sneak factor to the INPUT before normalization, not to the speed.
+        if (input.sprint() && fluid == MotionState.Fluid.NONE) acceleration *= 1.3;
+        double inputFactor = input.sneak() || state.pose() == MotionState.Pose.CRAWL
+                ? profile.sneakSlowFactor() : 1.0;
 
-        Vec3d velocity = state.velocity().add(inputVelocity(input, acceleration));
+        Vec3d velocity = state.velocity().add(inputVelocity(input, acceleration, inputFactor));
 
         // Vanilla LivingEntity jump velocity is 0.42 for an unmodified player, scaled by the
-        // block's jump multiplier (honey/soul-sand-family jumps are stunted). Entity's
-        // sprint jump impulse is (-sin(yaw)*0.2, 0, cos(yaw)*0.2).
-        if (input.jump() && state.onGround() && fluid == MotionState.Fluid.NONE) {
+        // block's jump multiplier (honey/soul-sand-family jumps are stunted) with Jump Boost
+        // added AFTER the multiplier. Entity's sprint jump impulse is (-sin*0.2, 0, cos*0.2).
+        // Holding jump does NOT re-jump every grounded tick: vanilla enforces a 10-tick
+        // jumpingCooldown, without which rollouts over-predicted hop cadence when cornered.
+        boolean jumped = input.jump() && state.onGround() && state.jumpCooldown() == 0
+                && fluid == MotionState.Fluid.NONE;
+        if (jumped) {
             velocity = new Vec3d(velocity.x,
-                    profile.jumpVelocity() * jumpMultiplier(world, state.position()), velocity.z);
+                    profile.jumpVelocity() * jumpMultiplier(world, state.position())
+                            + profile.jumpBoost(), velocity.z);
             if (input.sprint()) {
                 double radians = input.yaw() * (Math.PI / 180.0);
                 velocity = velocity.add(-MathHelper.sin(radians) * SPRINT_JUMP_IMPULSE, 0.0,
@@ -74,8 +80,13 @@ public final class PlayerMotion {
             // Approximation of LivingEntity swimming ascent: the vanilla helper adds 0.04.
             velocity = velocity.add(0.0, 0.04, 0.0);
         }
+        int jumpCooldown = jumped ? 10 : Math.max(0, state.jumpCooldown() - 1);
 
-        Vec3d requested = velocity;
+        // Vanilla adjustMovementForSneaking: a sneaking grounded player cannot walk off a
+        // ledge — horizontal movement is clamped at the edge. The follower's sneak-brake
+        // inputs rely on this exact stickiness near endpoints and drops.
+        Vec3d requested = input.sneak() && state.onGround()
+                ? clipAtLedge(world, box, velocity, profile.stepHeight()) : velocity;
         Vec3d resolved = collide(world, box, requested);
         // Vanilla can retry a horizontally blocked grounded move above STEP_HEIGHT. This lets
         // slabs emerge as ordinary walking while a full block (above the usual 0.6) still
@@ -100,9 +111,12 @@ public final class PlayerMotion {
         boolean onGround = clampedY && requested.y < 0.0;
 
         Vec3d newPosition = state.position().add(resolved);
-        double vx = clampedX ? 0.0 : resolved.x;
-        double vy = clampedY ? 0.0 : resolved.y;
-        double vz = clampedZ ? 0.0 : resolved.z;
+        // Velocity retention mirrors vanilla move(): collisions zero an axis, but the sneak
+        // ledge clamp does not — the retained velocity stays the pre-clamp value and is
+        // simply re-clamped next tick.
+        double vx = clampedX ? 0.0 : velocity.x;
+        double vy = clampedY ? 0.0 : velocity.y;
+        double vz = clampedZ ? 0.0 : velocity.z;
 
         // Mirrors Entity.move()'s tail: the standing block's velocity multiplier bleeds
         // speed every tick (soul sand / honey 0.4x) BEFORE the friction pass — without it
@@ -117,20 +131,32 @@ public final class PlayerMotion {
         // block's Block.getSlipperiness() times 0.91; air uses 0.91. Water/lava are documented
         // Stage A approximations, with reduced gravity and their characteristic drag.
         if (fluid == MotionState.Fluid.WATER) {
-            vx *= profile.waterHorizontalDrag();
-            vz *= profile.waterHorizontalDrag();
-            vy = (vy - 0.02) * profile.waterHorizontalDrag();
+            // Vanilla water: sprint-swimming switches horizontal drag to 0.9 (there is no
+            // x1.3 accel boost in fluids); vertical drag is a flat 0.8 with the fluid
+            // gravity pull of gravity/16 = 0.005 applied after it.
+            double waterDrag = input.sprint()
+                    ? Math.max(0.9, profile.waterHorizontalDrag())
+                    : profile.waterHorizontalDrag();
+            vx *= waterDrag;
+            vz *= waterDrag;
+            vy = vy * 0.8 - 0.005;
         } else if (fluid == MotionState.Fluid.LAVA) {
             vx *= profile.lavaDrag();
             vz *= profile.lavaDrag();
             vy = (vy - 0.02) * profile.lavaDrag();
         } else {
-            double horizontalDrag = (onGround ? slipperiness : 1.0) * 0.91;
+            // Vanilla travel() computes friction from the PREVIOUS tick's onGround (it is
+            // read at the top of the tick, before move() updates it). Using the fresh value
+            // applied air friction on the jump-launch tick — 0.91 retained instead of
+            // 0.6*0.91 — which made every predicted jump arc reach ~1.67x too much launch
+            // speed and approved gap-jumps the real player cannot make.
+            double horizontalDrag = (state.onGround() ? slipperiness : 1.0) * 0.91;
             vx *= horizontalDrag;
             vz *= horizontalDrag;
             if (profile.levitationLevel() > 0) {
                 double target = 0.05 * profile.levitationLevel();
                 vy += (target - vy) * 0.2;
+                vy *= 0.98; // vanilla's *0.98 drag applies to the levitation branch too
             } else {
                 double gravity = profile.gravity();
                 if (profile.slowFalling() && vy <= 0.0) gravity = Math.min(gravity, 0.01);
@@ -140,7 +166,38 @@ public final class PlayerMotion {
 
         MotionState.Fluid resultingFluid = fluidAt(world, state.box(newPosition));
         return new MotionState(newPosition, new Vec3d(vx, vy, vz), onGround,
-                state.pose(), resultingFluid, bumped);
+                state.pose(), resultingFluid, bumped, jumpCooldown);
+    }
+
+    /**
+     * Vanilla Entity.adjustMovementForSneaking: while sneaking on the ground, horizontal
+     * movement is shrunk in 0.05 steps until the moved box would still be supported
+     * (no walking off ledges). {@code stepHeight} is the depth probed for support.
+     */
+    private static Vec3d clipAtLedge(World world, Box box, Vec3d movement, double stepHeight) {
+        double probe = Math.max(stepHeight, 0.6);
+        double x = movement.x;
+        double z = movement.z;
+        while (x != 0.0 && unsupported(world, box.offset(x, -probe, 0.0))) x = shrinkStep(x);
+        while (z != 0.0 && unsupported(world, box.offset(0.0, -probe, z))) z = shrinkStep(z);
+        while (x != 0.0 && z != 0.0 && unsupported(world, box.offset(x, -probe, z))) {
+            x = shrinkStep(x);
+            z = shrinkStep(z);
+        }
+        return new Vec3d(x, movement.y, z);
+    }
+
+    private static double shrinkStep(double value) {
+        if (value < 0.05 && value > -0.05) return 0.0;
+        return value > 0.0 ? value - 0.05 : value + 0.05;
+    }
+
+    /** True when the offset box overlaps no block collision — i.e. it hangs over a drop. */
+    private static boolean unsupported(World world, Box box) {
+        for (VoxelShape shape : world.getBlockCollisions(null, box)) {
+            if (!shape.isEmpty()) return false;
+        }
+        return true;
     }
 
     /** True iff the exact pose AABB has no intersection with a block collision shape. */
@@ -154,9 +211,10 @@ public final class PlayerMotion {
         return true;
     }
 
-    private static Vec3d inputVelocity(Input input, double speed) {
-        double x = input.strafe();
-        double z = input.forward();
+    /** Sneak/crawl scales the raw input BEFORE normalization, exactly as vanilla does. */
+    private static Vec3d inputVelocity(Input input, double speed, double inputFactor) {
+        double x = input.strafe() * inputFactor;
+        double z = input.forward() * inputFactor;
         double lengthSquared = x * x + z * z;
         if (lengthSquared < EPSILON) return new Vec3d(0.0, 0.0, 0.0);
         if (lengthSquared > 1.0) {
