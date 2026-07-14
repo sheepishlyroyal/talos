@@ -63,18 +63,20 @@ final class RaytraceCommand {
     /**
      * Resolves a coordinate triple against the player. Absolute axes are literal; {@code ~} axes
      * offset the eye position; {@code ^} (local) axes form the caret {@code ^left ^up ^forward}
-     * frame and must be all-three-or-none, exactly as vanilla requires.
+     * frame. Friendlier than vanilla: once ANY axis is a caret, plain numbers on the other axes
+     * are read as local offsets too — {@code ^ ^ 5} IS {@code ^ ^ ^5}, five blocks along the
+     * gaze. Only mixing {@code ^} with {@code ~} stays illegal (two different origins).
      */
     static Vec3d resolve(ClientPlayerEntity player, Axis ax, Axis ay, Axis az) {
         boolean anyLocal = ax.type() == LocalCoordinateArgumentType.Type.LOCAL
                 || ay.type() == LocalCoordinateArgumentType.Type.LOCAL
                 || az.type() == LocalCoordinateArgumentType.Type.LOCAL;
         if (anyLocal) {
-            if (ax.type() != LocalCoordinateArgumentType.Type.LOCAL
-                    || ay.type() != LocalCoordinateArgumentType.Type.LOCAL
-                    || az.type() != LocalCoordinateArgumentType.Type.LOCAL) {
+            if (ax.type() == LocalCoordinateArgumentType.Type.RELATIVE
+                    || ay.type() == LocalCoordinateArgumentType.Type.RELATIVE
+                    || az.type() == LocalCoordinateArgumentType.Type.RELATIVE) {
                 throw new IllegalArgumentException(
-                        "Local (^) coordinates must be used on all three axes (e.g. ^ ^ 5)");
+                        "Cannot mix ^ (local) with ~ (relative) axes — pick one frame");
             }
             // Caret order is ^left ^up ^forward; origin is the eyes.
             return RaycastMath.local(player.getEyePos(), player.getYaw(), player.getPitch(),

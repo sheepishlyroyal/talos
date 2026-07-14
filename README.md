@@ -120,8 +120,9 @@ Each axis of `get` accepts three modes, matching vanilla:
 - **absolute** — `12`, `-3.5` — a literal world coordinate.
 - **`~` relative** — `~`, `~5`, `~-3` — offset from your **eye** position on that axis.
 - **`^` local (caret)** — `^`, `^5`, `^-3` — an axis of the look-relative `^left ^up ^forward`
-  frame. Caret is **all-three-or-none** (vanilla rule). `^ ^ 5` = 5 blocks forward; `^ ^ -3` = 3
-  behind; `^2 ^ ^` = 2 to the left.
+  frame. Friendlier than vanilla: once **any** axis is a caret, plain numbers on the other axes
+  are local offsets too — `^ ^ 5` **is** `^ ^ ^5`, 5 blocks forward; `^ ^ -3` = 3 behind;
+  `^2 ^ ^` = 2 to the left. Only mixing `^` with `~` is an error (two different origins).
 
 ```
 /talos raytrace ^ ^ 5          # point 5 ahead along the gaze

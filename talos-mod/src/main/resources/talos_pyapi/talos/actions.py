@@ -157,8 +157,10 @@ def _resolve_relative(x, y, z):
     if not any(caret) and not any(tilde):
         return None
     if any(caret):
-        if not all(caret):
-            raise ValueError("cannot mix ^ with ~ or absolute coordinates")
+        if any(tilde):
+            raise ValueError("cannot mix ^ (local) with ~ (relative) coordinates")
+        # Friendly caret rule (matches /talos raytrace): once any axis is ^, plain
+        # numbers on the other axes are local offsets too — "^ ^ 5" IS "^ ^ ^5".
         eye = player_pos()
         yaw, pitch = look_angle()
         yaw_r = _math.radians(yaw)
@@ -170,7 +172,8 @@ def _resolve_relative(x, y, z):
         left = (up[1] * forward[2] - up[2] * forward[1],
                 up[2] * forward[0] - up[0] * forward[2],
                 up[0] * forward[1] - up[1] * forward[0])
-        lx, ly, lz = (_token_offset(t) for t in tokens)
+        lx, ly, lz = (_token_offset(t) if is_caret else float(t)
+                      for t, is_caret in zip(tokens, caret))
         return (eye.x + left[0] * lx + up[0] * ly + forward[0] * lz,
                 eye.y + left[1] * lx + up[1] * ly + forward[1] * lz,
                 eye.z + left[2] * lx + up[2] * ly + forward[2] * lz)
