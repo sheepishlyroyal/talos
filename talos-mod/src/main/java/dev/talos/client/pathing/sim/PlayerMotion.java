@@ -3,8 +3,12 @@ package dev.talos.client.pathing.sim;
 import java.util.ArrayList;
 import java.util.List;
 
+import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.fluid.FluidState;
+import net.minecraft.fluid.Fluids;
+import net.minecraft.registry.tag.BlockTags;
 import net.minecraft.registry.tag.FluidTags;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
@@ -13,32 +17,39 @@ import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShape;
 import net.minecraft.util.shape.VoxelShapes;
-import net.minecraft.world.World;
+import net.minecraft.world.CollisionView;
 
 /**
  * Deterministic, entity-free player movement approximation for planner rollouts.
- * It reads only the supplied world and immutable arguments and owns no mutable/static state.
+ * It reads only the supplied world view and immutable arguments and owns no mutable/static
+ * state. Depending on {@link CollisionView} (not World) keeps it runnable in unit tests.
  */
 public final class PlayerMotion {
     private static final double EPSILON = 1.0E-7;
     // LivingEntity.jump() in the 1.21.11 named jar adds exactly 0.2 along facing yaw.
     private static final double SPRINT_JUMP_IMPULSE = 0.2;
+    private static final double WATER_FLOW_PUSH = 0.014;   // Entity.updateMovementInFluid
+    private static final double LAVA_FLOW_PUSH = 0.0023333333333333335;
     private PlayerMotion() {}
 
     /** Baseline-compatible overload for callers that do not yet have a live snapshot. */
-    public static MotionState step(World world, MotionState state, Input input) {
+    public static MotionState step(CollisionView world, MotionState state, Input input) {
         return step(world, state, input, MovementProfile.vanilla());
     }
 
     /** Advances one tick and records this tick's resolved ground/bump collision outcome. */
-    public static MotionState step(World world, MotionState state, Input input,
+    public static MotionState step(CollisionView world, MotionState state, Input input,
             MovementProfile profile) {
         if (world == null || state == null || input == null || profile == null) {
             throw new IllegalArgumentException("step arguments must not be null");
         }
 
         Box box = state.box(state.position());
-        MotionState.Fluid fluid = fluidAt(world, box);
+        Environment env = scanEnvironment(world, box);
+        MotionState.Fluid fluid = env.fluid();
+        boolean climbing = fluid == MotionState.Fluid.NONE && climbable(world.getBlockState(
+                BlockPos.ofFloored(state.position().x, state.position().y + 1.0E-4,
+                        state.position().z)));
         double slipperiness = slipperinessBelow(world, state.position());
 
         // Mirrors Entity.movementInputToVelocity(Vec3d,float,float): normalize input if its
@@ -59,6 +70,13 @@ public final class PlayerMotion {
                 ? profile.sneakSlowFactor() : 1.0;
 
         Vec3d velocity = state.velocity().add(inputVelocity(input, acceleration, inputFactor));
+
+        // Flowing-fluid push (river currents): vanilla Entity.updateMovementInFluid adds the
+        // averaged, normalized flow of every overlapped fluid cell to the velocity each tick.
+        if (env.flow().lengthSquared() > 1.0E-8) {
+            velocity = velocity.add(env.flow().normalize().multiply(
+                    fluid == MotionState.Fluid.LAVA ? LAVA_FLOW_PUSH : WATER_FLOW_PUSH));
+        }
 
         // Vanilla LivingEntity jump velocity is 0.42 for an unmodified player, scaled by the
         // block's jump multiplier (honey/soul-sand-family jumps are stunted) with Jump Boost
@@ -82,11 +100,27 @@ public final class PlayerMotion {
         }
         int jumpCooldown = jumped ? 10 : Math.max(0, state.jumpCooldown() - 1);
 
+        // Vanilla applyClimbingSpeed (ladders/vines/scaffolding): horizontal clamped to
+        // +-0.15, descent clamped to -0.15, and a sneaking climber holds position.
+        if (climbing) {
+            double cy = Math.max(velocity.y, -0.15);
+            if (input.sneak() && cy < 0.0) cy = 0.0;
+            velocity = new Vec3d(MathHelper.clamp(velocity.x, -0.15, 0.15), cy,
+                    MathHelper.clamp(velocity.z, -0.15, 0.15));
+        }
+
         // Vanilla adjustMovementForSneaking: a sneaking grounded player cannot walk off a
         // ledge — horizontal movement is clamped at the edge. The follower's sneak-brake
         // inputs rely on this exact stickiness near endpoints and drops.
         Vec3d requested = input.sneak() && state.onGround()
                 ? clipAtLedge(world, box, velocity, profile.stepHeight()) : velocity;
+        // Cobweb / sweet berry / powder snow: vanilla scales the MOVE by the block's
+        // movement multiplier and zeroes the velocity after it — you wade, never coast.
+        boolean smothered = env.slowFactor() != null;
+        if (smothered) {
+            requested = new Vec3d(requested.x * env.slowFactor().x,
+                    requested.y * env.slowFactor().y, requested.z * env.slowFactor().z);
+        }
         Vec3d resolved = collide(world, box, requested);
         // Vanilla can retry a horizontally blocked grounded move above STEP_HEIGHT. This lets
         // slabs emerge as ordinary walking while a full block (above the usual 0.6) still
@@ -113,10 +147,21 @@ public final class PlayerMotion {
         Vec3d newPosition = state.position().add(resolved);
         // Velocity retention mirrors vanilla move(): collisions zero an axis, but the sneak
         // ledge clamp does not — the retained velocity stays the pre-clamp value and is
-        // simply re-clamped next tick.
-        double vx = clampedX ? 0.0 : velocity.x;
-        double vy = clampedY ? 0.0 : velocity.y;
-        double vz = clampedZ ? 0.0 : velocity.z;
+        // simply re-clamped next tick. A movement-multiplier block zeroes ALL of it.
+        double vx = clampedX || smothered ? 0.0 : velocity.x;
+        double vy = clampedY || smothered ? 0.0 : velocity.y;
+        double vz = clampedZ || smothered ? 0.0 : velocity.z;
+        // Slime bounce: landing (not sneaking) inverts the fall velocity, vanilla
+        // SlimeBlock.bounce. onGround stays true for the landing tick, as in vanilla.
+        if (onGround && !input.sneak() && !smothered && velocity.y < 0.0
+                && world.getBlockState(BlockPos.ofFloored(newPosition.x,
+                        newPosition.y - 0.5000001, newPosition.z)).isOf(Blocks.SLIME_BLOCK)) {
+            vy = -velocity.y;
+        }
+        // Vanilla: pressing into a climbable (or jumping on one) climbs at 0.2 pre-drag.
+        if (climbing && (bumped || input.jump())) {
+            vy = 0.2;
+        }
 
         // Mirrors Entity.move()'s tail: the standing block's velocity multiplier bleeds
         // speed every tick (soul sand / honey 0.4x) BEFORE the friction pass — without it
@@ -164,9 +209,89 @@ public final class PlayerMotion {
             }
         }
 
-        MotionState.Fluid resultingFluid = fluidAt(world, state.box(newPosition));
+        // Bubble columns adjust the velocity every tick they overlap the hitbox (vanilla
+        // Entity.onBubbleColumnCollision, submerged variant): up +0.06 capped 0.7,
+        // whirlpool -0.03 capped -0.3.
+        if (env.bubble() > 0) vy = Math.min(0.7, vy + 0.06);
+        else if (env.bubble() < 0) vy = Math.max(-0.3, vy - 0.03);
+
+        MotionState.Fluid resultingFluid = scanEnvironment(world, state.box(newPosition)).fluid();
         return new MotionState(newPosition, new Vec3d(vx, vy, vz), onGround,
                 state.pose(), resultingFluid, bumped, jumpCooldown);
+    }
+
+    /** Everything the step needs to know about the blocks the hitbox currently overlaps. */
+    private record Environment(MotionState.Fluid fluid, Vec3d slowFactor, Vec3d flow,
+            int bubble) {}
+
+    private static Environment scanEnvironment(CollisionView world, Box box) {
+        int minX = floor(box.minX);
+        int minY = floor(box.minY);
+        int minZ = floor(box.minZ);
+        int maxX = floor(box.maxX - EPSILON);
+        int maxY = floor(box.maxY - EPSILON);
+        int maxZ = floor(box.maxZ - EPSILON);
+        MotionState.Fluid fluid = MotionState.Fluid.NONE;
+        Vec3d slow = null;
+        Vec3d flow = Vec3d.ZERO;
+        int flowCells = 0;
+        int bubble = 0;
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    BlockPos pos = new BlockPos(x, y, z);
+                    BlockState block = world.getBlockState(pos);
+                    FluidState fluidState = block.getFluidState();
+                    if (isLava(fluidState)) {
+                        fluid = MotionState.Fluid.LAVA;
+                    } else if (isWater(fluidState) && fluid == MotionState.Fluid.NONE) {
+                        fluid = MotionState.Fluid.WATER;
+                    }
+                    if (!fluidState.isEmpty()) {
+                        Vec3d cellFlow = fluidState.getVelocity(world, pos);
+                        if (cellFlow.lengthSquared() > 1.0E-8) {
+                            flow = flow.add(cellFlow);
+                            flowCells++;
+                        }
+                    }
+                    Vec3d factor = slowFactor(block);
+                    if (factor != null) {
+                        slow = slow == null ? factor
+                                : new Vec3d(Math.min(slow.x, factor.x),
+                                        Math.min(slow.y, factor.y), Math.min(slow.z, factor.z));
+                    }
+                    if (block.isOf(Blocks.BUBBLE_COLUMN)) {
+                        bubble = block.get(net.minecraft.block.BubbleColumnBlock.DRAG) ? -1 : 1;
+                    }
+                }
+            }
+        }
+        if (flowCells > 1) flow = flow.multiply(1.0 / flowCells);
+        return new Environment(fluid, slow, flow, bubble);
+    }
+
+    /** Vanilla Entity.slowMovement callers: cobweb, sweet berry bush, powder snow. */
+    private static Vec3d slowFactor(BlockState state) {
+        if (state.isOf(Blocks.COBWEB)) return new Vec3d(0.25, 0.05, 0.25);
+        if (state.isOf(Blocks.SWEET_BERRY_BUSH)) return new Vec3d(0.8, 0.75, 0.8);
+        if (state.isOf(Blocks.POWDER_SNOW)) return new Vec3d(0.9, 1.5, 0.9);
+        return null;
+    }
+
+    /** Tag check with explicit vanilla fallbacks so tag-less unit tests behave correctly. */
+    static boolean climbable(BlockState state) {
+        return state.isIn(BlockTags.CLIMBABLE) || state.isOf(Blocks.LADDER)
+                || state.isOf(Blocks.VINE) || state.isOf(Blocks.SCAFFOLDING);
+    }
+
+    static boolean isWater(FluidState state) {
+        return state.isIn(FluidTags.WATER) || state.getFluid() == Fluids.WATER
+                || state.getFluid() == Fluids.FLOWING_WATER;
+    }
+
+    static boolean isLava(FluidState state) {
+        return state.isIn(FluidTags.LAVA) || state.getFluid() == Fluids.LAVA
+                || state.getFluid() == Fluids.FLOWING_LAVA;
     }
 
     /**
@@ -174,7 +299,7 @@ public final class PlayerMotion {
      * movement is shrunk in 0.05 steps until the moved box would still be supported
      * (no walking off ledges). {@code stepHeight} is the depth probed for support.
      */
-    private static Vec3d clipAtLedge(World world, Box box, Vec3d movement, double stepHeight) {
+    private static Vec3d clipAtLedge(CollisionView world, Box box, Vec3d movement, double stepHeight) {
         double probe = Math.max(stepHeight, 0.6);
         double x = movement.x;
         double z = movement.z;
@@ -193,7 +318,7 @@ public final class PlayerMotion {
     }
 
     /** True when the offset box overlaps no block collision — i.e. it hangs over a drop. */
-    private static boolean unsupported(World world, Box box) {
+    private static boolean unsupported(CollisionView world, Box box) {
         for (VoxelShape shape : world.getBlockCollisions(null, box)) {
             if (!shape.isEmpty()) return false;
         }
@@ -201,7 +326,7 @@ public final class PlayerMotion {
     }
 
     /** True iff the exact pose AABB has no intersection with a block collision shape. */
-    public static boolean hitboxFits(World world, MotionState.Pose pose, Vec3d pos) {
+    public static boolean hitboxFits(CollisionView world, MotionState.Pose pose, Vec3d pos) {
         Box box = MotionState.box(pose, pos);
         // CollisionView.getBlockCollisions(Entity,Box) explicitly accepts null and then uses
         // ShapeContext.absent(); its named-jar signature returns Iterable<VoxelShape>.
@@ -230,7 +355,7 @@ public final class PlayerMotion {
         return new Vec3d(x * cos - z * sin, 0.0, z * cos + x * sin);
     }
 
-    private static Vec3d collide(World world, Box box, Vec3d movement) {
+    private static Vec3d collide(CollisionView world, Box box, Vec3d movement) {
         List<VoxelShape> collisions = new ArrayList<>();
         // Box.stretch(Vec3d) is the swept volume. Query once because the iterable is lazy,
         // then mirror Entity.adjustMovementForCollisions(Vec3d,Box,List).
@@ -254,7 +379,7 @@ public final class PlayerMotion {
      * Vanilla Entity.getVelocityMultiplier(): the block AT the feet governs (soul sand,
      * honey, cobweb-family = 0.4-ish); only when it is neutral does the block below apply.
      */
-    private static double velocityMultiplier(World world, Vec3d position) {
+    private static double velocityMultiplier(CollisionView world, Vec3d position) {
         BlockPos feet = BlockPos.ofFloored(position);
         float at = world.getBlockState(feet).getBlock().getVelocityMultiplier();
         if (at != 1.0F) return at;
@@ -263,7 +388,7 @@ public final class PlayerMotion {
     }
 
     /** Vanilla LivingEntity jump scaling: honey and friends stunt the jump to half height. */
-    private static double jumpMultiplier(World world, Vec3d position) {
+    private static double jumpMultiplier(CollisionView world, Vec3d position) {
         BlockPos feet = BlockPos.ofFloored(position);
         float at = world.getBlockState(feet).getBlock().getJumpVelocityMultiplier();
         if (at != 1.0F) return at;
@@ -272,35 +397,13 @@ public final class PlayerMotion {
     }
 
     /** Slipperiness of the block under these feet (0.6 normal ground, 0.98 ice). */
-    public static double slipperinessBelow(World world, Vec3d position) {
+    public static double slipperinessBelow(CollisionView world, Vec3d position) {
         BlockPos below = BlockPos.ofFloored(position.x, position.y - 0.001, position.z);
         BlockState state = world.getBlockState(below);
         // AbstractBlock.AbstractBlockState.getBlock() and Block.getSlipperiness() are public.
         return state.getBlock().getSlipperiness();
     }
 
-    private static MotionState.Fluid fluidAt(World world, Box box) {
-        // FluidState has no box query. Inspect every cell touched by the exact AABB; subtracting
-        // epsilon at maxima prevents a face merely touching the next cell from counting.
-        int minX = floor(box.minX);
-        int minY = floor(box.minY);
-        int minZ = floor(box.minZ);
-        int maxX = floor(box.maxX - EPSILON);
-        int maxY = floor(box.maxY - EPSILON);
-        int maxZ = floor(box.maxZ - EPSILON);
-        MotionState.Fluid found = MotionState.Fluid.NONE;
-        for (int x = minX; x <= maxX; x++) {
-            for (int y = minY; y <= maxY; y++) {
-                for (int z = minZ; z <= maxZ; z++) {
-                    FluidState fluid = world.getFluidState(new BlockPos(x, y, z));
-                    // FluidState.isIn(TagKey<Fluid>) and FluidTags.WATER/LAVA are named APIs.
-                    if (fluid.isIn(FluidTags.LAVA)) return MotionState.Fluid.LAVA;
-                    if (fluid.isIn(FluidTags.WATER)) found = MotionState.Fluid.WATER;
-                }
-            }
-        }
-        return found;
-    }
 
     private static int floor(double value) {
         int integer = (int) value;

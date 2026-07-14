@@ -17,6 +17,7 @@ dependencies {
     include(project(":talos-graalpy-runtime"))
     implementation("org.java-websocket:Java-WebSocket:1.5.7")
     include("org.java-websocket:Java-WebSocket:1.5.7")
+    testImplementation("net.fabricmc:fabric-loader-junit:${property("fabric_loader_version")}")
     testImplementation(platform("org.junit:junit-bom:5.12.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

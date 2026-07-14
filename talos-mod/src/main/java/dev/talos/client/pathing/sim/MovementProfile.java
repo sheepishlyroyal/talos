@@ -73,7 +73,7 @@ public record MovementProfile(
             waterDrag = Math.max(waterDrag, 0.96);
         }
 
-        double sneakFactor = attribute(player, EntityAttributes.SNEAKING_SPEED, 1.0);
+        double sneakFactor = attribute(player, EntityAttributes.SNEAKING_SPEED, 0.3);
         double stepHeight = attribute(player, EntityAttributes.STEP_HEIGHT, 0.6);
         return new MovementProfile(movementSpeed, jumpVelocity, jumpBoost, gravity, waterDrag,
                 BASE_LAVA_DRAG, soulSpeed, slowFalling, levitationLevel,
@@ -82,8 +82,9 @@ public record MovementProfile(
 
     /** Baseline profile for tests and callers without a live player. */
     public static MovementProfile vanilla() {
+        // 0.3 sneak factor = the SNEAKING_SPEED attribute default of a real player.
         return new MovementProfile(BASE_MOVEMENT_SPEED, BASE_JUMP_VELOCITY, 0.0, BASE_GRAVITY,
-                BASE_WATER_DRAG, BASE_LAVA_DRAG, 0, false, 0, 1.0, 0.6);
+                BASE_WATER_DRAG, BASE_LAVA_DRAG, 0, false, 0, 0.3, 0.6);
     }
 
     private static double attribute(LivingEntity player,

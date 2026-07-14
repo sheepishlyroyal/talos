@@ -186,9 +186,19 @@ public final class TalosPathingEngine implements PathingEngine {
         // Mining runs think further ahead: a partial dig plan can commit the player into a
         // cave dead end, so buy a deeper search before the first block is ever broken.
         boolean edits = run.options.allowMining();
+        // Mining edges are billed at the REAL break time for the best hotbar tool, so the
+        // planner weighs a dig against a detour with the cost the player will actually pay.
+        java.util.List<net.minecraft.item.ItemStack> hotbar = new java.util.ArrayList<>(9);
+        for (int slot = 0; slot < 9; slot++) {
+            hotbar.add(client.player.getInventory().getStack(slot));
+        }
+        java.util.function.ToIntFunction<BlockPos> breakTicks = pos ->
+                dev.talos.client.pathing.sim.MiningCosts.breakTicks(
+                        client.world.getBlockState(pos), client.world, pos, hotbar);
         SimPathfinder.Options simOptions = new SimPathfinder.Options(
                 edits, edits, edits ? SIM_NODE_CAP * 2 : SIM_NODE_CAP,
-                edits ? SIM_SEARCH_NANOS * 3 : SIM_SEARCH_NANOS, SIM_MAX_ROLLOUT_TICKS);
+                edits ? SIM_SEARCH_NANOS * 3 : SIM_SEARCH_NANOS, SIM_MAX_ROLLOUT_TICKS,
+                breakTicks);
         SimPathfinder.Search search = SimPathfinder.begin(client.world, start, profile,
                 run.snapshot.target(), run.snapshot.test(), simOptions);
         PlanningTask task = new PlanningTask(run, search);
