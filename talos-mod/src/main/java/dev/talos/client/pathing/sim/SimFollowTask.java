@@ -97,16 +97,19 @@ public final class SimFollowTask extends TalosTask {
 
     public boolean isActive() { return !future.isDone(); }
 
+    /** The route currently being followed (full resolution, immutable). */
+    public PlannedRoute currentRoute() { return route; }
+
     /** Hot-swap in a fresher plan without releasing keys; passed waypoints self-advance. */
     public void swapRoute(PlannedRoute replacement) {
         if (replacement == null || replacement.waypoints().size() <= 1) return;
-        // Momentum guard: a fresh PARTIAL plan that isn't clearly better than the one being
-        // followed is not worth the course reset it causes — swapping near-equals every
-        // second was the visible "predicting itself out of its own path" stutter. A plan
-        // that actually reaches the goal always wins; otherwise swap only when the current
-        // route is close to running out.
-        if (!replacement.reachedGoal() && route.waypoints().size() - index > 16) {
-            replanRequested = false; // allow a later, deeper extension attempt
+        // Momentum guard: stitched extensions are LONGER than the current route and always
+        // welcome. A replacement that neither reaches the goal nor extends what we already
+        // have would only reset the course — discard it and allow a later attempt.
+        if (!replacement.reachedGoal()
+                && replacement.waypoints().size() <= route.waypoints().size()
+                && route.waypoints().size() - index > 16) {
+            replanRequested = false;
             return;
         }
         // The search began from a snapshot several ticks old, so the route's early waypoints

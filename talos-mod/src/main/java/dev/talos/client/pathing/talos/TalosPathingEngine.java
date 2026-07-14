@@ -159,7 +159,22 @@ public final class TalosPathingEngine implements PathingEngine {
     private void launchSimSegment(NavigationRun run) {
         MinecraftClient client = run.client;
         if (run.planner != null) return; // one background search at a time
-        MotionState start = SimFollowTask.liveState(client.player);
+        // While a follower is moving on a partial route, the extension search starts FROM
+        // THAT ROUTE'S LAST NODE and plans ahead — the result is stitched onto the current
+        // route as pure appended progress. Re-planning the whole remainder from the live
+        // player was long (time-budget partials) and its near-equal results caused course
+        // resets. Only with no active follower does planning start from the live state.
+        PlannedRoute base = run.follower != null && run.follower.isActive()
+                ? run.follower.currentRoute() : null;
+        MotionState start;
+        if (base != null && !base.waypoints().isEmpty()) {
+            PlannedRoute.Waypoint tail = base.waypoints().getLast();
+            start = new MotionState(tail.position(), Vec3d.ZERO, true, tail.pose());
+        } else {
+            base = null;
+            start = SimFollowTask.liveState(client.player);
+        }
+        run.extensionBase = base;
         MovementProfile profile = MovementProfile.capture(client.player);
         // Mining runs think further ahead: a partial dig plan can commit the player into a
         // cave dead end, so buy a deeper search before the first block is ever broken.
@@ -226,12 +241,17 @@ public final class TalosPathingEngine implements PathingEngine {
         currentNodes = List.copyOf(waypoints);
         renderRouteNodes(route);
 
-        // Pipelined extension: the follower is still moving on the previous partial route, so
-        // splice the fresher plan in without dropping keys or standing still.
+        // Pipelined extension: the follower is still moving on the previous partial route.
+        // The search started from that route's last node, so STITCH — current route plus the
+        // freshly planned continuation — and hand the follower one longer route. Appending
+        // never resets the course, so momentum survives every extension.
         if (run.follower != null && run.follower.isActive()) {
-            run.follower.swapRoute(route);
+            PlannedRoute base = run.extensionBase;
+            run.extensionBase = null;
+            run.follower.swapRoute(base != null ? stitch(base, route) : route);
             return;
         }
+        run.extensionBase = null;
 
         CompletableFuture<PathResult> segmentFuture = new CompletableFuture<>();
         SimFollowTask task = new SimFollowTask(run.client, route, run.snapshot.test(), segmentFuture);
@@ -383,6 +403,17 @@ public final class TalosPathingEngine implements PathingEngine {
         lastRenderedRouteNodes = count;
     }
 
+    /** Current route + continuation planned from its last node, as one longer route. */
+    private static PlannedRoute stitch(PlannedRoute base, PlannedRoute extension) {
+        java.util.List<PlannedRoute.Waypoint> combined =
+                new java.util.ArrayList<>(base.waypoints());
+        java.util.List<PlannedRoute.Waypoint> added = extension.waypoints();
+        // The extension's first waypoint IS the base's last node (its search start).
+        for (int i = added.isEmpty() ? 0 : 1; i < added.size(); i++) combined.add(added.get(i));
+        return new PlannedRoute(combined, extension.reachedGoal(),
+                "stitched: " + extension.detail());
+    }
+
     /** One color per movement mode, so a checkpoint box says WHAT to do there at a glance. */
     private static int modeColor(dev.talos.client.pathing.sim.Primitive via) {
         if (via == null) return 0x66CCFF;
@@ -490,6 +521,8 @@ public final class TalosPathingEngine implements PathingEngine {
         long attempts;
         int stalledAttempts;
         double bestDistance = Double.POSITIVE_INFINITY;
+        /** Route whose last node the in-flight extension search planned from (stitch base). */
+        PlannedRoute extensionBase;
         boolean cancelled;
         TalosTask task;
         SimFollowTask follower;
