@@ -137,6 +137,11 @@ public final class ScriptEngine {
     }
 
     public CompletableFuture<Void> run(String scriptName, LogSink logSink) {
+        return run(scriptName, List.of(), logSink);
+    }
+
+    /** As {@link #run(String, LogSink)}, with argv exposed to the script as {@code talos.args}. */
+    public CompletableFuture<Void> run(String scriptName, List<String> args, LogSink logSink) {
         Objects.requireNonNull(scriptName, "scriptName");
         if (!scriptName.matches("[A-Za-z0-9_.-]+") || scriptName.contains(".."))
             return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid script name"));
@@ -153,7 +158,8 @@ public final class ScriptEngine {
             Path file = scripts.resolve(filename).normalize();
             if (!file.getParent().equals(scripts))
                 return CompletableFuture.failedFuture(new IllegalArgumentException("Script must be directly in talos/scripts"));
-            return current.submit(() -> { current.evaluate(file, logSink); return null; });
+            String[] argv = args.toArray(String[]::new);
+            return current.submit(() -> { current.evaluate(file, logSink, argv); return null; });
         }
     }
 
@@ -381,7 +387,7 @@ public final class ScriptEngine {
             });
         }
 
-        private void evaluate(Path file, LogSink logSink) throws IOException {
+        private void evaluate(Path file, LogSink logSink, String[] argv) throws IOException {
             if (!Files.isRegularFile(file)) throw new IOException("Script not found: " + file);
             // Left wired after this call returns (not reset to null) so output/errors from
             // event handlers the script registers via talos.on(...) keep streaming to the
@@ -392,6 +398,7 @@ public final class ScriptEngine {
             stderr.sink = effectiveSink;
             try {
                 ensureContext();
+                bridge.setScriptArgs(argv);
                 context.eval("python", "\nimport sys\nfor _name in list(sys.modules):\n"
                         + "    if _name == 'talos' or _name.startswith('talos.') or (_name not in _talos_baseline_modules and not _name.startswith('_')):\n"
                         + "        sys.modules.pop(_name, None)\n"
@@ -483,6 +490,32 @@ public final class ScriptEngine {
          * talos APIs it calls, bucketed into human categories, and print one summary line.
          * Purely informational: scan errors never prevent execution.
          */
+        /**
+         * Host half of {@code talos.require(name)}: validates the library name with the
+         * same rules as {@link ScriptEngine#run} (scripts-dir only, no traversal), runs
+         * the required file through the same first-run trust summary as top-level
+         * scripts, and returns its source for the guest to execute as a module. Called
+         * on the session worker (mid-eval host callback), where nested context use is
+         * legal because the worker owns the context.
+         */
+        private String readRequiredSource(String rawName) {
+            if (rawName == null || !rawName.matches("[A-Za-z0-9_.-]{1,64}") || rawName.contains(".."))
+                throw new IllegalArgumentException("Invalid library name: " + rawName);
+            Path scripts = FabricLoader.getInstance().getGameDir().resolve("talos").resolve("scripts");
+            String filename = rawName.endsWith(".py") ? rawName : rawName + ".py";
+            Path file = scripts.resolve(filename).normalize();
+            if (!scripts.equals(file.getParent()))
+                throw new IllegalArgumentException("Library must be directly in talos/scripts");
+            try {
+                if (!Files.isRegularFile(file))
+                    throw new IOException("Library not found: talos/scripts/" + filename);
+                summarizeFirstRun(file, stdout.sink);
+                return Files.readString(file);
+            } catch (IOException error) {
+                throw new IllegalStateException(error.getMessage(), error);
+            }
+        }
+
         private void summarizeFirstRun(Path file, LogSink sink) {
             try {
                 String source = Files.readString(file);
@@ -540,6 +573,7 @@ public final class ScriptEngine {
                 throw new IllegalStateException("Script engine is stopping");
             }
             bridge = new TalosNativeBridge(GameThreadExecutor.instance(), events);
+            bridge.setRequireSource(this::readRequiredSource);
             created.getBindings("python").putMember("_talos_host", bridge);
             created.getBindings("python").putMember("_talos_concurrency", new ConcurrencyHost(this));
             context = created;

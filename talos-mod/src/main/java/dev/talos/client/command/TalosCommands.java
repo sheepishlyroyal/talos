@@ -86,6 +86,21 @@ public final class TalosCommands {
                                                         context,
                                                         IntegerArgumentType.getInteger(context, "radius")))))))
                 .then(ClientCommandManager.literal("goto")
+                        // `/talos goto block <id> [radius]` — nearest matching block, with
+                        // blacklist-and-retry when a specific candidate proves unreachable.
+                        .then(ClientCommandManager.literal("block")
+                                .then(ClientCommandManager.argument("blockId", StringArgumentType.word())
+                                        .suggests((context, builder) -> CommandSource.suggestIdentifiers(
+                                                net.minecraft.registry.Registries.BLOCK.getIds(), builder))
+                                        .executes(context -> scriptOverride(context, "goto") ? 1
+                                                : GotoBlockCommand.execute(context,
+                                                StringArgumentType.getString(context, "blockId"), 64))
+                                        .then(ClientCommandManager.argument(
+                                                        "radius", IntegerArgumentType.integer(1, 64))
+                                                .executes(context -> scriptOverride(context, "goto") ? 1
+                                                        : GotoBlockCommand.execute(context,
+                                                        StringArgumentType.getString(context, "blockId"),
+                                                        IntegerArgumentType.getInteger(context, "radius"))))))
                         .then(ClientCommandManager.literal("near")
                                 .then(coordinate("x")
                                         .then(coordinate("y")
@@ -163,17 +178,12 @@ public final class TalosCommands {
                         .then(ClientCommandManager.literal("run")
                                 .then(ClientCommandManager.argument("name", StringArgumentType.word())
                                         .suggests(SCRIPT_NAMES)
-                                        .executes(context -> {
-                                            var source = context.getSource();
-                                            String name = StringArgumentType.getString(context, "name");
-                                            ScriptEngine.instance().run(name).whenComplete((ignored, error) ->
-                                                    source.getClient().execute(() -> {
-                                                        if (error == null) source.sendFeedback(Text.literal("Script finished: " + name));
-                                                        else source.sendError(Text.literal("Script failed: " + error.getMessage()));
-                                                    }));
-                                            source.sendFeedback(Text.literal("Started script: " + name));
-                                            return 1;
-                                        })))
+                                        .executes(context -> runScript(context, ""))
+                                        // `/talos script run <name> <args...>` — whitespace-split
+                                        // into the list the script reads as talos.args.
+                                        .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
+                                                .executes(context -> runScript(context,
+                                                        StringArgumentType.getString(context, "args"))))))
                         .then(ClientCommandManager.literal("stop")
                                 .executes(context -> {
                                     ScriptEngine.instance().stop();
@@ -208,6 +218,16 @@ public final class TalosCommands {
                         .executes(StopCommand::execute)
                         .then(ClientCommandManager.literal("all")
                                 .executes(StopCommand::execute)))
+                // `/talos follow <target> [keeping <distance>]` — target is a player name,
+                // an entity type, or a selector (@e[type=cow,distance=..20]); greedy so
+                // selectors with spaces survive. Script-overridable like goto/mine/kill.
+                .then(ClientCommandManager.literal("follow")
+                        .then(ClientCommandManager.argument("target", StringArgumentType.greedyString())
+                                .suggests((context, builder) -> CommandSource.suggestMatching(
+                                        followSuggestions(context.getSource()), builder))
+                                .executes(context -> scriptOverride(context, "follow") ? 1
+                                        : FollowCommand.execute(context, followTarget(context),
+                                        followDistance(context, 3.0)))))
                 .then(InputCommand.walkNode())
                 .then(InputCommand.keyNode())
                 .then(InvCommand.node())
@@ -246,6 +266,13 @@ public final class TalosCommands {
                 // `/talos example <name>` — write a commented reference script to
                 // talos/scripts/example_<name>.py (overwriting: they are reference material).
                 .then(ClientCommandManager.literal("example")
+                        // Bare `/talos example` lists everything available.
+                        .executes(context -> {
+                            context.getSource().sendFeedback(Text.literal("Available examples: "
+                                    + String.join(", ", EXAMPLES.keySet().stream().sorted().toList())
+                                    + " — write one with /talos example <name>"));
+                            return 1;
+                        })
                         .then(ClientCommandManager.argument("name", StringArgumentType.word())
                                 .suggests(EXAMPLE_NAMES)
                                 .executes(TalosCommands::writeExample))));
@@ -299,6 +326,61 @@ public final class TalosCommands {
     private static String rawArgs(String input, String name) {
         int at = input.indexOf(name);
         return at < 0 ? "" : input.substring(at + name.length()).trim();
+    }
+
+    /*
+     * `/talos follow` takes ONE greedy argument so selectors survive brigadier's word
+     * splitting; a trailing bare number is peeled off as the keep-distance
+     * (`/talos follow Steve 5` keeps ~5 blocks, `/talos follow @e[type=cow]` defaults).
+     */
+
+    private static String followTarget(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
+        String[] parts = StringArgumentType.getString(context, "target").trim().split("\\s+");
+        int keep = parts.length > 1 && isNumeric(parts[parts.length - 1])
+                ? parts.length - 1 : parts.length;
+        return String.join(" ", java.util.Arrays.copyOf(parts, keep));
+    }
+
+    private static double followDistance(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context,
+            double fallback) {
+        String[] parts = StringArgumentType.getString(context, "target").trim().split("\\s+");
+        return parts.length > 1 && isNumeric(parts[parts.length - 1])
+                ? Double.parseDouble(parts[parts.length - 1]) : fallback;
+    }
+
+    private static boolean isNumeric(String text) {
+        try { Double.parseDouble(text); return true; } catch (NumberFormatException e) { return false; }
+    }
+
+    private static List<String> followSuggestions(FabricClientCommandSource source) {
+        List<String> names = new java.util.ArrayList<>(List.of("@p", "@a", "@r", "@n", "@e[type="));
+        var client = source.getClient();
+        if (client.getNetworkHandler() != null) {
+            for (var entry : client.getNetworkHandler().getPlayerList()) {
+                String name = entry.getProfile().name();
+                if (client.player == null || !name.equals(client.player.getGameProfile().name()))
+                    names.add(name);
+            }
+        }
+        return names;
+    }
+
+    /** Starts {@code /talos script run <name> [args...]}; argv reaches the script as talos.args. */
+    private static int runScript(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context, String argsLine) {
+        var source = context.getSource();
+        String name = StringArgumentType.getString(context, "name");
+        List<String> args = argsLine.isBlank() ? List.of() : List.of(argsLine.trim().split("\\s+"));
+        ScriptEngine.instance().run(name, args, ScriptEngine.CHAT).whenComplete((ignored, error) ->
+                source.getClient().execute(() -> {
+                    if (error == null) source.sendFeedback(Text.literal("Script finished: " + name));
+                    else source.sendError(Text.literal("Script failed: " + error.getMessage()));
+                }));
+        source.sendFeedback(Text.literal("Started script: " + name
+                + (args.isEmpty() ? "" : " " + String.join(" ", args))));
+        return 1;
     }
 
     /** Executes {@code /talos cmd <name> [args]} against the script command registry. */
@@ -391,19 +473,28 @@ public final class TalosCommands {
 
             @talos.command("goto")
             def goto_override(args):
-                # Replaces /talos goto while this script runs. The built-in stays reachable
-                # as talos.goto / talos.aio.goto, so the override can prep, then delegate.
-                if len(args) != 3:
-                    talos.log("this override only handles /talos goto <x> <y> <z>")
-                    return
-                x, y, z = (int(float(a)) for a in args)
-
-                async def wrapped():
+                # Replaces /talos goto while this script runs. The built-ins stay reachable
+                # as talos.goto / talos.aio.goto / talos.aio.goto_block, so the override can
+                # prep, then delegate. Handles both forms:
+                #   /talos goto <x> <y> <z>
+                #   /talos goto block <blockId> [radius]
+                async def wrapped_xyz(x, y, z):
                     # Custom prep goes here (speedbridging, scaffolding, logging, ...).
                     result = await talos.aio.goto(x, y, z)  # the ORIGINAL goto, unchanged
                     talos.log(f"goto override: built-in finished -- {result}")
 
-                return wrapped()
+                async def wrapped_block(block_id, radius):
+                    result = await talos.aio.goto_block(block_id, radius)
+                    talos.log(f"goto override: goto_block finished -- {result}")
+
+                if args and args[0] == "block":
+                    radius = int(args[2]) if len(args) > 2 else 64
+                    return wrapped_block(args[1], radius)
+                if len(args) != 3:
+                    talos.log("this override handles <x> <y> <z> and block <id> [radius]")
+                    return
+                x, y, z = (int(float(a)) for a in args)
+                return wrapped_xyz(x, y, z)
 
 
             talos.log("example_goto loaded: /talos goto overridden, /talos pygoto added")
@@ -452,9 +543,87 @@ public final class TalosCommands {
                     await talos.aio.wait(0.4, 0.9)       # human-ish pause per harvest
             """;
 
+    /**
+     * Reference script for {@code /talos example follow}: overrides {@code /talos follow}
+     * with custom behavior layered on the built-in, plus a from-scratch follow loop on
+     * raw primitives for full control.
+     */
+    private static final String EXAMPLE_FOLLOW = """
+            # example_follow.py -- customize /talos follow. Reference material:
+            # /talos example follow rewrites it.
+            #
+            # Run:    /talos script run example_follow
+            # Then:   /talos follow <name|type|@e[...]> [distance]   (routed through here)
+            #         /talos shadow <target>                          (from-scratch loop)
+            # Stop:   /talos script stop
+            #
+            # Targets accept players AND any entity: "Steve", "zombie",
+            # "@e[type=cow,distance=..20]", "@p", "@n". The built-in stays reachable as
+            # talos.follow / talos.aio.follow.
+
+            import talos
+
+
+            @talos.command("follow")
+            def follow_override(args):
+                # Peel a trailing number off as the keep-distance, like the built-in does.
+                if not args:
+                    talos.log("usage: /talos follow <target> [distance]")
+                    return
+                distance = 3.0
+                if len(args) > 1:
+                    try:
+                        distance = float(args[-1])
+                        args = args[:-1]
+                    except ValueError:
+                        pass
+                target = " ".join(args)
+
+                async def wrapped():
+                    talos.log(f"following {target!r}, keeping ~{distance} blocks")
+                    # Custom behavior goes here: sprint-only follow, waypoint logging,
+                    # auto-eat while following, breaking off when health drops, ...
+                    try:
+                        await talos.aio.follow(target, distance)  # the ORIGINAL follow
+                    except talos.PathFailedError as error:
+                        talos.log(f"follow ended: {error}")
+
+                return wrapped()
+
+
+            @talos.command("shadow")
+            def shadow(args):
+                # A from-scratch follow on raw primitives: re-goto the target's feet
+                # whenever they stray, with everything (pace, distance, pathing options)
+                # under your control.
+                if not args:
+                    talos.log("usage: /talos shadow <target>")
+                    return
+                target = " ".join(args)
+
+                async def loop():
+                    while True:
+                        entity = talos.find_entity(target, 64) if ":" in target \\
+                            else next((p for p in talos.players()
+                                       if p.name.lower() == target.lower()), None)
+                        if entity is None:
+                            talos.log("shadow: target not in range, waiting...")
+                            await talos.aio.wait(1.0, 2.0)
+                            continue
+                        if entity.distance > 4.0:
+                            await talos.aio.goto_near(int(entity.pos.x), int(entity.pos.y),
+                                                      int(entity.pos.z), 2)
+                        await talos.aio.wait(0.3, 0.6)
+
+                return loop()
+
+
+            talos.log("example_follow loaded: /talos follow overridden, /talos shadow added")
+            """;
+
     /** Embedded reference scripts served by {@code /talos example <name>}. */
     private static final Map<String, String> EXAMPLES =
-            Map.of("goto", EXAMPLE_GOTO, "farm", EXAMPLE_FARM);
+            Map.of("goto", EXAMPLE_GOTO, "farm", EXAMPLE_FARM, "follow", EXAMPLE_FOLLOW);
 
     /**
      * Writes the named reference script to {@code <gameDir>/talos/scripts/example_<name>.py}

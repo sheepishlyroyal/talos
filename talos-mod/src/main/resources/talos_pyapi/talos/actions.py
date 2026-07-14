@@ -186,6 +186,22 @@ def goto_xz(x, z):
     """Path to an X/Z column."""
     return _call(_talos_host.gotoXZ, int(x), int(z))
 
+def goto_block(block_id, radius=64):
+    """Path to the nearest matching block, retrying the next-nearest candidate
+    (up to 5) when one proves unreachable. Raises PathFailedError if none work."""
+    return _call(_talos_host.gotoBlockType, str(block_id), int(radius))
+
+def follow(target, distance=3.0):
+    """Follow any entity, keeping ~distance blocks, until following ENDS.
+
+    target is a player name, an entity type ("zombie"), or a selector
+    ("@e[type=cow,distance=..20]"). Blocks until the follow stops (/talos stop,
+    another goto taking over, or the target staying gone), then raises
+    PathFailedError describing why. Prefer `await talos.aio.follow(...)` inside
+    async tasks so other work can run while following.
+    """
+    return _call(_talos_host.follow, str(target), float(distance))
+
 def set_node_count(n):
     """Set navigation waypoint count; zero restores automatic path-length scaling."""
     return _call(_talos_host.setNodeCount, int(n))

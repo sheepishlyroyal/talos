@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { TalosConnection, ConnectionState } from './connection';
 import { makePushScript, makeRun, makeStop, ServerToClientMessage } from './protocol';
@@ -10,6 +12,8 @@ let pendingRunAck: (() => void) | undefined;
 
 /** Name of the script currently pushed/running, so stop/status messages read naturally. */
 let activeScriptName: string | undefined;
+/** Local file path of the pushed script, so tracebacks can link back to the editor. */
+let activeScriptPath: string | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
     outputChannel = vscode.window.createOutputChannel('Talos');
@@ -209,6 +213,7 @@ async function runScript(target?: vscode.TextDocument): Promise<void> {
 
             try {
                 activeScriptName = name;
+                activeScriptPath = doc.uri.scheme === 'file' ? doc.uri.fsPath : undefined;
                 conn.send(makePushScript(name, source));
                 report(75, 'script pushed');
                 const ack = new Promise<void>((resolve) => {
@@ -265,7 +270,7 @@ async function reconnect(): Promise<void> {
 function handleMessage(msg: ServerToClientMessage): void {
     switch (msg.type) {
         case 'log':
-            outputChannel.appendLine(formatLog(msg.level, msg.text));
+            outputChannel.appendLine(formatLog(msg.level, linkifyTraceback(msg.text)));
             break;
         case 'status':
             outputChannel.appendLine(`[talos] status: ${msg.state}`);
@@ -287,6 +292,31 @@ function handleMessage(msg: ServerToClientMessage): void {
 
 function formatLog(level: string, text: string): string {
     return `[${level}] ${text}`;
+}
+
+/**
+ * Rewrites Python traceback frames that reference the pushed script (or a sibling .py it
+ * required) to the absolute local `path:line` form, which the output channel renders as a
+ * clickable jump-to-source link. Frames pointing at files we cannot locate (embedded
+ * talos modules, engine internals) pass through untouched.
+ */
+function linkifyTraceback(text: string): string {
+    if (!activeScriptPath || !text.includes('File "')) return text;
+    const scriptPath = activeScriptPath;
+    return text.replace(/File "([^"]+)", line (\d+)/g, (match, file: string, line: string) => {
+        const base = file.split(/[\\/]/).pop();
+        if (!base || !base.endsWith('.py')) return match;
+        let resolved: string | undefined;
+        if (base === path.basename(scriptPath)) {
+            resolved = scriptPath;
+        } else {
+            // talos.require("lib") frames reference talos/scripts/lib.py — when the user
+            // edits scripts in one folder, the sibling file is the local source.
+            const sibling = path.join(path.dirname(scriptPath), base);
+            if (fs.existsSync(sibling)) resolved = sibling;
+        }
+        return resolved ? `File "${base}", line ${line} → ${resolved}:${line}` : match;
+    });
 }
 
 function scriptNameFor(uri: vscode.Uri): string {

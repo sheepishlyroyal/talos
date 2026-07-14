@@ -52,6 +52,23 @@ public abstract class ClientPlayNetworkHandlerMixin {
         dev.talos.client.pathing.sim.SimFollowTask.onServerCorrection();
     }
 
+    /**
+     * Script {@code entity_hurt} event: the damage-event packet is how modern servers
+     * announce any tracked entity taking damage (the red flash). Resolved to a live
+     * entity here so the payload can stay primitive.
+     */
+    @Inject(method = "onEntityDamage", at = @At("HEAD"))
+    private void talos$onEntityDamage(
+            net.minecraft.network.packet.s2c.play.EntityDamageS2CPacket packet, CallbackInfo ci) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (!client.isOnThread() || client.world == null) return;
+        net.minecraft.entity.Entity entity = client.world.getEntityById(packet.entityId());
+        if (entity == null) return;
+        dev.talos.client.script.ScriptGameEvents.onEntityHurt(
+                net.minecraft.registry.Registries.ENTITY_TYPE.getId(entity.getType()).toString(),
+                packet.entityId(), entity.getX(), entity.getY(), entity.getZ());
+    }
+
     @Inject(method = "onItemPickupAnimation", at = @At("HEAD"))
     private void talos$onItemPickup(ItemPickupAnimationS2CPacket packet, CallbackInfo ci) {
         if (!MinecraftClient.getInstance().isOnThread()) return;

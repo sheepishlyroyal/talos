@@ -2,7 +2,8 @@
 
 from .errors import (TalosError, PathFailedError, OutOfReachError, NotFoundError,
                      TargetLostError, ActionCancelledError, WorldClosedError)
-from .actions import (goto, goto_near, goto_xz, set_node_count, find_block, find_entity,
+from .actions import (goto, goto_near, goto_xz, goto_block, follow, set_node_count,
+                      find_block, find_entity,
                       find_item, players, nearest_player, entities, angle_to,
                       place_block, place_look, break_block, mine, mine_looking_at,
                       left_click, right_click, select_slot, click_slot, container_slot_count,
@@ -117,7 +118,48 @@ def log(message):
     print(text)
     return text
 
-__all__ = ["goto", "goto_near", "goto_xz", "set_node_count", "find_block", "find_entity",
+def require(name):
+    """Load another script from talos/scripts as a module and return it.
+
+    require("mylib") reads talos/scripts/mylib.py, executes it once, and caches
+    it (CPython import semantics: repeat calls return the same module object,
+    and during an import cycle the partially-initialized module is returned).
+    Libraries run in the same sandbox as scripts, go through the same first-run
+    trust summary, and reload fresh on every script (re)run. Only files directly
+    in talos/scripts can be required -- no paths, no traversal.
+    """
+    import sys
+    stem = str(name)
+    stem = stem[:-3] if stem.endswith(".py") else stem
+    key = "taloslib." + stem
+    cached = sys.modules.get(key)
+    if cached is not None:
+        return cached
+    source = _talos_host.readScriptSource(stem)
+    module = _types.ModuleType(key)
+    module.__file__ = "talos/scripts/" + stem + ".py"
+    module.__package__ = ""
+    module.__dict__["_talos_host"] = _talos_host
+    sys.modules[key] = module
+    try:
+        exec(compile(source, module.__file__, "exec"), module.__dict__)
+    except BaseException:
+        sys.modules.pop(key, None)
+        raise
+    return module
+
+
+def __getattr__(name):
+    # talos.args: arguments from `/talos script run <name> <args...>` as a list of
+    # strings (empty for VS Code / snippet runs). Resolved lazily so it is always
+    # current for the run that is executing, even when the session context is reused.
+    if name == "args":
+        return [str(value) for value in _talos_host.scriptArgs()]
+    raise AttributeError(f"module 'talos' has no attribute {name!r}")
+
+__all__ = ["args", "require",
+           "goto", "goto_near", "goto_xz", "goto_block", "follow",
+           "set_node_count", "find_block", "find_entity",
            "find_item", "players", "nearest_player", "entities", "angle_to",
            "place_block", "place_look", "break_block", "mine", "mine_looking_at",
            "left_click", "right_click", "select_slot", "click_slot", "container_slot_count",

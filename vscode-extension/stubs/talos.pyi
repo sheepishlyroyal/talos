@@ -185,6 +185,8 @@ class _Aio:
     async def goto(self, x: Union[float, str, _PosLike], y: Union[float, str] = ..., z: Union[float, str] = ...) -> str: ...
     async def goto_near(self, x: float, y: float, z: float, range: int) -> str: ...
     async def goto_xz(self, x: float, z: float) -> str: ...
+    async def goto_block(self, block_id: str, radius: int = 64) -> str: ...
+    async def follow(self, target: str, distance: float = 3.0) -> str: ...
     async def find_block(self, name: str, radius: int = 64) -> Optional[Pos]: ...
     async def place_block(self, x: Union[float, str, _PosLike], y: Union[float, str] = ..., z: Union[float, str] = ...,
                           block_id: Optional[str] = ...) -> str: ...
@@ -219,6 +221,21 @@ def goto_near(x: float, y: float, z: float, range: int) -> str:
 
 def goto_xz(x: float, z: float) -> str:
     """Path to an X/Z column."""
+    ...
+
+def goto_block(block_id: str, radius: int = 64) -> str:
+    """Path to the nearest matching block, retrying the next-nearest candidate
+    (up to 5) when one proves unreachable. Raises PathFailedError if none work."""
+    ...
+
+def follow(target: str, distance: float = 3.0) -> str:
+    """Follow any entity, keeping ~distance blocks, until following ENDS.
+
+    target is a player name, an entity type ("zombie"), or a selector
+    ("@e[type=cow,distance=..20]"). Blocks until the follow stops (/talos stop,
+    another goto taking over, or the target staying gone), then raises
+    PathFailedError describing why. Prefer `await talos.aio.follow(...)` inside
+    async tasks."""
     ...
 
 def set_node_count(n: int) -> None:
@@ -493,12 +510,36 @@ def command(name: str) -> Callable[[_F], _F]:
     ...
 
 def on(event: str) -> Callable[[_EventHandler], _EventHandler]:
-    """Decorator registering a handler for a raw game event:
-    "tick", "chat", "entity_hurt", or "disconnect"."""
+    """Decorator registering a handler for a raw game event.
+
+    Events and handler signatures:
+      "tick"        fn()                     | "chat"       fn(message, sender)
+      "entity_hurt" fn(type_id, id, x, y, z) | "health"     fn(health)
+      "death"       fn()                     | "item_pickup" fn(item_id, amount)
+      "goto_start"  fn(x, y, z)              | "goto_done"  fn(success, detail)
+      "goto_stuck"  fn(detail)               | "disconnect" fn()
+
+    "chat" sender is the player's name, or None for system lines; your own
+    messages echo back, so guard against replying to yourself."""
     ...
 
 def log(msg: object) -> str:
     """Write a message to the script console (in-game chat / VS Code output)."""
+    ...
+
+args: list[str]
+"""Arguments from `/talos script run <name> <args...>`, whitespace-split.
+
+Empty for VS Code / snippet runs. Example: `/talos script run farm wheat 64`
+gives ["wheat", "64"]."""
+
+def require(name: str) -> Any:
+    """Load another script from talos/scripts as a module and return it.
+
+    require("mylib") reads talos/scripts/mylib.py, executes it once, and caches
+    it (CPython import semantics). Libraries run in the same sandbox as scripts,
+    go through the same first-run trust summary, and reload fresh on every
+    script (re)run. Only files directly in talos/scripts can be required."""
     ...
 
 def wait(a: float, b: Optional[float] = None) -> None:

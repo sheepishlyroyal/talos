@@ -47,6 +47,30 @@ public final class ScriptGameEvents {
         if (engine.hasRunningSession()) engine.postEvent("item_pickup", itemId, amount);
     }
 
+    /**
+     * Additive hook from the {@code ClientReceiveMessageEvents} registrations in
+     * {@link dev.talos.client.rules.EventRuleEngine}: every visible chat line (player
+     * chat and non-overlay system messages). {@code sender} is the speaking player's
+     * name, or {@code null} for system/server lines. Note the server echoes the local
+     * player's own messages back, so scripts reacting to chat should guard against
+     * replying to themselves.
+     */
+    public static void onChatMessage(String message, String sender) {
+        ScriptEngine engine = ScriptEngine.instance();
+        if (engine.hasRunningSession()) engine.postEvent("chat", message, sender);
+    }
+
+    /**
+     * Additive hook from {@link dev.talos.client.rules.EventRuleEngine#onEntityStatus}:
+     * an entity within tracking range flashed a damage status. Payload stays primitive
+     * (type id, network entity id, position) so scripts can correlate against
+     * {@code talos.entities()} snapshots by {@code id}.
+     */
+    public static void onEntityHurt(String typeId, int entityId, double x, double y, double z) {
+        ScriptEngine engine = ScriptEngine.instance();
+        if (engine.hasRunningSession()) engine.postEvent("entity_hurt", typeId, entityId, x, y, z);
+    }
+
     /*
      * Goto lifecycle hooks from the pathing engine. Same contract as the hooks above:
      * client-thread callers, primitive payloads only, and postEvent queues the actual

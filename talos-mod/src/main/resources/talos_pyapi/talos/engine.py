@@ -441,6 +441,16 @@ class _Aio:
         return _submit(_talos_host.submitGotoXZ, int(x), int(z))
 
     @staticmethod
+    def goto_block(block_id, radius=64):
+        """Awaitable talos.goto_block (nearest matching block, retry on unreachable)."""
+        return _submit(_talos_host.submitGotoBlockType, str(block_id), int(radius))
+
+    @staticmethod
+    def follow(target, distance=3.0):
+        """Awaitable talos.follow: resolves when following ENDS (see talos.follow)."""
+        return _submit(_talos_host.submitFollow, str(target), float(distance))
+
+    @staticmethod
     def find_block(name, radius=64):
         """Awaitable talos.find_block; returns a Pos or None."""
         return _submit(_talos_host.submitFindBlock, str(name), int(radius),

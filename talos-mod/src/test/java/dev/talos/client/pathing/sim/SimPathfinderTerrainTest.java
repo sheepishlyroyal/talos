@@ -81,18 +81,18 @@ class SimPathfinderTerrainTest {
 
     @Test
     void uncrossableGapWithoutDetourFailsHonestly() {
-        // A narrow bridge with a 4-wide gap: landing 5 cells out exceeds any sprint-jump
-        // arc (a 3-wide gap is a legitimate vanilla 4-block jump, so it would be crossed).
+        // A narrow bridge with a 5-wide gap: landing 6 cells out exceeds even a
+        // full-momentum sprint-jump arc (4-wide gaps are crossable with a run-up).
         FakeWorld world = new FakeWorld();
         world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.getDefaultState());
-        world.fill(19, 63, -1, 22, 63, 1, Blocks.AIR.getDefaultState());
+        world.fill(19, 63, -1, 23, 63, 1, Blocks.AIR.getDefaultState());
         BlockPos goal = new BlockPos(38, 64, 0);
         PlannedRoute route = find(world, standingAt(2, 64, 0), goal, near(goal), WALK_ONLY);
         assertFalse(route.reachedGoal(), "gap must not be crossed: " + route.detail());
         // The lip cell (x=19) can host a node whose hitbox is still supported by the last
         // bridge block, but nothing may make it past the middle of the gap.
         for (PlannedRoute.Waypoint waypoint : route.waypoints()) {
-            assertTrue(waypoint.position().x < 21.0,
+            assertTrue(waypoint.position().x < 21.5,
                     "partial route stays on the near side, got " + waypoint.position());
         }
     }
@@ -102,7 +102,7 @@ class SimPathfinderTerrainTest {
         // Same gap, but a side platform at z=2..6 spans it: the route must detour.
         FakeWorld world = new FakeWorld();
         world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.getDefaultState());
-        world.fill(19, 63, -1, 22, 63, 1, Blocks.AIR.getDefaultState());
+        world.fill(19, 63, -1, 23, 63, 1, Blocks.AIR.getDefaultState());
         world.fill(14, 63, 2, 28, 63, 6, Blocks.STONE.getDefaultState());
         BlockPos goal = new BlockPos(38, 64, 0);
         PlannedRoute route = find(world, standingAt(2, 64, 0), goal, near(goal), WALK_ONLY);
@@ -110,6 +110,60 @@ class SimPathfinderTerrainTest {
         boolean detoured = route.waypoints().stream()
                 .anyMatch(waypoint -> waypoint.position().z > 1.5);
         assertTrue(detoured, "route crossed via the side platform");
+    }
+
+    @Test
+    void momentumGapCrossesWithSprintJumpArc() {
+        // A 3-wide gap is a legitimate vanilla 4-block sprint jump — but only at speed.
+        // The long runway lets chained SPRINT edges deliver momentum to the lip, where the
+        // arc rollout (which inherits the node's velocity) clears it.
+        FakeWorld world = new FakeWorld();
+        world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.getDefaultState());
+        world.fill(19, 63, -1, 21, 63, 1, Blocks.AIR.getDefaultState());
+        BlockPos goal = new BlockPos(38, 64, 0);
+        PlannedRoute route = find(world, standingAt(2, 64, 0), goal, near(goal), WALK_ONLY);
+        assertTrue(route.reachedGoal(), route.detail());
+        assertTrue(routeUses(route, Primitive.SPRINT_JUMP), "route jumps the gap: "
+                + route.waypoints().stream().map(w -> String.valueOf(w.via())).toList());
+    }
+
+    @Test
+    void fourWideGapClearsViaEdgeTakeoff() {
+        // A 4-wide gap needs more than an immediate center-of-cell jump. The run-up arc
+        // sprints INSIDE the lip cell to the last supported subpixel before launching —
+        // the same edge-hugging takeoff human parkour uses — and that extra distance
+        // plus approach speed is exactly what lands the far lip.
+        FakeWorld world = new FakeWorld();
+        world.fill(8, 63, -1, 40, 63, 1, Blocks.STONE.getDefaultState());
+        world.fill(19, 63, -1, 22, 63, 1, Blocks.AIR.getDefaultState());
+        BlockPos goal = new BlockPos(38, 64, 0);
+        PlannedRoute route = find(world, standingAt(18, 64, 0), goal, near(goal), WALK_ONLY);
+        assertTrue(route.reachedGoal(), route.detail());
+        assertTrue(routeUses(route, Primitive.SPRINT_JUMP), "route jumps the gap: "
+                + route.waypoints().stream().map(w -> String.valueOf(w.via())).toList());
+    }
+
+    @Test
+    void fiveBlockJumpLandsViaMomentumHopsAndSnowLayers() {
+        // The infamous 5-block jump: impossible flat (asserted by the uncrossable-gap
+        // test's honesty), possible from a 7-layer snow runway. The plan must CHAIN
+        // momentum — hop onto the snow, hop again to arrive at the lip carrying air
+        // speed (kept alive as a distinct A* state by the speed-bucketed node key),
+        // then launch from the elevated edge across all five cells.
+        FakeWorld world = new FakeWorld();
+        world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.getDefaultState());
+        world.fill(19, 63, -1, 23, 63, 1, Blocks.AIR.getDefaultState());
+        world.fill(14, 64, -1, 18, 64, 1,
+                Blocks.SNOW.getDefaultState().with(net.minecraft.block.SnowBlock.LAYERS, 7));
+        BlockPos goal = new BlockPos(38, 64, 0);
+        PlannedRoute route = find(world, standingAt(2, 64, 0), goal, near(goal), WALK_ONLY);
+        assertTrue(route.reachedGoal(), route.detail());
+        long jumps = route.waypoints().stream()
+                .filter(w -> w.via() == Primitive.SPRINT_JUMP).count();
+        assertTrue(jumps >= 2, "momentum chain uses hop(s) + the long jump, got " + jumps);
+        boolean crossed = route.waypoints().stream()
+                .anyMatch(w -> w.position().x >= 23.5 && w.position().y <= 64.5);
+        assertTrue(crossed, "the long jump lands on the far lip");
     }
 
     @Test

@@ -100,6 +100,37 @@ public final class TalosNativeBridge {
     @HostAccess.Export public FutureHandle submitFindBlock(String predicate, int radius) {
         return handle(game.submit(() -> scheduleBlockScan(predicate, radius)).thenCompose(f -> f));
     }
+    @HostAccess.Export public String gotoBlockType(String blockId, int radius) {
+        return await(game.submit(() -> dev.talos.client.pathing.talos.BlockGoalNavigator
+                        .navigate(MinecraftClient.getInstance(), blockId, radius))
+                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath));
+    }
+    @HostAccess.Export public String follow(String selector, double distance) {
+        return await(game.submit(() -> {
+                    MinecraftClient client = requireWorld();
+                    net.minecraft.entity.Entity target =
+                            dev.talos.client.command.EntitySelectors.resolve(client, selector, true);
+                    return dev.talos.client.pathing.talos.FollowTask.start(client, target, distance);
+                })
+                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath));
+    }
+
+    /** talos.aio.goto_block: nearest matching block, blacklist-and-retry on unreachable. */
+    @HostAccess.Export public FutureHandle submitGotoBlockType(String blockId, int radius) {
+        return handle(game.submit(() -> dev.talos.client.pathing.talos.BlockGoalNavigator
+                        .navigate(MinecraftClient.getInstance(), blockId, radius))
+                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath));
+    }
+    /** talos.aio.follow: selector/name/type resolved client-side; ends only when following ends. */
+    @HostAccess.Export public FutureHandle submitFollow(String selector, double distance) {
+        return handle(game.submit(() -> {
+                    MinecraftClient client = requireWorld();
+                    net.minecraft.entity.Entity target =
+                            dev.talos.client.command.EntitySelectors.resolve(client, selector, true);
+                    return dev.talos.client.pathing.talos.FollowTask.start(client, target, distance);
+                })
+                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath));
+    }
     @HostAccess.Export public FutureHandle submitPlaceBlock(int x, int y, int z) {
         return handle(actionFuture(new PlaceBlockAction(new BlockPos(x, y, z)), "place"));
     }
@@ -656,6 +687,21 @@ public final class TalosNativeBridge {
         return a + random.nextDouble() * (b - a);
     }
     @HostAccess.Export public void on(String event, org.graalvm.polyglot.Value handler) { events.register(event, handler); }
+    /** Session-provided loader behind talos.require: validation + trust scan + read. */
+    private volatile java.util.function.Function<String, String> requireSource;
+    void setRequireSource(java.util.function.Function<String, String> loader) { requireSource = loader; }
+
+    @HostAccess.Export public String readScriptSource(String name) {
+        java.util.function.Function<String, String> loader = requireSource;
+        if (loader == null) throw new IllegalStateException("talos.require is not available in this session");
+        return loader.apply(name);
+    }
+
+    /** Arguments from `/talos script run <name> <args...>`; empty for VS Code/snippet runs. */
+    private volatile String[] scriptArgs = new String[0];
+    void setScriptArgs(String[] args) { scriptArgs = args == null ? new String[0] : args; }
+    @HostAccess.Export public String[] scriptArgs() { return scriptArgs.clone(); }
+
     @HostAccess.Export public void hudSet(String id, String text) { TalosHud.set(id, text); }
     @HostAccess.Export public void hudRemove(String id) { TalosHud.remove(id); }
     @HostAccess.Export public void hudClear() { TalosHud.clear(); }

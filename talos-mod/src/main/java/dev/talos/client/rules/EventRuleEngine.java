@@ -245,11 +245,16 @@ public final class EventRuleEngine {
         ClientTickEvents.END_CLIENT_TICK.register(EventRuleEngine::pollTick);
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
             fireText(overlay ? Trigger.ACTIONBAR : Trigger.CHAT, message.getString());
-            if (!overlay) fireMention(message.getString());
+            if (!overlay) {
+                fireMention(message.getString());
+                dev.talos.client.script.ScriptGameEvents.onChatMessage(message.getString(), null);
+            }
         });
         ClientReceiveMessageEvents.CHAT.register((message, signed, sender, params, time) -> {
             fireText(Trigger.CHAT, message.getString());
             fireMention(message.getString());
+            dev.talos.client.script.ScriptGameEvents.onChatMessage(
+                    message.getString(), sender == null ? null : sender.name());
         });
         AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
             if (world.isClient()) fireText(Trigger.ATTACK_BLOCK, pos.toShortString());

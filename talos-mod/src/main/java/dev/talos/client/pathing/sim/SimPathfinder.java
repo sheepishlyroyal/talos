@@ -206,6 +206,19 @@ public final class SimPathfinder {
                 Edge arc = rollout(world, node, profile, opts, Primitive.SPRINT_JUMP, direction,
                         new Input(1.0F, 0.0F, true, true, false, yaw), true, false);
                 add(result, arc == null ? null : arc.withAddedCost(6.0));
+                // The immediate arc takes off from wherever the node sits in the cell; the
+                // run-up arc sprints to the lip first and jumps on the last supported tick —
+                // the extra takeoff distance is what makes 4-wide gaps land.
+                Edge runUp = runUpArc(world, node, profile, opts, direction, yaw);
+                add(result, runUp == null ? null : runUp.withAddedCost(6.0));
+            } else if (gapAhead(world, node.cell(), dx, dz)) {
+                // Momentum hop: solid ground here, but a gap lies 2–4 cells ahead. An early
+                // hop lands at the lip carrying AIR speed (sprint-jumping outruns sprinting),
+                // and the speed-bucketed key keeps that fast lip state alive — this is the
+                // chain behind long "momentum jumps" that a run-up alone cannot make.
+                Edge hop = rollout(world, node, profile, opts, Primitive.SPRINT_JUMP, direction,
+                        new Input(1.0F, 0.0F, true, true, false, yaw), true, false);
+                add(result, hop == null ? null : hop.withAddedCost(6.0));
             }
 
             MotionState fluidStart = withPose(node.state(), MotionState.Pose.SWIM);
@@ -275,13 +288,72 @@ public final class SimPathfinder {
             if (newCell && stable && (!arc || airborne)) {
                 int horizontal = Math.max(Math.abs(reached.getX() - origin.getX()),
                         Math.abs(reached.getZ() - origin.getZ()));
-                if (arc && (horizontal < 1 || horizontal > 4)) return null;
+                // 6 cells is the ceiling for a momentum sprint jump (the "5-block jump" with
+                // elevated takeoff). The rollout physics is the real gate — this only rejects
+                // landings so far out they must be a simulation artifact.
+                if (arc && (horizontal < 1 || horizontal > 6)) return null;
                 if (!arc && primitive != Primitive.PLACE && horizontal > 1) return null;
                 // A climbing edge presses against the step face by construction; billing
                 // those inherent bumps made straight ascents look worse than slope zigzags.
                 int billedBumps = reached.getY() > origin.getY() ? 0 : bumps;
                 return new Edge(state, primitive, tick, tick + billedBumps * BUMP_PENALTY,
                         direction);
+            }
+        }
+        return null;
+    }
+
+    /** A cell 2–4 ahead in this direction with neither floor nor body support = a lip. */
+    private static boolean gapAhead(CollisionView world, BlockPos cell, int dx, int dz) {
+        for (int k = 2; k <= 4; k++) {
+            BlockPos ahead = cell.add(dx * k, 0, dz * k);
+            if (empty(world, ahead) && empty(world, ahead.down())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Edge-perfect sprint jump: sprint WITHIN the takeoff cell until the next run tick
+     * would leave the ground, then jump on that tick — exactly how a player lines up a
+     * long jump. Compared to the immediate arc this adds up to a block of takeoff distance
+     * and converts approach ticks into speed, which is what clears 4-wide gaps. Each
+     * approach tick costs a peek step, but the edge is only attempted where plain
+     * sprinting already failed (a lip), so the extra simulation stays rare.
+     */
+    private static Edge runUpArc(CollisionView world, Node node, MovementProfile profile,
+            Options opts, int direction, float yaw) {
+        MotionState state = node.state();
+        if (!state.onGround()) return null;
+        if (!PlayerMotion.hitboxFits(world, state.pose(), state.position())) return null;
+        BlockPos origin = cell(state.position());
+        Input run = new Input(1.0F, 0.0F, false, true, false, yaw);
+        Input jump = new Input(1.0F, 0.0F, true, true, false, yaw);
+        boolean jumped = false;
+        for (int tick = 1; tick <= opts.maxRolloutTicks(); tick++) {
+            if (!jumped) {
+                MotionState peek = PlayerMotion.step(world, state, run, profile);
+                if (peek.onGround() && cell(peek.position()).equals(origin)) {
+                    state = peek; // still supported inside the takeoff cell: keep running
+                    continue;
+                }
+                // Running on would ground in ANOTHER cell — that is a plain sprint edge's
+                // job, and sprint already failed here, so this direction has no lip to jump.
+                if (peek.onGround()) return null;
+                state = PlayerMotion.step(world, state, jump, profile);
+                jumped = true;
+            } else {
+                state = PlayerMotion.step(world, state, jump, profile);
+            }
+            if (state.fluid() == MotionState.Fluid.LAVA) return null;
+            BlockPos reached = cell(state.position());
+            if (reached.getY() < origin.getY() - MAX_DROP) return null;
+            boolean stable = state.onGround() || state.inFluid()
+                    || PlayerMotion.climbable(world.getBlockState(reached));
+            if (jumped && stable && !reached.equals(origin)) {
+                int horizontal = Math.max(Math.abs(reached.getX() - origin.getX()),
+                        Math.abs(reached.getZ() - origin.getZ()));
+                if (horizontal < 1 || horizontal > 6) return null;
+                return new Edge(state, Primitive.SPRINT_JUMP, tick, tick, direction);
             }
         }
         return null;
@@ -449,7 +521,22 @@ public final class SimPathfinder {
     }
 
     private static Key key(Node node) {
-        return new Key(node.cell(), node.state().pose(), node.heading());
+        return new Key(node.cell(), node.state().pose(), node.heading(),
+                speedBucket(node.state().velocity()));
+    }
+
+    /**
+     * Momentum-chained parkour hinges on this: two visits to the same cell are NOT the
+     * same node when one arrives at sprint speed and the other at a standstill — the fast
+     * one can clear a gap the slow one cannot. Without speed in the key, the slow arrival
+     * (always cheaper g) pruned every "back up and take a run-up" route, so gaps that need
+     * momentum never planned. Three buckets (standing / walking / sprint-speed) keep the
+     * state-space growth bounded while preserving exactly the distinction the arc rollouts
+     * care about.
+     */
+    private static int speedBucket(Vec3d velocity) {
+        double speed = velocity.horizontalLength();
+        return speed < 0.15 ? 0 : speed < 0.24 ? 1 : 2;
     }
 
     private static BlockPos cell(Vec3d position) {
@@ -481,7 +568,7 @@ public final class SimPathfinder {
         return left + right;
     }
 
-    private record Key(BlockPos cell, MotionState.Pose pose, int heading) {}
+    private record Key(BlockPos cell, MotionState.Pose pose, int heading, int speed) {}
 
     private record Node(MotionState state, BlockPos cell, int heading, Node parent,
             Primitive via, int edgeTicks, double g, double h, long sequence, int depth) {
