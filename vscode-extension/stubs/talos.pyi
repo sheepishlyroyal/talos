@@ -166,7 +166,13 @@ class _Aio:
     async def mine(self, x: Union[float, str, _PosLike], y: Union[float, str] = ..., z: Union[float, str] = ...) -> str: ...
     async def mine_looking_at(self) -> str: ...
     async def kill_nearest(self, radius: float = 6.0) -> str: ...
-    async def wait_between(self, a: float, b: float) -> None: ...
+    async def wait(self, a: float, b: Optional[float] = None) -> None:
+        """Awaitable talos.wait: pause for `a` seconds (or a humanized random
+        duration in [a, b] when `b` is given); other tasks keep running."""
+        ...
+    async def wait_between(self, a: float, b: float) -> None:
+        """Awaitable humanized random pause. Alias of talos.aio.wait(a, b)."""
+        ...
     async def input(self, prompt: str = ...) -> str:
         """Awaitable talos.input: other tasks keep running while the user types."""
         ...
@@ -283,13 +289,26 @@ def player_feet() -> Pos:
 def key(name: str, pressed: bool = True) -> None:
     """Hold (or release) one of the player's logical keys, like a physical press.
 
-    Names: forward, back, left, right, jump, sneak, sprint, attack, use. The
-    binding stays pressed until key(name, False) or release_keys(), so pair
-    every press with a release (try/finally). Rebound controls are honored."""
+    Names: forward, back, left, right, jump, sneak, sprint, attack, use. These
+    are LOGICAL keybindings, not raw key codes, so user rebinds don't matter.
+    key(name, True) HOLDS the key until key(name, False) or release_keys(), so
+    pair every press with a release (try/finally). For a single one-tick press,
+    use tap(name) instead."""
     ...
 
-def release_keys() -> None:
-    """Release every key that key() can press. Safe to call unconditionally."""
+def tap(name: str) -> str:
+    """Press a logical key for exactly ONE game tick, then release it.
+
+    The scripted equivalent of a quick physical tap — jump over a lip, flick
+    sneak. Same names as key(); returns once the key has been released, so no
+    cleanup is ever needed."""
+    ...
+
+def release_keys(*names: str) -> None:
+    """Release keys held by key(). With no arguments, releases ALL of them.
+
+    With names, releases only those, e.g. release_keys("forward", "jump")
+    keeps a held "sneak" pressed. Safe to call unconditionally."""
     ...
 
 def look(yaw: float, pitch: float) -> None:
@@ -358,9 +377,17 @@ def log(msg: object) -> str:
     """Write a message to the script console (in-game chat / VS Code output)."""
     ...
 
+def wait(a: float, b: Optional[float] = None) -> None:
+    """Sleep for `a` seconds, or a seeded random duration in [a, b] seconds.
+
+    wait(0.4) sleeps exactly 0.4 seconds; wait(0.4, 0.9) sleeps a humanized
+    random duration in that range. Blocks every task; inside async tasks
+    prefer `await talos.aio.wait(...)`."""
+    ...
+
 def wait_between(a: float, b: float) -> None:
     """Blocking humanized sleep for a random duration in [a, b] seconds.
-    Inside async tasks prefer `await talos.aio.wait_between(a, b)`."""
+    Alias of wait(a, b) — see talos.wait."""
     ...
 
 def set_profile(name: str) -> None:

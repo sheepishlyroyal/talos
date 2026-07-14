@@ -9,7 +9,9 @@ import dev.talos.client.pathing.GoalXZ;
 import dev.talos.client.pathing.PathResult;
 import dev.talos.client.pathing.PathingEngine;
 import dev.talos.client.pathing.PathingOptions;
+import dev.talos.client.script.ScriptGameEvents;
 import dev.talos.client.task.TalosTask;
+import dev.talos.client.pathing.sim.CoarsePathfinder;
 import dev.talos.client.pathing.sim.MovementProfile;
 import dev.talos.client.pathing.sim.MotionState;
 import dev.talos.client.pathing.sim.PlannedRoute;
@@ -48,6 +50,17 @@ public final class TalosPathingEngine implements PathingEngine {
     // still accumulates, one stitched extension at a time, while the player never stops.
     private static final long INITIAL_MOVE_NANOS = 120_000_000L;
     private static final int FOLLOWER_STARVING_WAYPOINTS = 12;
+    // Hierarchical planning: goals beyond this straight-line distance first get a cheap
+    // block-grid corridor (no physics rollouts), and every deep search then funnels toward
+    // the corridor cell ~48 ahead instead of the far goal. Deep searches stay small — they
+    // are cut early anyway — while the corridor supplies the global direction they lack.
+    private static final double COARSE_TRIGGER_DISTANCE_SQ = 64.0 * 64.0;
+    private static final long COARSE_TIME_BUDGET_NANOS = 400_000_000L;
+    private static final int CORRIDOR_LOOKAHEAD_CELLS = 48;
+    private static final int CORRIDOR_INVALIDATE_CELLS = 16;
+    // "Within 2 cells" of a corridor sub-goal counts as arrival: the coarse grid is only
+    // ever approximately right, and the next extension re-anchors on the corridor anyway.
+    private static final double SUB_GOAL_RADIUS_SQ = 4.0;
     private volatile TalosTask activeTask;
     private volatile NavigationRun activeRun;
     private volatile String lastPartialDetail = "";
@@ -88,9 +101,13 @@ public final class TalosPathingEngine implements PathingEngine {
 
         NavigationRun run = new NavigationRun(client, snapshot, options, future);
         activeRun = run;
-        future.whenComplete((ignored, error) -> {
+        ScriptGameEvents.onGotoStart(snapshot.target().getX(), snapshot.target().getY(),
+                snapshot.target().getZ());
+        future.whenComplete((result, error) -> {
             if (activeRun == run) activeRun = null;
             if (activeTask == run.task) activeTask = null;
+            ScriptGameEvents.onGotoDone(error == null && result != null && result.successful(),
+                    error != null ? String.valueOf(error.getMessage()) : result.detail());
         });
         launchSegment(run);
     }
@@ -166,6 +183,13 @@ public final class TalosPathingEngine implements PathingEngine {
     private void launchSimSegment(NavigationRun run) {
         MinecraftClient client = run.client;
         if (run.planner != null) return; // one background search at a time
+        // Far run start (and stuck restarts before a corridor exists): sketch the global
+        // corridor first. The player would be waiting on the deep plan anyway; the coarse
+        // task resumes this launch the moment the corridor lands.
+        if ((run.follower == null || !run.follower.isActive())
+                && maybeStartCoarsePlan(run, true)) {
+            return;
+        }
         // While a follower is moving on a partial route, the extension search starts FROM
         // THAT ROUTE'S LAST NODE and plans ahead — the result is stitched onto the current
         // route as pure appended progress. Re-planning the whole remainder from the live
@@ -199,9 +223,31 @@ public final class TalosPathingEngine implements PathingEngine {
                 edits, edits, edits ? SIM_NODE_CAP * 2 : SIM_NODE_CAP,
                 edits ? SIM_SEARCH_NANOS * 3 : SIM_SEARCH_NANOS, SIM_MAX_ROLLOUT_TICKS,
                 breakTicks);
+        // SUB-GOAL FUNNELING: with a corridor in hand, aim this search at the corridor cell
+        // ~48 ahead of where it starts rather than the far goal. Reaching the run's REAL
+        // goal always still counts (the predicate is an OR), so funneling can never make an
+        // already-reachable goal unreachable. A short remaining corridor skips the funnel:
+        // the real goal is deep-search sized at that point.
+        BlockPos deepGoal = run.snapshot.target();
+        Predicate<BlockPos> deepTest = run.snapshot.test();
+        int subGoalIndex = -1;
+        List<BlockPos> corridor = run.corridor;
+        if (corridor != null) {
+            Vec3d origin = start.position();
+            BlockPos from = BlockPos.ofFloored(origin.x, origin.y + 1.0E-4, origin.z);
+            int candidate = nearestCorridorIndex(corridor, from) + CORRIDOR_LOOKAHEAD_CELLS;
+            if (candidate < corridor.size() - 1) {
+                BlockPos sub = corridor.get(candidate);
+                Predicate<BlockPos> realTest = run.snapshot.test();
+                deepGoal = sub;
+                deepTest = pos -> realTest.test(pos)
+                        || pos.getSquaredDistance(sub) <= SUB_GOAL_RADIUS_SQ;
+                subGoalIndex = candidate;
+            }
+        }
         SimPathfinder.Search search = SimPathfinder.begin(client.world, start, profile,
-                run.snapshot.target(), run.snapshot.test(), simOptions);
-        PlanningTask task = new PlanningTask(run, search);
+                deepGoal, deepTest, simOptions);
+        PlanningTask task = new PlanningTask(run, search, subGoalIndex);
         run.planner = task;
         boolean followerActive = run.follower != null && run.follower.isActive();
         if (!followerActive) {
@@ -247,6 +293,17 @@ public final class TalosPathingEngine implements PathingEngine {
             if (run.client.player != null) run.client.player.sendMessage(
                     net.minecraft.text.Text.literal(
                             "§6Talos §7» §fpartial plan: " + route.detail()), false);
+        }
+        // CORRIDOR INVALIDATION: a funneled search that exhausted its frontier — or burned
+        // its whole budget without even a useful partial — means the corridor lied about
+        // this segment (a chasm or wall the coarse grid cannot see). Blacklist the corridor
+        // cells leading to that sub-goal and re-run the coarse search around them; deep
+        // planning continues unfunneled (straight at the real goal) until the new corridor
+        // lands, so the worst case is exactly the old pre-corridor behavior.
+        if (planningTask.subGoalIndex >= 0 && run.corridor != null && !route.reachedGoal()
+                && (route.detail().startsWith("search frontier exhausted")
+                        || !planningTask.search.hasUsefulPartial())) {
+            invalidateCorridor(run, planningTask.subGoalIndex);
         }
         if (route.waypoints().size() <= 1) {
             // No swap will happen, so re-arm the follower's extension-request flag — it is
@@ -311,6 +368,7 @@ public final class TalosPathingEngine implements PathingEngine {
         if (run.cancelled || run.future.isDone()) return;
         if (error != null) { run.future.completeExceptionally(error); return; }
         if (segment.successful()) { run.future.complete(segment); return; }
+        ScriptGameEvents.onGotoStuck(segment.detail());
         // The follower is gone; an extension search still in flight was planned from the
         // DEAD route's tail. Abandon it, or launchSimSegment's one-planner guard silently
         // swallows the recovery replan and nobody owns the player (frozen until that stale
@@ -331,7 +389,89 @@ public final class TalosPathingEngine implements PathingEngine {
         if (run.cancelled || run.future.isDone()) return;
         if (error != null) { run.future.completeExceptionally(error); return; }
         if (segment.successful()) { run.future.complete(segment); return; }
+        ScriptGameEvents.onGotoStuck(segment.detail());
         scheduleReplan(run);
+    }
+
+    /**
+     * Starts (or re-flags) the coarse corridor search. Returns true when a search is now in
+     * flight AND the caller was a blocked deep-plan launch — the coarse task then owns
+     * resuming that launch. A corridor already in hand, a previous coarse failure, or a
+     * goal within deep-search range all return false: plan straight at the goal as before.
+     */
+    private boolean maybeStartCoarsePlan(NavigationRun run, boolean resumeDeepPlan) {
+        CoarseTask inFlight = run.coarsePlanner;
+        if (inFlight != null) {
+            // An invalidation recompute may already be running when a stuck restart needs a
+            // plan; promote it to resume the deep launch so the run cannot go ownerless.
+            inFlight.resumeDeepPlan |= resumeDeepPlan;
+            return resumeDeepPlan;
+        }
+        if (run.coarseFailed || run.corridor != null) return false;
+        MinecraftClient client = run.client;
+        if (client.player == null || client.world == null) return false;
+        BlockPos from = client.player.getBlockPos();
+        BlockPos target = run.snapshot.target();
+        if (squaredDistance(from, target) < COARSE_TRIGGER_DISTANCE_SQ) return false;
+        // The exact goal cell may be unoccupiable (interaction targets, mid-air pillars);
+        // steering the corridor to "beside it" is enough — the deep planner finishes the job.
+        Predicate<BlockPos> realTest = run.snapshot.test();
+        CoarsePathfinder.Search search = CoarsePathfinder.begin(client.world, from, target,
+                pos -> realTest.test(pos) || pos.getSquaredDistance(target) <= SUB_GOAL_RADIUS_SQ,
+                run.corridorBlacklist, COARSE_TIME_BUDGET_NANOS);
+        CoarseTask task = new CoarseTask(run, search, resumeDeepPlan);
+        run.coarsePlanner = task;
+        if (resumeDeepPlan && client.player != null) client.player.sendMessage(
+                net.minecraft.text.Text.literal("§bTalos §7» §fplanning"), true);
+        try {
+            TalosClient.taskScheduler().addTask("native-path-coarse", task);
+        } catch (RuntimeException exception) {
+            run.coarsePlanner = null;
+            run.future.completeExceptionally(exception);
+        }
+        return true;
+    }
+
+    private void coarsePlanCompleted(NavigationRun run, CoarseTask task,
+            CoarsePathfinder.Result result) {
+        if (run.coarsePlanner == task) run.coarsePlanner = null;
+        if (run.cancelled || run.future.isDone()) return;
+        LOGGER.debug("Coarse corridor search: {}", result.detail());
+        if (result.reachedGoal() && result.corridor().size() > 1) {
+            run.corridor = result.corridor();
+            renderCorridorMarkers(run.corridor);
+        } else {
+            // A partial corridor is worse than none: funneling toward its dead end would
+            // ACTIVELY steer away from workable routes. Fall back to plain deep planning.
+            run.coarseFailed = true;
+        }
+        if (task.resumeDeepPlan) launchSimSegment(run);
+    }
+
+    /** Cuts the failed segment out of the corridor and recomputes around the blacklist. */
+    private void invalidateCorridor(NavigationRun run, int subGoalIndex) {
+        List<BlockPos> corridor = run.corridor;
+        run.corridor = null;
+        clearCorridorMarkers();
+        int last = Math.min(subGoalIndex, corridor.size() - 1);
+        for (int i = Math.max(0, subGoalIndex - CORRIDOR_INVALIDATE_CELLS); i <= last; i++) {
+            run.corridorBlacklist.add(corridor.get(i));
+        }
+        maybeStartCoarsePlan(run, false);
+    }
+
+    /** Index of the corridor cell nearest to the deep search's start position. */
+    private static int nearestCorridorIndex(List<BlockPos> corridor, BlockPos from) {
+        int best = 0;
+        double bestDistance = Double.POSITIVE_INFINITY;
+        for (int i = 0; i < corridor.size(); i++) {
+            double distance = corridor.get(i).getSquaredDistance(from);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = i;
+            }
+        }
+        return best;
     }
 
     private void scheduleReplan(NavigationRun run) {
@@ -441,6 +581,35 @@ public final class TalosPathingEngine implements PathingEngine {
         lastRenderedRouteNodes = count;
     }
 
+    private static int lastRenderedCorridorMarkers;
+
+    /**
+     * Sparse dim markers sketch the global corridor; the blue/cyan route boxes remain the
+     * only rendering of the executable plan, so the two read as "direction" vs "route".
+     */
+    private static void renderCorridorMarkers(List<BlockPos> corridor) {
+        final int corridorColor = 0x445566; // dim slate, deliberately quieter than any route
+        int drawn = 0;
+        for (int i = 0; i < corridor.size(); i += 8) {
+            BlockPos cell = corridor.get(i);
+            RenderQueue.add("talos-corridor:" + drawn++,
+                    MotionState.box(MotionState.Pose.STAND,
+                            new Vec3d(cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5)),
+                    corridorColor, 20 * 30);
+        }
+        for (int i = drawn; i < lastRenderedCorridorMarkers; i++) {
+            RenderQueue.remove("talos-corridor:" + i);
+        }
+        lastRenderedCorridorMarkers = drawn;
+    }
+
+    private static void clearCorridorMarkers() {
+        for (int i = 0; i < lastRenderedCorridorMarkers; i++) {
+            RenderQueue.remove("talos-corridor:" + i);
+        }
+        lastRenderedCorridorMarkers = 0;
+    }
+
     /** Current route + continuation planned from its last node, as one longer route. */
     private static PlannedRoute stitch(PlannedRoute base, PlannedRoute extension) {
         java.util.List<PlannedRoute.Waypoint> combined =
@@ -523,12 +692,15 @@ public final class TalosPathingEngine implements PathingEngine {
     private final class PlanningTask extends TalosTask {
         private final NavigationRun run;
         private final SimPathfinder.Search search;
+        /** Corridor index this search funnels toward; -1 when aimed at the real goal. */
+        private final int subGoalIndex;
         private boolean done;
         private boolean abandoned;
 
-        PlanningTask(NavigationRun run, SimPathfinder.Search search) {
+        PlanningTask(NavigationRun run, SimPathfinder.Search search, int subGoalIndex) {
             this.run = run;
             this.search = search;
+            this.subGoalIndex = subGoalIndex;
         }
 
         /** Supersede this search: it stops expanding and its result is discarded. */
@@ -571,6 +743,35 @@ public final class TalosPathingEngine implements PathingEngine {
         }
     }
 
+    /** Advances the coarse corridor A* under the same 15ms slice discipline as deep plans. */
+    private final class CoarseTask extends TalosTask {
+        private final NavigationRun run;
+        private final CoarsePathfinder.Search search;
+        /** True when a deep-plan launch is parked behind this search and must be resumed. */
+        boolean resumeDeepPlan;
+        private boolean done;
+
+        CoarseTask(NavigationRun run, CoarsePathfinder.Search search, boolean resumeDeepPlan) {
+            this.run = run;
+            this.search = search;
+            this.resumeDeepPlan = resumeDeepPlan;
+        }
+
+        @Override public void initialize() { }
+        @Override public boolean condition() {
+            return !done && !run.cancelled && !run.future.isDone();
+        }
+        @Override public void increment() { }
+        @Override public void body() {
+            search.advance(SIM_TICK_SLICE_NANOS);
+            if (!search.isFinished()) return;
+            done = true;
+            CoarsePathfinder.Result result = search.result();
+            TalosClient.taskScheduler().addTask("native-path-coarse-handoff", new OneShotTask(
+                    () -> coarsePlanCompleted(run, this, result)));
+        }
+    }
+
     private static final class NavigationRun {
         final MinecraftClient client;
         final GoalSnapshot snapshot;
@@ -581,10 +782,17 @@ public final class TalosPathingEngine implements PathingEngine {
         double bestDistance = Double.POSITIVE_INFINITY;
         /** Route whose last node the in-flight extension search planned from (stitch base). */
         PlannedRoute extensionBase;
+        /** Coarse global corridor for far goals; null means deep searches aim at the goal. */
+        List<BlockPos> corridor;
+        /** Corridor cells proven wrong by a failed funneled search; recomputes avoid them. */
+        final java.util.Set<BlockPos> corridorBlacklist = new java.util.HashSet<>();
+        /** The coarse grid could not reach the goal at all: never funnel for this run. */
+        boolean coarseFailed;
         boolean cancelled;
         TalosTask task;
         SimFollowTask follower;
         PlanningTask planner;
+        CoarseTask coarsePlanner;
 
         NavigationRun(MinecraftClient client, GoalSnapshot snapshot, PathingOptions options,
                       CompletableFuture<PathResult> future) {

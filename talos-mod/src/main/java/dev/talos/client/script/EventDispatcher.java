@@ -13,7 +13,8 @@ import org.graalvm.polyglot.Value;
 /** Worker-owned Python event handler registry. */
 public final class EventDispatcher {
     private static final Set<String> EVENTS = Set.of(
-            "tick", "chat", "entity_hurt", "disconnect", "health", "item_pickup", "death");
+            "tick", "chat", "entity_hurt", "disconnect", "health", "item_pickup", "death",
+            "goto_start", "goto_done", "goto_stuck");
     private final Map<String, List<Value>> handlers = new ConcurrentHashMap<>();
     private final Consumer<Runnable> workerEnqueue;
     private final AtomicBoolean tickPending = new AtomicBoolean();

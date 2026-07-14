@@ -249,16 +249,34 @@ def player_feet():
 def key(name, pressed=True):
     """Hold (or release) one of the player's logical keys, like a physical press.
 
-    Names: forward, back, left, right, jump, sneak, sprint, attack, use. The
-    binding stays pressed until key(name, False) or release_keys(), so pair
-    every press with a release (try/finally) - a crashed script that held
-    "forward" would otherwise keep walking. Rebound controls are honored.
+    Names: forward, back, left, right, jump, sneak, sprint, attack, use. These
+    are LOGICAL keybindings, not raw key codes, so user rebinds don't matter.
+    key(name, True) HOLDS the key until key(name, False) or release_keys(), so
+    pair every press with a release (try/finally) - a crashed script that held
+    "forward" would otherwise keep walking. For a single one-tick press, use
+    tap(name) instead.
     """
     return _call(_talos_host.setKey, str(name), bool(pressed))
 
-def release_keys():
-    """Release every key that key() can press. Safe to call unconditionally."""
-    return _call(_talos_host.releaseKeys)
+def tap(name):
+    """Press a logical key for exactly ONE game tick, then release it.
+
+    The scripted equivalent of a quick physical tap - jump over a lip, flick
+    sneak. Same names as key(); returns once the key has been released, so no
+    cleanup is ever needed.
+    """
+    return _call(_talos_host.tapKey, str(name))
+
+def release_keys(*names):
+    """Release keys held by key(). With no arguments, releases ALL of them.
+
+    With names, releases only those, e.g. release_keys("forward", "jump")
+    keeps a held "sneak" pressed. Safe to call unconditionally.
+    """
+    if not names:
+        return _call(_talos_host.releaseKeys)
+    for name in names:
+        _call(_talos_host.setKey, str(name), False)
 
 def look(yaw, pitch):
     """Snap the view to absolute yaw/pitch degrees (same convention as look_angle()).

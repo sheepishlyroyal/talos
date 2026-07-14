@@ -33,6 +33,11 @@ public final class ScriptCommandRegistry {
         return COMMANDS.containsKey(name);
     }
 
+    /** Immutable snapshot of every currently registered script-command name. */
+    public static java.util.Set<String> names() {
+        return java.util.Set.copyOf(COMMANDS.keySet());
+    }
+
     /** Queues one invocation onto the owning session; false when no live handler exists. */
     public static boolean dispatch(String name, String rawArgs) {
         TalosNativeBridge owner = COMMANDS.get(name);

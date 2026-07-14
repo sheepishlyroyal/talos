@@ -15,4 +15,7 @@
   <polygon points="8,8 14.5,4.5 14.5,6.1 8,9.6" fill="#4E8C2E"/>
   <polygon points="9.4,10.4 10.8,9.6 10.8,11 9.4,11.8" fill="#8A5A32"/>
   <polygon points="12,8.4 13.2,7.7 13.2,9 12,9.7" fill="#5C3A20"/>
+  <!-- run badge: play triangle, bottom-right, so the button reads as "run" -->
+  <circle cx="12.4" cy="12.4" r="3.4" fill="#2EA043" stroke="#1B5E20" stroke-width="0.5"/>
+  <polygon points="11.3,10.6 14.3,12.4 11.3,14.2" fill="#FFFFFF"/>
 </svg>

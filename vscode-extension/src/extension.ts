@@ -5,6 +5,9 @@ import { makePushScript, makeRun, makeStop, ServerToClientMessage } from './prot
 let connection: TalosConnection | undefined;
 let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
+/** Resolves the in-flight run's progress bar when the game acknowledges "running". */
+let pendingRunAck: (() => void) | undefined;
+
 /** Name of the script currently pushed/running, so stop/status messages read naturally. */
 let activeScriptName: string | undefined;
 
@@ -177,28 +180,54 @@ async function runScript(target?: vscode.TextDocument): Promise<void> {
 
     const conn = getConnection();
     outputChannel.show(true);
-
-    try {
-        if (conn.getState() !== 'connected') {
-            outputChannel.appendLine('[talos] Connecting...');
-            await connectAndWaitReady(conn);
-        }
-    } catch (err) {
-        void vscode.window.showErrorMessage(`Talos: ${errMessage(err)}`);
-        return;
-    }
-
     const name = scriptNameFor(doc.uri);
     const source = doc.getText();
 
-    try {
-        activeScriptName = name;
-        conn.send(makePushScript(name, source));
-        conn.send(makeRun(name));
-        outputChannel.appendLine(`[talos] Running "${name}"...`);
-    } catch (err) {
-        void vscode.window.showErrorMessage(`Talos: failed to send script: ${errMessage(err)}`);
-    }
+    // 0-100% loading bar: connect (40) -> push (35) -> game acknowledges "running" (25).
+    await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: `Talos: loading "${name}"`,
+        },
+        async (progress) => {
+            let percent = 0;
+            const report = (to: number, message: string) => {
+                progress.report({ increment: to - percent, message: `${message} — ${to}%` });
+                percent = to;
+            };
+            report(1, 'connecting');
+            try {
+                if (conn.getState() !== 'connected') {
+                    outputChannel.appendLine('[talos] Connecting...');
+                    await connectAndWaitReady(conn);
+                }
+            } catch (err) {
+                void vscode.window.showErrorMessage(`Talos: ${errMessage(err)}`);
+                return;
+            }
+            report(40, 'connected');
+
+            try {
+                activeScriptName = name;
+                conn.send(makePushScript(name, source));
+                report(75, 'script pushed');
+                const ack = new Promise<void>((resolve) => {
+                    pendingRunAck = resolve;
+                    setTimeout(resolve, 10_000); // never wedge the bar on a lost ack
+                });
+                conn.send(makeRun(name));
+                outputChannel.appendLine(`[talos] Running "${name}"...`);
+                await ack;
+                report(100, 'running');
+            } catch (err) {
+                void vscode.window.showErrorMessage(
+                    `Talos: failed to send script: ${errMessage(err)}`
+                );
+            } finally {
+                pendingRunAck = undefined;
+            }
+        }
+    );
 }
 
 async function stopScript(): Promise<void> {
@@ -240,6 +269,10 @@ function handleMessage(msg: ServerToClientMessage): void {
             break;
         case 'status':
             outputChannel.appendLine(`[talos] status: ${msg.state}`);
+            if (msg.state === 'running' && pendingRunAck) {
+                pendingRunAck();
+                pendingRunAck = undefined;
+            }
             break;
         case 'script_done':
             outputChannel.appendLine(

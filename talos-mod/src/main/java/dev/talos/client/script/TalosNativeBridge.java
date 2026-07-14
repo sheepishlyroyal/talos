@@ -254,6 +254,23 @@ public final class TalosNativeBridge {
         }));
     }
 
+    /**
+     * Press one logical key for exactly ONE game tick, then release it — the scripted
+     * equivalent of a quick physical tap. Press and release land on consecutive client
+     * ticks via a scheduler task (the tick that has already started never sees a
+     * zero-length press); the script worker blocks until the release happened, and the
+     * client thread never waits on anything.
+     */
+    @HostAccess.Export public String tapKey(String name) {
+        return await(game.submit(() -> {
+            KeyBinding key = keyBinding(requireWorld().options, name);
+            TapKeyTask task = new TapKeyTask(key, name);
+            // Empty mutex set: a tap never conflicts, so bypass the conflict scan.
+            TalosClient.taskScheduler().forceAddTask("script-tap-" + name, task);
+            return task.future;
+        }).thenCompose(f -> f));
+    }
+
     /** Releases every key {@link #setKey} can press; safe to call unconditionally. */
     @HostAccess.Export public void releaseKeys() {
         await(game.submit(() -> {
@@ -600,6 +617,32 @@ public final class TalosNativeBridge {
         }
         @Override public void onCompleted() { if (!future.isDone()) future.complete(null); }
         @Override public java.util.Set<Object> getMutexKeys() { return java.util.Set.of(ScanTask.INTENSIVE_MUTEX); }
+    }
+
+    /**
+     * One-tick key press: presses on its first scheduler pass and releases on the next,
+     * so the binding reads pressed for exactly one full client tick. No mutex keys —
+     * taps coexist with any running action, mirroring the queued-retry task in
+     * {@link #addTaskWhenFree}.
+     */
+    private static final class TapKeyTask extends SimpleTask {
+        private final KeyBinding key;
+        private final String name;
+        private final CompletableFuture<String> future = new CompletableFuture<>();
+        private boolean pressed;
+        private TapKeyTask(KeyBinding key, String name) { this.key = key; this.name = name; }
+        @Override public boolean condition() { return !future.isDone(); }
+        @Override protected void onTick() {
+            if (!pressed) { key.setPressed(true); pressed = true; return; }
+            key.setPressed(false);
+            future.complete("Tapped " + name);
+            _break();
+        }
+        @Override public void onCompleted() {
+            if (pressed) key.setPressed(false); // a cancelled tap must never leave the key held
+            if (!future.isDone()) future.completeExceptionally(new IllegalStateException("Tap cancelled"));
+        }
+        @Override public java.util.Set<Object> getMutexKeys() { return java.util.Set.of(); }
     }
 
     private abstract static class BridgeTask extends SimpleTask {

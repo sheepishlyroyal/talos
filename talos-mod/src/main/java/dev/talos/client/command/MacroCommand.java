@@ -3,14 +3,24 @@ package dev.talos.client.command;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import dev.talos.client.macro.MacroSystem;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import net.minecraft.command.CommandSource;
 import net.minecraft.text.Text;
 
 /** {@code /talos macro record|stop|play|list|delete}. */
 public final class MacroCommand {
     private MacroCommand() {}
+
+    /**
+     * Tab-completes saved macro names on {@code play}/{@code delete}/{@code export}
+     * (not {@code record}, whose name is new). {@link MacroSystem#list()} already
+     * returns an empty list when ~/.talos/macros is missing, so this never throws.
+     */
+    private static final SuggestionProvider<FabricClientCommandSource> MACRO_NAMES =
+            (context, builder) -> CommandSource.suggestMatching(MacroSystem.list(), builder);
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> node() {
         return ClientCommandManager.literal("macro")
@@ -46,6 +56,7 @@ public final class MacroCommand {
                 }))
                 .then(ClientCommandManager.literal("play")
                         .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                                .suggests(MACRO_NAMES)
                                 .executes(context -> play(context.getSource(),
                                         StringArgumentType.getString(context, "name"), 1, 0))
                                 .then(ClientCommandManager.argument("times", IntegerArgumentType.integer(1, 1000))
@@ -68,6 +79,7 @@ public final class MacroCommand {
                                                 })))))
                 .then(ClientCommandManager.literal("export")
                         .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                                .suggests(MACRO_NAMES)
                                 .executes(context -> {
                                     try {
                                         context.getSource().sendFeedback(Text.literal(
@@ -89,6 +101,7 @@ public final class MacroCommand {
                 }))
                 .then(ClientCommandManager.literal("delete")
                         .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                                .suggests(MACRO_NAMES)
                                 .executes(context -> {
                                     String name = StringArgumentType.getString(context, "name");
                                     if (MacroSystem.delete(name)) {

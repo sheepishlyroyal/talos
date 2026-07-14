@@ -6,12 +6,12 @@ from .actions import (goto, goto_near, goto_xz, set_node_count, find_block, find
                       find_item, place_block, place_look, break_block, mine, mine_looking_at,
                       left_click, right_click, select_slot, click_slot, container_slot_count,
                       move_stack, take_stack, armor_item, equip_armor, kill_nearest, look_at,
-                      player_pos, player_feet, key, release_keys, look, look_angle,
+                      player_pos, player_feet, key, tap, release_keys, look, look_angle,
                       looking_at, block_at, on_edge, input, Pos, Entity)
 from .engine import (on_start, on_tick, task, start, run, cancel_all, sleep, ticks,
                      next_tick, tick_count, aio, TaskHandle, command)
 from .events import on
-from .humanize import wait_between, set_profile, set_seed
+from .humanize import wait, wait_between, set_profile, set_seed
 
 import base64 as _base64
 import marshal as _marshal
@@ -112,9 +112,9 @@ __all__ = ["goto", "goto_near", "goto_xz", "set_node_count", "find_block", "find
            "find_item", "place_block", "place_look", "break_block", "mine", "mine_looking_at",
            "left_click", "right_click", "select_slot", "click_slot", "container_slot_count",
            "move_stack", "take_stack", "armor_item", "equip_armor", "kill_nearest", "look_at",
-           "player_pos", "player_feet", "key", "release_keys", "look", "look_angle",
+           "player_pos", "player_feet", "key", "tap", "release_keys", "look", "look_angle",
            "looking_at", "block_at", "on_edge", "input", "Pos", "Entity", "log",
-           "wait_between", "set_profile", "set_seed", "on", "parallel", "spawn", "command",
+           "wait", "wait_between", "set_profile", "set_seed", "on", "parallel", "spawn", "command",
            "on_start", "on_tick", "task", "start", "run", "cancel_all",
            "sleep", "ticks", "next_tick", "tick_count", "aio", "TaskHandle",
            "TalosError", "PathFailedError", "OutOfReachError", "NotFoundError",

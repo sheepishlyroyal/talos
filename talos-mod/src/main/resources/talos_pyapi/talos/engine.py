@@ -418,9 +418,17 @@ class _Aio:
         return _submit(_talos_host.submitKillNearest, float(radius))
 
     @staticmethod
-    def wait_between(a, b):
-        """Awaitable talos.wait_between: humanized random pause, other tasks keep running."""
+    def wait(a, b=None):
+        """Awaitable talos.wait: pause for `a` seconds (or a humanized random
+        duration in [a, b] when `b` is given); other tasks keep running."""
+        if b is None:
+            return sleep(float(a))
         return sleep(_errors.call(_talos_host.randomBetween, float(a), float(b)))
+
+    @staticmethod
+    def wait_between(a, b):
+        """Awaitable humanized random pause. Alias of talos.aio.wait(a, b)."""
+        return _Aio.wait(a, b)
 
     @staticmethod
     def input(prompt="Script is waiting for input"):

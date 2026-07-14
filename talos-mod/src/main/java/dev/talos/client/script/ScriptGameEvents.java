@@ -46,4 +46,28 @@ public final class ScriptGameEvents {
         ScriptEngine engine = ScriptEngine.instance();
         if (engine.hasRunningSession()) engine.postEvent("item_pickup", itemId, amount);
     }
+
+    /*
+     * Goto lifecycle hooks from the pathing engine. Same contract as the hooks above:
+     * client-thread callers, primitive payloads only, and postEvent queues the actual
+     * Python dispatch onto each session's worker thread.
+     */
+
+    /** A goto run was accepted and is about to plan toward (x, y, z). */
+    public static void onGotoStart(int x, int y, int z) {
+        ScriptEngine engine = ScriptEngine.instance();
+        if (engine.hasRunningSession()) engine.postEvent("goto_start", x, y, z);
+    }
+
+    /** The goto run finished — success covers cancellation and failure alike (false). */
+    public static void onGotoDone(boolean success, String detail) {
+        ScriptEngine engine = ScriptEngine.instance();
+        if (engine.hasRunningSession()) engine.postEvent("goto_done", success, detail);
+    }
+
+    /** A follower segment failed mid-run; the engine is about to replan, not give up. */
+    public static void onGotoStuck(String detail) {
+        ScriptEngine engine = ScriptEngine.instance();
+        if (engine.hasRunningSession()) engine.postEvent("goto_stuck", detail);
+    }
 }

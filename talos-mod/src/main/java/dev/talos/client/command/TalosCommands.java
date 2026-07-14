@@ -10,9 +10,18 @@ import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import dev.talos.client.script.ScriptCommandRegistry;
 import dev.talos.client.script.ScriptEngine;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.command.CommandSource;
 import net.minecraft.command.argument.IdentifierArgumentType;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
@@ -24,6 +33,37 @@ import net.minecraft.command.CommandRegistryAccess;
 public final class TalosCommands {
     private TalosCommands() {
     }
+
+    /**
+     * Tab-completes {@code /talos script run <name>} with the {@code *.py} files in
+     * {@code <gameDir>/talos/scripts} — the exact directory {@link ScriptEngine#run}
+     * resolves. Names are suggested WITHOUT the extension (run() accepts both forms).
+     * A missing directory just yields no suggestions, never an error.
+     */
+    private static final SuggestionProvider<FabricClientCommandSource> SCRIPT_NAMES =
+            (context, builder) -> {
+                List<String> names = new ArrayList<>();
+                Path scripts = FabricLoader.getInstance().getGameDir()
+                        .resolve("talos").resolve("scripts");
+                try (var files = Files.list(scripts)) {
+                    files.map(path -> path.getFileName().toString())
+                            .filter(name -> name.endsWith(".py"))
+                            .map(name -> name.substring(0, name.length() - 3))
+                            .sorted()
+                            .forEach(names::add);
+                } catch (IOException ignored) {
+                    // no scripts directory yet — suggest nothing
+                }
+                return CommandSource.suggestMatching(names, builder);
+            };
+
+    /** Tab-completes {@code /talos cmd <name>} with the currently registered script commands. */
+    private static final SuggestionProvider<FabricClientCommandSource> SCRIPT_COMMAND_NAMES =
+            (context, builder) -> CommandSource.suggestMatching(ScriptCommandRegistry.names(), builder);
+
+    /** Tab-completes {@code /talos example <name>} with the embedded reference scripts. */
+    private static final SuggestionProvider<FabricClientCommandSource> EXAMPLE_NAMES =
+            (context, builder) -> CommandSource.suggestMatching(TalosCommands.EXAMPLES.keySet(), builder);
 
     public static void register() {
         ClientCommandRegistrationCallback.EVENT.register(TalosCommands::registerCommands);
@@ -122,6 +162,7 @@ public final class TalosCommands {
                 .then(ClientCommandManager.literal("script")
                         .then(ClientCommandManager.literal("run")
                                 .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                                        .suggests(SCRIPT_NAMES)
                                         .executes(context -> {
                                             var source = context.getSource();
                                             String name = StringArgumentType.getString(context, "name");
@@ -186,10 +227,17 @@ public final class TalosCommands {
                 // doesn't collide with (or shadow) a built-in subcommand's argument shape.
                 .then(ClientCommandManager.literal("cmd")
                         .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                                .suggests(SCRIPT_COMMAND_NAMES)
                                 .executes(context -> runScriptCommand(context, ""))
                                 .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
                                         .executes(context -> runScriptCommand(
-                                                context, StringArgumentType.getString(context, "args")))))));
+                                                context, StringArgumentType.getString(context, "args"))))))
+                // `/talos example <name>` — write a commented reference script to
+                // talos/scripts/example_<name>.py (overwriting: they are reference material).
+                .then(ClientCommandManager.literal("example")
+                        .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                                .suggests(EXAMPLE_NAMES)
+                                .executes(TalosCommands::writeExample))));
     }
 
     /**
@@ -220,6 +268,177 @@ public final class TalosCommands {
                     + "' is registered — a running script must declare @talos.command(\"" + name + "\")"));
             return 0;
         }
+        return 1;
+    }
+
+    /**
+     * Reference script for {@code /talos example goto}: a pure-Python goto on raw
+     * primitives plus a {@code /talos goto} override that wraps the built-in — the
+     * essence of {@code custom_goto.py}, updated for talos.tap / talos.release_keys.
+     */
+    private static final String EXAMPLE_GOTO = """
+            # example_goto.py -- a pure-Python goto built on raw primitives, plus a
+            # /talos goto override. Reference material: /talos example goto rewrites it.
+            #
+            # Run:    /talos script run example_goto
+            # Then:   /talos pygoto <x> <y> <z>     (from-scratch goto, no pathfinder)
+            #         /talos goto <x> <y> <z>       (now routed through goto_override)
+            # Stop:   /talos script stop            (handlers unregister automatically)
+
+            import math
+            import talos
+
+            ARRIVE = 0.5        # horizontal distance (blocks) that counts as "arrived"
+            TURN_STEP = 12.0    # max yaw correction per tick -- small = smooth turning
+            STALL_TICKS = 8     # ticks without progress before we tap jump
+
+
+            def yaw_toward(feet, x, z):
+                # Minecraft yaw: 0 = south (+Z), 90 = west (-X) -- hence atan2(-dx, dz).
+                return math.degrees(math.atan2(-(x - feet.x), z - feet.z))
+
+
+            async def naive_goto(x, y, z):
+                # Once per tick: measure the offset, ease the yaw toward it, hold forward,
+                # and tap jump when the distance stops shrinking (a step or lip ahead).
+                tx, tz = x + 0.5, z + 0.5   # aim for the center of the target cell
+                best = None                 # closest distance reached so far
+                stall = 0                   # ticks since best last improved
+                try:
+                    while True:
+                        feet = talos.player_feet()
+                        dx, dz = tx - feet.x, tz - feet.z
+                        dist = (dx * dx + dz * dz) ** 0.5
+                        if dist <= ARRIVE:
+                            talos.log(f"pygoto: arrived ({dist:.2f} blocks from target)")
+                            return
+
+                        # Eased steering: shortest signed turn toward the target, clamped.
+                        yaw, _pitch = talos.look_angle()
+                        delta = (yaw_toward(feet, tx, tz) - yaw + 180.0) % 360.0 - 180.0
+                        step = max(-TURN_STEP, min(TURN_STEP, delta))
+                        talos.look(yaw + step, 15.0)  # slight downward pitch: watch our feet
+
+                        talos.key("forward")          # HELD until released -- see finally
+
+                        # Progress watchdog: a ~1-block step ahead stops us; tap jump.
+                        if best is None or dist < best - 0.05:
+                            best, stall = dist, 0
+                        else:
+                            stall += 1
+                            if stall >= STALL_TICKS:
+                                stall = 0
+                                talos.tap("jump")     # one tick, releases itself
+
+                        await talos.next_tick()       # one control decision per game tick
+                finally:
+                    talos.release_keys()              # never leave W held down
+
+
+            @talos.command("pygoto")
+            def pygoto(args):
+                # /talos pygoto <x> <y> <z> -- returning the coroutine starts it as a task,
+                # so chat (and other tasks) stay responsive while it walks.
+                if len(args) != 3:
+                    talos.log("usage: /talos pygoto <x> <y> <z>")
+                    return
+                x, y, z = (int(float(a)) for a in args)
+                talos.log(f"pygoto: walking to {x} {y} {z} (raw inputs, no pathfinder)")
+                return naive_goto(x, y, z)
+
+
+            @talos.command("goto")
+            def goto_override(args):
+                # Replaces /talos goto while this script runs. The built-in stays reachable
+                # as talos.goto / talos.aio.goto, so the override can prep, then delegate.
+                if len(args) != 3:
+                    talos.log("this override only handles /talos goto <x> <y> <z>")
+                    return
+                x, y, z = (int(float(a)) for a in args)
+
+                async def wrapped():
+                    # Custom prep goes here (speedbridging, scaffolding, logging, ...).
+                    result = await talos.aio.goto(x, y, z)  # the ORIGINAL goto, unchanged
+                    talos.log(f"goto override: built-in finished -- {result}")
+
+                return wrapped()
+
+
+            talos.log("example_goto loaded: /talos goto overridden, /talos pygoto added")
+            """;
+
+    /**
+     * Reference script for {@code /talos example farm}: a small find → goto → mine
+     * harvesting loop with humanized waits and a replanting hook.
+     */
+    private static final String EXAMPLE_FARM = """
+            # example_farm.py -- a tiny farming loop: find a crop, walk to it, harvest
+            # it, and wait a humanized moment before scanning again. Reference material:
+            # /talos example farm rewrites it.
+            #
+            # Run:    /talos script run example_farm
+            # Stop:   /talos script stop
+
+            import talos
+
+            # Crops to harvest, in preference order. Add "minecraft:carrots" etc. here.
+            CROPS = ["minecraft:sugar_cane", "minecraft:wheat"]
+
+
+            @talos.task
+            async def farm():
+                while True:
+                    target = None
+                    for crop in CROPS:
+                        target = await talos.aio.find_block(crop, 32)
+                        if target:
+                            break
+                    if target is None:
+                        talos.log("farm: nothing to harvest nearby, waiting...")
+                        await talos.aio.wait(2.0, 4.0)   # humanized pause between scans
+                        continue
+
+                    await talos.aio.goto_near(int(target.x), int(target.y), int(target.z), 2)
+                    await talos.aio.mine(target)
+
+                    # Replanting: for wheat, select the hotbar slot holding seeds and
+                    # place them back on the farmland, e.g.:
+                    #   talos.select_slot(0)                          # slot with seeds
+                    #   talos.place_block(target.x, target.y, target.z)
+                    # Sugar cane regrows from the stump, so it needs no replant.
+
+                    await talos.aio.wait(0.4, 0.9)       # human-ish pause per harvest
+            """;
+
+    /** Embedded reference scripts served by {@code /talos example <name>}. */
+    private static final Map<String, String> EXAMPLES =
+            Map.of("goto", EXAMPLE_GOTO, "farm", EXAMPLE_FARM);
+
+    /**
+     * Writes the named reference script to {@code <gameDir>/talos/scripts/example_<name>.py}
+     * (the directory {@link ScriptEngine#run} loads from), overwriting any previous copy —
+     * examples are reference material, not user state.
+     */
+    private static int writeExample(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
+        String name = StringArgumentType.getString(context, "name");
+        String body = EXAMPLES.get(name);
+        if (body == null) {
+            context.getSource().sendError(Text.literal("No example '" + name + "' — available: "
+                    + String.join(", ", EXAMPLES.keySet().stream().sorted().toList())));
+            return 0;
+        }
+        Path scripts = FabricLoader.getInstance().getGameDir().resolve("talos").resolve("scripts");
+        Path file = scripts.resolve("example_" + name + ".py");
+        try {
+            Files.createDirectories(scripts);
+            Files.writeString(file, body);
+        } catch (IOException error) {
+            context.getSource().sendError(Text.literal("Could not write example: " + error.getMessage()));
+            return 0;
+        }
+        context.getSource().sendFeedback(Text.literal("Wrote talos/scripts/example_" + name
+                + ".py — run it with /talos script run example_" + name));
         return 1;
     }
 
