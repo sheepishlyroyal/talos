@@ -59,10 +59,12 @@ public final class PlayerMotion {
 
         Vec3d velocity = state.velocity().add(inputVelocity(input, acceleration));
 
-        // Vanilla LivingEntity jump velocity is 0.42 for an unmodified player. Entity's
+        // Vanilla LivingEntity jump velocity is 0.42 for an unmodified player, scaled by the
+        // block's jump multiplier (honey/soul-sand-family jumps are stunted). Entity's
         // sprint jump impulse is (-sin(yaw)*0.2, 0, cos(yaw)*0.2).
         if (input.jump() && state.onGround() && fluid == MotionState.Fluid.NONE) {
-            velocity = new Vec3d(velocity.x, profile.jumpVelocity(), velocity.z);
+            velocity = new Vec3d(velocity.x,
+                    profile.jumpVelocity() * jumpMultiplier(world, state.position()), velocity.z);
             if (input.sprint()) {
                 double radians = input.yaw() * (Math.PI / 180.0);
                 velocity = velocity.add(-MathHelper.sin(radians) * SPRINT_JUMP_IMPULSE, 0.0,
@@ -101,6 +103,15 @@ public final class PlayerMotion {
         double vx = clampedX ? 0.0 : resolved.x;
         double vy = clampedY ? 0.0 : resolved.y;
         double vz = clampedZ ? 0.0 : resolved.z;
+
+        // Mirrors Entity.move()'s tail: the standing block's velocity multiplier bleeds
+        // speed every tick (soul sand / honey 0.4x) BEFORE the friction pass — without it
+        // the sim predicted full-speed sprints across soul sand.
+        if (fluid == MotionState.Fluid.NONE) {
+            double multiplier = velocityMultiplier(world, newPosition);
+            vx *= multiplier;
+            vz *= multiplier;
+        }
 
         // Mirrors vanilla travel's post-move drag/gravity ordering. Ground friction is the
         // block's Block.getSlipperiness() times 0.91; air uses 0.91. Water/lava are documented
@@ -197,6 +208,27 @@ public final class PlayerMotion {
             }
         }
         return result;
+    }
+
+    /**
+     * Vanilla Entity.getVelocityMultiplier(): the block AT the feet governs (soul sand,
+     * honey, cobweb-family = 0.4-ish); only when it is neutral does the block below apply.
+     */
+    private static double velocityMultiplier(World world, Vec3d position) {
+        BlockPos feet = BlockPos.ofFloored(position);
+        float at = world.getBlockState(feet).getBlock().getVelocityMultiplier();
+        if (at != 1.0F) return at;
+        BlockPos below = BlockPos.ofFloored(position.x, position.y - 0.5000001, position.z);
+        return world.getBlockState(below).getBlock().getVelocityMultiplier();
+    }
+
+    /** Vanilla LivingEntity jump scaling: honey and friends stunt the jump to half height. */
+    private static double jumpMultiplier(World world, Vec3d position) {
+        BlockPos feet = BlockPos.ofFloored(position);
+        float at = world.getBlockState(feet).getBlock().getJumpVelocityMultiplier();
+        if (at != 1.0F) return at;
+        BlockPos below = BlockPos.ofFloored(position.x, position.y - 0.5000001, position.z);
+        return world.getBlockState(below).getBlock().getJumpVelocityMultiplier();
     }
 
     /** Slipperiness of the block under these feet (0.6 normal ground, 0.98 ice). */

@@ -69,6 +69,7 @@ public final class SimFollowTask extends TalosTask {
     // jump arcs) must not trap the follower in circles around them.
     private double closestApproach = Double.POSITIVE_INFINITY;
     private int recedeTicks;
+    private int lastExtensionTick = -1000;
     // Humanized steering state: the view follows the route with bounded, eased turns
     // plus profile-scaled noise instead of snapping.
     private final SeededRng steerRng = new SeededRng(System.nanoTime());
@@ -99,6 +100,15 @@ public final class SimFollowTask extends TalosTask {
     /** Hot-swap in a fresher plan without releasing keys; passed waypoints self-advance. */
     public void swapRoute(PlannedRoute replacement) {
         if (replacement == null || replacement.waypoints().size() <= 1) return;
+        // Momentum guard: a fresh PARTIAL plan that isn't clearly better than the one being
+        // followed is not worth the course reset it causes — swapping near-equals every
+        // second was the visible "predicting itself out of its own path" stutter. A plan
+        // that actually reaches the goal always wins; otherwise swap only when the current
+        // route is close to running out.
+        if (!replacement.reachedGoal() && route.waypoints().size() - index > 16) {
+            replanRequested = false; // allow a later, deeper extension attempt
+            return;
+        }
         // The search began from a snapshot several ticks old, so the route's early waypoints
         // are typically behind the player by now. Fast-forward to the first waypoint AFTER
         // the nearest one, or the follower would steer backwards onto the stale prefix.
@@ -145,10 +155,12 @@ public final class SimFollowTask extends TalosTask {
             return;
         }
         // A PARTIAL route means the planner ran out of budget, not that the route is good:
-        // start extending IMMEDIATELY in the background — waiting until the route nearly
-        // ran out was the visible walk-a-few-steps-then-stop-and-plan stutter.
-        if (!route.reachedGoal() && replanRequest != null && !replanRequested) {
+        // extend in the background while moving. Rate-limited so back-to-back searches
+        // don't churn plans faster than the follower can consume them.
+        if (!route.reachedGoal() && replanRequest != null && !replanRequested
+                && ticks - lastExtensionTick >= 25) {
             replanRequested = true;
+            lastExtensionTick = ticks;
             replanRequest.run();
         }
         if (index >= route.waypoints().size()) {

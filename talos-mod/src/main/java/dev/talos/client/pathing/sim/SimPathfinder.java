@@ -173,13 +173,16 @@ public final class SimPathfinder {
                 add(result, rollout(world, node, profile, opts, Primitive.WALK, direction,
                         new Input(1.0F, 0.0F, false, false, false, yaw), false, false));
             }
-            // Jump arcs are billed a flat surcharge so the plan only contains SPRINT_JUMP
-            // where it is genuinely required (gaps, climbs) — being a tick or two faster on
-            // open ground is not worth the convoluted zigzag routes time-optimal arcs create.
-            // Opportunistic hops on flat runs are the follower's on-the-go decision instead.
-            Edge arc = rollout(world, node, profile, opts, Primitive.SPRINT_JUMP, direction,
-                    new Input(1.0F, 0.0F, true, true, false, yaw), true, false);
-            add(result, arc == null ? null : arc.withAddedCost(6.0));
+            // Jump arcs are attempted ONLY where plain sprinting failed (a gap or ledge cut
+            // the sprint rollout short). This is both the semantics we want — jumps appear
+            // in plans only where they're required; flat-ground hops are the follower's
+            // on-the-go decision — and the single biggest planning speedup: arc rollouts
+            // are the longest simulations, and this skips all 8 of them on open ground.
+            if (sprint == null) {
+                Edge arc = rollout(world, node, profile, opts, Primitive.SPRINT_JUMP, direction,
+                        new Input(1.0F, 0.0F, true, true, false, yaw), true, false);
+                add(result, arc == null ? null : arc.withAddedCost(6.0));
+            }
 
             MotionState fluidStart = withPose(node.state(), MotionState.Pose.SWIM);
             // Merely wet feet do not enable vanilla's compact swimming movement. A new swim
