@@ -344,7 +344,10 @@ public final class SimFollowTask extends TalosTask {
             double simYaw = client.player.getYaw();
             double simVel = yawVelocity;
             double accel = turnAccel();
-            for (int tick = 0; tick < ROLLOUT_TICKS; tick++) {
+            // Ice's consequences play out over dozens of ticks; a 6-tick window scored the
+            // slide as fine because the overshoot hadn't HAPPENED yet inside the window.
+            int horizon = drag > 0.62 ? ROLLOUT_TICKS * 3 : ROLLOUT_TICKS;
+            for (int tick = 0; tick < horizon; tick++) {
                 double[] view = steerStep(simYaw, simVel, candidate.yaw(), accel, jitterAt(tick));
                 simYaw = view[0];
                 simVel = view[1];
@@ -365,8 +368,23 @@ public final class SimFollowTask extends TalosTask {
                 }
                 oldDistance = distance;
             }
-            MotionState landing = approachingFinal && (!live.onGround() || candidate.jump())
+            MotionState landing = (candidate.jump() && live.onGround())
+                    || (approachingFinal && !live.onGround())
                     ? predictLanding(live, candidate, profile) : null;
+            // A jump is committed the tick it launches: it must be simulated THROUGH its
+            // landing before being chosen. No safe landing within the horizon, a landing in
+            // a hole, or a landing far off the route line disqualifies the launch — this is
+            // what stops jumps the player cannot actually make.
+            if (candidate.jump() && live.onGround()) {
+                if (landing == null) {
+                    score -= 400.0;
+                } else {
+                    if (landing.position().y < Math.min(from.y, waypoint.position().y) - 2.5) {
+                        score -= 300.0;
+                    }
+                    score -= distanceToSegment(landing.position(), from, waypoint.position()) * 6.0;
+                }
+            }
             if (landing != null && approachingFinal) {
                 score -= overshoot(landing.position(), finalFrom, finalTarget) * 220.0;
             }

@@ -355,23 +355,24 @@ public final class TalosPathingEngine implements PathingEngine {
     private static int lastRenderedRouteNodes;
 
     /**
-     * Blue boxes are CHECKPOINTS, not the whole plan: rendering every rollout endpoint made
-     * the route read as visual noise with no discernible order. Draw sparse ordered marks —
-     * every few waypoints, every edit/turn, and always the goal — while steering still
-     * consumes the full-resolution route.
+     * Checkpoint boxes mark MODE CHANGES: a box appears wherever the movement primitive
+     * switches (walk -> sprint-jump, sprint -> swim, ...), colored by what to do there,
+     * plus a sparse cadence on long same-mode stretches and always the goal. Steering
+     * still consumes the full-resolution route.
      */
     private static void renderRouteNodes(PlannedRoute route) {
-        final int waypointColor = 0x66CCFF; // Keep route boxes distinct from orange predictions.
         int count = route.waypoints().size();
         int drawn = 0;
+        dev.talos.client.pathing.sim.Primitive previous = null;
         for (int i = 0; i < count; i++) {
             PlannedRoute.Waypoint waypoint = route.waypoints().get(i);
-            boolean edit = waypoint.via() == dev.talos.client.pathing.sim.Primitive.MINE
-                    || waypoint.via() == dev.talos.client.pathing.sim.Primitive.PLACE;
-            if (i != count - 1 && !edit && i % 4 != 0) continue;
+            var via = waypoint.via();
+            boolean transition = i == 0 || via != previous;
+            previous = via;
+            if (i != count - 1 && !transition && i % 6 != 0) continue;
             RenderQueue.add("talos-path-node:" + drawn++,
                     MotionState.box(waypoint.pose(), waypoint.position()),
-                    waypointColor, 20 * 30);
+                    modeColor(via), 20 * 30);
         }
         count = drawn;
         // Two overlapping plans on screen read as the pathfinder having "two ideas": always
@@ -380,6 +381,20 @@ public final class TalosPathingEngine implements PathingEngine {
             RenderQueue.remove("talos-path-node:" + i);
         }
         lastRenderedRouteNodes = count;
+    }
+
+    /** One color per movement mode, so a checkpoint box says WHAT to do there at a glance. */
+    private static int modeColor(dev.talos.client.pathing.sim.Primitive via) {
+        if (via == null) return 0x66CCFF;
+        return switch (via) {
+            case WALK, DROP -> 0x66CCFF;        // cyan: plain movement
+            case SPRINT -> 0x33AAFF;            // stronger blue: sprint
+            case SPRINT_JUMP, STEP_UP -> 0x66FF88; // green: a jump/climb happens here
+            case SWIM -> 0x3355FF;              // deep blue: swimming leg
+            case CRAWL -> 0xCCCCFF;             // pale: crawl
+            case MINE -> 0xFF9955;              // orange-brown: dig here
+            case PLACE -> 0xCC66FF;             // purple: place/bridge here
+        };
     }
 
     private static GoalSnapshot snapshotGoal(Goal goal, MinecraftClient client) {
