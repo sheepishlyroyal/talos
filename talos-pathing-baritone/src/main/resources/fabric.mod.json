@@ -7,6 +7,6 @@
   "entrypoints": {
     "talos:pathing_engine": ["dev.talos.pathing.baritone.BaritoneEngineProvider"]
   },
-  "depends": { "fabricloader": ">=0.19.3", "minecraft": "~1.21.11", "talos": "*" },
+  "depends": { "fabricloader": ">=0.19.3", "minecraft": "~26.1", "talos": "*" },
   "suggests": { "baritone": "*" }
 }

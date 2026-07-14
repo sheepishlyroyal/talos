@@ -1,18 +1,25 @@
 plugins {
-    id("fabric-loom")
+    id("net.fabricmc.fabric-loom")
 }
 
-java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
+// MC 26.1 targets Java 25. Only JDK 26 is installed locally, which compiles --release 25
+// fine; keep the release floor at 25 rather than pinning an exact toolchain that Gradle
+// would then try to auto-provision.
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+tasks.withType<JavaCompile>().configureEach { options.release.set(25) }
 
 loom {
     accessWidenerPath = file("src/main/resources/talos.accesswidener")
 }
 
 dependencies {
+    // 26.1 is unobfuscated: official Mojang mappings, no Yarn line, non-mod dependency scopes.
     minecraft("com.mojang:minecraft:${property("minecraft_version")}")
-    mappings("net.fabricmc:yarn:${property("yarn_mappings")}:v2")
-    modImplementation("net.fabricmc:fabric-loader:${property("fabric_loader_version")}")
-    modImplementation("net.fabricmc.fabric-api:fabric-api:${property("fabric_api_version")}")
+    implementation("net.fabricmc:fabric-loader:${property("fabric_loader_version")}")
+    implementation("net.fabricmc.fabric-api:fabric-api:${property("fabric_api_version")}")
     implementation(project(":talos-graalpy-runtime"))
     include(project(":talos-graalpy-runtime"))
     implementation("org.java-websocket:Java-WebSocket:1.5.7")

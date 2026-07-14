@@ -3,9 +3,11 @@ plugins {
 }
 
 java {
-    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
     withSourcesJar()
 }
+tasks.withType<JavaCompile>().configureEach { options.release.set(25) }
 
 dependencies {
     api("org.graalvm.polyglot:polyglot:${property("graalpy_version")}")

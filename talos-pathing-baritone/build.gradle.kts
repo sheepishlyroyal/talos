@@ -1,16 +1,21 @@
 plugins {
-    id("fabric-loom")
+    id("net.fabricmc.fabric-loom")
 }
 
-java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+tasks.withType<JavaCompile>().configureEach { options.release.set(25) }
 
 dependencies {
+    // 26.1: official Mojang mappings, no Yarn line, non-mod dependency scopes.
     minecraft("com.mojang:minecraft:${property("minecraft_version")}")
-    mappings("net.fabricmc:yarn:${property("yarn_mappings")}:v2")
-    modImplementation("net.fabricmc:fabric-loader:${property("fabric_loader_version")}")
-    // talos-mod is a separate installed mod at runtime; compile against its named classes only
-    // (plain compileOnly avoids Loom's mod-remapper reading talos-mod's not-yet-built dev jar).
-    compileOnly(project(path = ":talos-mod", configuration = "namedElements"))
+    implementation("net.fabricmc:fabric-loader:${property("fabric_loader_version")}")
+    // talos-mod is a separate installed mod at runtime; compile against its classes only.
+    // 26.1's non-remap Loom has no `namedElements` variant (nothing is remapped), so this is
+    // now a plain project dependency.
+    compileOnly(project(":talos-mod"))
     // Baritone is an optional, separately-installed LGPL mod with no resolvable 1.21.11 artifact.
     // It is accessed purely via reflection in BaritonePathingEngine (no compile-time dependency).
 }

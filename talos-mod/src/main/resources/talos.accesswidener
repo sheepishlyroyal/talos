@@ -1,6 +1,12 @@
-accessWidener v2 named
+accessWidener v2 official
 
-# P4a UI spike: GuiRenderState.addSimpleElement() is public, but the DrawContext
-# field holding the frame's state is package-private and vanilla exposes no other
-# entry point for custom SimpleGuiElementRenderState implementations.
-accessible field net/minecraft/client/gui/DrawContext state Lnet/minecraft/client/gui/render/state/GuiRenderState;
+# PORT NOTE (26.1): 26.1 is unobfuscated, so the namespace is `official` and every
+# entry must use official Mojang names. The one real entry is temporarily removed so
+# Loom can configure and genSources can run; restore it with official names during the
+# migration (DrawContext -> GuiGraphics in official mappings):
+#
+#   accessible field <GuiGraphics-official> state L<GuiRenderState-official>;
+#
+# Original (Yarn) entry, for reference — P4a UI spike, exposing the package-private
+# per-frame GuiRenderState field for custom SimpleGuiElementRenderState renderers:
+#   accessible field net/minecraft/client/gui/DrawContext state Lnet/minecraft/client/gui/render/state/GuiRenderState;
