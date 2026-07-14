@@ -10,7 +10,7 @@ from .actions import (goto, goto_near, goto_xz, set_node_count, find_block, find
                       player_pos, player_feet, key, tap, release_keys, look, look_angle,
                       looking_at, block_at, on_edge, input, inventory, hotbar, selected_slot,
                       count, has, find_slot, container_items, deposit, withdraw, craft,
-                      screen, close_screen, Pos, Entity, Player)
+                      screen, close_screen, hud, hud_remove, hud_clear, Pos, Entity, Player)
 from .engine import (on_start, on_tick, task, every, start, run, cancel_all, sleep, ticks,
                      next_tick, tick_count, aio, TaskHandle, command, state)
 from .events import on
@@ -125,7 +125,8 @@ __all__ = ["goto", "goto_near", "goto_xz", "set_node_count", "find_block", "find
            "player_pos", "player_feet", "key", "tap", "release_keys", "look", "look_angle",
            "looking_at", "block_at", "on_edge", "input", "inventory", "hotbar", "selected_slot",
            "count", "has", "find_slot", "container_items", "deposit", "withdraw", "craft",
-           "screen", "close_screen", "Pos", "Entity", "Player", "log",
+           "screen", "close_screen", "hud", "hud_remove", "hud_clear",
+           "Pos", "Entity", "Player", "log",
            "wait", "wait_between", "set_profile", "set_seed", "on", "parallel", "spawn", "command",
            "on_start", "on_tick", "task", "every", "start", "run", "cancel_all",
            "sleep", "ticks", "next_tick", "tick_count", "aio", "TaskHandle", "state",

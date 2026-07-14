@@ -31,6 +31,7 @@ public final class TalosClientMod implements ClientModInitializer {
         TalosBridge.start();
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> TalosBridge.stop());
         RenderQueue.register();
+        dev.talos.client.hud.TalosHud.register();
         dev.talos.client.rules.EventRuleEngine.register();
         dev.talos.client.macro.MacroSystem.register();
         ClientTickEvents.START_CLIENT_TICK.register(client -> {

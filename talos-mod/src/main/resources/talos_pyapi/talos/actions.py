@@ -515,3 +515,23 @@ def on_edge(margin=0.3):
     fx = feet.x % 1.0  # fractional position inside the cell, 0..1
     fz = feet.z % 1.0
     return min(fx, 1.0 - fx) < margin or min(fz, 1.0 - fz) < margin
+
+def hud(text, id="hud"):
+    """Pin a line of text to the on-screen overlay (top-left).
+
+    Repeated calls with the same id update the line in place; different ids
+    stack in first-set order (max 20 lines, 256 chars each). Legacy `§` color
+    codes work. The overlay is cleared automatically when the script stops.
+
+        talos.hud(f"mined {count} / {goal}")
+        talos.hud("§eidle", id="state")
+    """
+    _talos_host.hudSet(str(id), str(text))
+
+def hud_remove(id="hud"):
+    """Remove one overlay line by id; safe when the id was never set."""
+    _talos_host.hudRemove(str(id))
+
+def hud_clear():
+    """Remove every overlay line."""
+    _talos_host.hudClear()

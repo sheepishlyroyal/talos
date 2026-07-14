@@ -2,7 +2,7 @@
   "name": "talos",
   "displayName": "Talos Scripting",
   "description": "Push and run Python automation scripts against the Talos Minecraft Fabric mod over a local WebSocket, with live log streaming.",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "publisher": "talos",
   "private": true,
   "engines": {

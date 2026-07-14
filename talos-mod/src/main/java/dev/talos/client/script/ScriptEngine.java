@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.graalvm.polyglot.Value;
+import dev.talos.client.hud.TalosHud;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.MutableText;
@@ -304,6 +305,7 @@ public final class ScriptEngine {
 
     private final class Session {
         private final int id;
+        private final boolean primary;
         private final LogSink outputSink;
         private volatile LogSink baseSink;
         private final AtomicReference<State> state = new AtomicReference<>(State.RUNNING);
@@ -317,6 +319,7 @@ public final class ScriptEngine {
 
         private Session(int id, LogSink sink, boolean primary) {
             this.id = id;
+            this.primary = primary;
             this.baseSink = sink == null ? CHAT : sink;
             this.outputSink = primary ? this.baseSink
                     : (level, text) -> this.baseSink.log(level, "[Talos:" + id + "] " + text);
@@ -584,6 +587,9 @@ public final class ScriptEngine {
             for (CompletableFuture<?> future : List.copyOf(pending))
                 future.completeExceptionally(new CancellationException("Talos script session stopped"));
             events.clear();
+            // Child (spawned) sessions leave the overlay alone: it is shared state the
+            // primary script may still be driving.
+            if (primary) TalosHud.clear();
             state.set(State.STOPPED);
             sessions.remove(id, this);
         }

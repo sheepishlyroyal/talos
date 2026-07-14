@@ -5,6 +5,7 @@ import dev.talos.client.action.ActionResult;
 import dev.talos.client.action.BreakBlockAction;
 import dev.talos.client.action.KillEntityAction;
 import dev.talos.client.action.PlaceBlockAction;
+import dev.talos.client.hud.TalosHud;
 import dev.talos.client.humanize.HumanizationProfile;
 import dev.talos.client.humanize.RotationHumanizer;
 import dev.talos.client.pathing.Goal;
@@ -655,6 +656,9 @@ public final class TalosNativeBridge {
         return a + random.nextDouble() * (b - a);
     }
     @HostAccess.Export public void on(String event, org.graalvm.polyglot.Value handler) { events.register(event, handler); }
+    @HostAccess.Export public void hudSet(String id, String text) { TalosHud.set(id, text); }
+    @HostAccess.Export public void hudRemove(String id) { TalosHud.remove(id); }
+    @HostAccess.Export public void hudClear() { TalosHud.clear(); }
 
     /**
      * Claims {@code /talos <name>} for this session. Only the NAME crosses the boundary:

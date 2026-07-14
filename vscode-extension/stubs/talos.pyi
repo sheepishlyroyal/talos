@@ -368,6 +368,22 @@ def close_screen() -> None:
     """Close whatever screen is open; safe when none is."""
     ...
 
+def hud(text: str, id: str = "hud") -> None:
+    """Pin a line of text to the on-screen overlay (top-left).
+
+    Repeated calls with the same id update the line in place; different ids
+    stack in first-set order (max 20 lines, 256 chars each). Legacy `§` color
+    codes work. The overlay is cleared automatically when the script stops."""
+    ...
+
+def hud_remove(id: str = "hud") -> None:
+    """Remove one overlay line by id; safe when the id was never set."""
+    ...
+
+def hud_clear() -> None:
+    """Remove every overlay line."""
+    ...
+
 def armor_item(slot: str) -> str:
     """Item id equipped in helmet/chestplate/leggings/boots."""
     ...
