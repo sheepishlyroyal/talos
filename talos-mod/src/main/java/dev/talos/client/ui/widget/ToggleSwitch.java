@@ -6,9 +6,8 @@ import dev.talos.client.ui.draw.TalosUi;
 import dev.talos.client.ui.theme.ColorUtil;
 import dev.talos.client.ui.theme.Theme;
 import dev.talos.client.ui.theme.ThemePalette;
-import net.minecraft.client.gui.DrawContext;
-
 import java.util.function.Consumer;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 
 /** A pill-shaped on/off switch: track color and knob position both animate toward the current value. */
 public final class ToggleSwitch extends Widget {
@@ -34,7 +33,7 @@ public final class ToggleSwitch extends Widget {
     }
 
     @Override
-    protected void renderWidget(DrawContext ctx, int mouseX, int mouseY, float deltaTicks) {
+    protected void renderWidget(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float deltaTicks) {
         hoverAnim.setDirection(hovered ? Animation.Direction.FORWARDS : Animation.Direction.BACKWARDS);
 
         float onAmount = valueAnim.getValue();

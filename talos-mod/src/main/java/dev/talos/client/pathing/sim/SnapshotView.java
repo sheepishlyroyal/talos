@@ -2,23 +2,23 @@ package dev.talos.client.pathing.sim;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import java.util.List;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.block.entity.BlockEntity;
-import net.minecraft.entity.Entity;
-import net.minecraft.fluid.FluidState;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.ChunkSectionPos;
-import net.minecraft.util.shape.VoxelShape;
-import net.minecraft.world.BlockView;
-import net.minecraft.world.CollisionView;
-import net.minecraft.world.World;
-import net.minecraft.world.border.WorldBorder;
-import net.minecraft.world.chunk.Chunk;
-import net.minecraft.world.chunk.ChunkSection;
-import net.minecraft.world.chunk.ChunkStatus;
-import net.minecraft.world.chunk.PalettedContainer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.CollisionGetter;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.border.WorldBorder;
+import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.PalettedContainer;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
  * An immutable copy of a region of the live world, captured on the client thread and then
@@ -32,7 +32,7 @@ import net.minecraft.world.chunk.PalettedContainer;
  * region is inflated well past the search's funneled sub-goal, so honest searches never
  * reach the edge; the corridor's loaded-chunk clamping remains the fiction guard.</p>
  */
-public final class SnapshotView implements CollisionView {
+public final class SnapshotView implements CollisionGetter {
     private final Long2ObjectOpenHashMap<PalettedContainer<BlockState>> sections;
     private final int bottomY;
     private final int height;
@@ -46,40 +46,40 @@ public final class SnapshotView implements CollisionView {
     }
 
     /** Captures {@code [min, max]} (inclusive, clamped to world Y). Client thread only. */
-    public static SnapshotView capture(World world, BlockPos min, BlockPos max) {
-        int minSectionY = Math.max(ChunkSectionPos.getSectionCoord(min.getY()),
-                ChunkSectionPos.getSectionCoord(world.getBottomY()));
-        int maxSectionY = Math.min(ChunkSectionPos.getSectionCoord(max.getY()),
-                ChunkSectionPos.getSectionCoord(world.getBottomY() + world.getHeight() - 1));
+    public static SnapshotView capture(Level world, BlockPos min, BlockPos max) {
+        int minSectionY = Math.max(SectionPos.blockToSectionCoord(min.getY()),
+                SectionPos.blockToSectionCoord(world.getMinY()));
+        int maxSectionY = Math.min(SectionPos.blockToSectionCoord(max.getY()),
+                SectionPos.blockToSectionCoord(world.getMinY() + world.getHeight() - 1));
         int minChunkX = min.getX() >> 4, maxChunkX = max.getX() >> 4;
         int minChunkZ = min.getZ() >> 4, maxChunkZ = max.getZ() >> 4;
         Long2ObjectOpenHashMap<PalettedContainer<BlockState>> sections =
                 new Long2ObjectOpenHashMap<>();
         for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
             for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
-                Chunk chunk = world.getChunkManager()
+                ChunkAccess chunk = world.getChunkSource()
                         .getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
                 if (chunk == null) continue; // not streamed: reads stay air, as live reads did
                 for (int sectionY = minSectionY; sectionY <= maxSectionY; sectionY++) {
-                    int index = chunk.sectionCoordToIndex(sectionY);
-                    ChunkSection[] array = chunk.getSectionArray();
+                    int index = chunk.getSectionIndexFromSectionY(sectionY);
+                    LevelChunkSection[] array = chunk.getSections();
                     if (index < 0 || index >= array.length || array[index] == null) continue;
-                    if (array[index].isEmpty()) continue; // pure air: the default answer
-                    sections.put(ChunkSectionPos.asLong(chunkX, sectionY, chunkZ),
-                            array[index].getBlockStateContainer().copy());
+                    if (array[index].hasOnlyAir()) continue; // pure air: the default answer
+                    sections.put(SectionPos.asLong(chunkX, sectionY, chunkZ),
+                            array[index].getStates().copy());
                 }
             }
         }
-        return new SnapshotView(sections, world.getBottomY(), world.getHeight());
+        return new SnapshotView(sections, world.getMinY(), world.getHeight());
     }
 
     /** Number of copied sections — surfaced for capture-cost logging. */
     public int sectionCount() { return sections.size(); }
 
     @Override public BlockState getBlockState(BlockPos pos) {
-        PalettedContainer<BlockState> section = sections.get(ChunkSectionPos.asLong(
-                pos.getX() >> 4, ChunkSectionPos.getSectionCoord(pos.getY()), pos.getZ() >> 4));
-        if (section == null) return Blocks.AIR.getDefaultState();
+        PalettedContainer<BlockState> section = sections.get(SectionPos.asLong(
+                pos.getX() >> 4, SectionPos.blockToSectionCoord(pos.getY()), pos.getZ() >> 4));
+        if (section == null) return Blocks.AIR.defaultBlockState();
         return section.get(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
     }
 
@@ -89,11 +89,11 @@ public final class SnapshotView implements CollisionView {
 
     @Override public BlockEntity getBlockEntity(BlockPos pos) { return null; }
     @Override public int getHeight() { return height; }
-    @Override public int getBottomY() { return bottomY; }
+    @Override public int getMinY() { return bottomY; }
     @Override public WorldBorder getWorldBorder() { return border; }
-    @Override public BlockView getChunkAsView(int chunkX, int chunkZ) { return this; }
+    @Override public BlockGetter getChunkForCollisions(int chunkX, int chunkZ) { return this; }
     /** Entity boxes are live-only concerns; the planner ignores them like FakeWorld does. */
-    @Override public List<VoxelShape> getEntityCollisions(Entity entity, Box box) {
+    @Override public List<VoxelShape> getEntityCollisions(Entity entity, AABB box) {
         return List.of();
     }
 }

@@ -1,9 +1,9 @@
 package dev.talos.client.ui.screen;
 
 import dev.talos.client.ui.pipeline.RoundedRectRenderState;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.text.Text;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
 
 /**
  * P4a spike screen: proves the custom SDF rounded-rect {@code RenderPipeline}
@@ -19,12 +19,12 @@ public final class TalosTestScreen extends Screen {
     private static final int PANEL_RADIUS = 24;
 
     public TalosTestScreen() {
-        super(Text.literal("Talos UI Spike"));
+        super(Component.literal("Talos UI Spike"));
     }
 
     @Override
-    public void render(DrawContext context, int mouseX, int mouseY, float deltaTicks) {
-        super.render(context, mouseX, mouseY, deltaTicks);
+    public void extractRenderState(GuiGraphicsExtractor context, int mouseX, int mouseY, float deltaTicks) {
+        super.extractRenderState(context, mouseX, mouseY, deltaTicks);
 
         int x = (this.width - PANEL_WIDTH) / 2;
         int y = (this.height - PANEL_HEIGHT) / 2;
@@ -37,10 +37,10 @@ public final class TalosTestScreen extends Screen {
         // radius large enough to clamp into a pill shape.
         RoundedRectRenderState.draw(context, x + 16, y + PANEL_HEIGHT - 40, 96, 24, 12, 0xE6E8E4DC);
 
-        context.drawCenteredTextWithShadow(this.textRenderer, this.title,
+        context.centeredText(this.font, this.title,
                 this.width / 2, y + 14, 0xFFFFFFFF);
-        context.drawCenteredTextWithShadow(this.textRenderer,
-                Text.literal("custom RenderPipeline + SDF shader"),
+        context.centeredText(this.font,
+                Component.literal("custom RenderPipeline + SDF shader"),
                 this.width / 2, y + 30, 0xFFA0B8C8);
     }
 }

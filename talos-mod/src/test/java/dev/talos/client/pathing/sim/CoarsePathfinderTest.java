@@ -7,9 +7,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
-
-import net.minecraft.block.Blocks;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.Blocks;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -29,7 +28,7 @@ class CoarsePathfinderTest {
     /** Stone floor at y=63; walkable feet cells are at y=64. */
     private static FakeWorld field(int x1, int z1, int x2, int z2) {
         FakeWorld world = new FakeWorld();
-        world.fill(x1, 63, z1, x2, 63, z2, Blocks.STONE.getDefaultState());
+        world.fill(x1, 63, z1, x2, 63, z2, Blocks.STONE.defaultBlockState());
         return world;
     }
 
@@ -59,7 +58,7 @@ class CoarsePathfinderTest {
         FakeWorld world = field(-5, -40, 110, 40);
         // A 3-high wall across x=50 with the only opening at the far +z end: too tall to
         // step over, so the corridor must detour and come back.
-        world.fill(50, 64, -40, 50, 66, 30, Blocks.STONE.getDefaultState());
+        world.fill(50, 64, -40, 50, 66, 30, Blocks.STONE.defaultBlockState());
         BlockPos start = new BlockPos(0, 64, 0);
         BlockPos goal = new BlockPos(100, 64, 0);
         CoarsePathfinder.Result result = find(world, start, goal, Set.of());
@@ -73,7 +72,7 @@ class CoarsePathfinderTest {
             BlockPos cell = corridor.get(i);
             assertTrue(cell.getX() != 50 || cell.getZ() > 30, "corridor crosses the wall at " + cell);
             throughGap |= cell.getZ() > 30;
-            if (i > 0) walked += Math.sqrt(cell.getSquaredDistance(corridor.get(i - 1)));
+            if (i > 0) walked += Math.sqrt(cell.distSqr(corridor.get(i - 1)));
         }
         assertTrue(throughGap, "corridor detoured through the gap past the wall");
         assertTrue(walked > 110.0, "detour longer than the 100-block straight line: " + walked);
@@ -98,8 +97,8 @@ class CoarsePathfinderTest {
     void sealedBoxReportsUnreachable() {
         FakeWorld world = field(-10, -10, 10, 10);
         // Walls and a lid sealing the start in; the goal is outside on the same floor.
-        world.fill(-3, 64, -3, 3, 66, 3, Blocks.STONE.getDefaultState());
-        world.fill(-2, 64, -2, 2, 65, 2, Blocks.AIR.getDefaultState());
+        world.fill(-3, 64, -3, 3, 66, 3, Blocks.STONE.defaultBlockState());
+        world.fill(-2, 64, -2, 2, 65, 2, Blocks.AIR.defaultBlockState());
         BlockPos start = new BlockPos(0, 64, 0);
         BlockPos goal = new BlockPos(8, 64, 0);
         CoarsePathfinder.Result result = find(world, start, goal, Set.of());
@@ -136,9 +135,9 @@ class CoarsePathfinderTest {
     void stepsUpAndDropsAcrossTerraces() {
         // A one-block rise at x=10 and a two-block drop at x=20 on the way to the goal.
         FakeWorld world = new FakeWorld();
-        world.fill(-2, 63, -2, 9, 63, 2, Blocks.STONE.getDefaultState());
-        world.fill(10, 64, -2, 19, 64, 2, Blocks.STONE.getDefaultState());
-        world.fill(20, 62, -2, 30, 62, 2, Blocks.STONE.getDefaultState());
+        world.fill(-2, 63, -2, 9, 63, 2, Blocks.STONE.defaultBlockState());
+        world.fill(10, 64, -2, 19, 64, 2, Blocks.STONE.defaultBlockState());
+        world.fill(20, 62, -2, 30, 62, 2, Blocks.STONE.defaultBlockState());
         BlockPos start = new BlockPos(0, 64, 0);
         BlockPos goal = new BlockPos(28, 63, 0);
         CoarsePathfinder.Result result = find(world, start, goal, Set.of());

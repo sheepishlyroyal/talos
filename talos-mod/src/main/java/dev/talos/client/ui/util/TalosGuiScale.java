@@ -1,7 +1,7 @@
 package dev.talos.client.ui.util;
 
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.util.Window;
+import com.mojang.blaze3d.platform.Window;
+import net.minecraft.client.Minecraft;
 
 /**
  * Caps the effective GUI scale Talos's own screens lay out and render against (item 9).
@@ -30,9 +30,9 @@ public final class TalosGuiScale {
     }
 
     public static Adjust compute(int realWidth, int realHeight) {
-        MinecraftClient client = MinecraftClient.getInstance();
+        Minecraft client = Minecraft.getInstance();
         Window window = client == null ? null : client.getWindow();
-        int actualScale = window == null ? 1 : Math.max(1, window.getScaleFactor());
+        int actualScale = window == null ? 1 : Math.max(1, window.getGuiScale());
         int effectiveScale = Math.min(actualScale, MAX_EFFECTIVE_SCALE);
         float factor = (float) effectiveScale / actualScale;
         if (factor >= 1f) return new Adjust(1f, realWidth, realHeight);

@@ -1,8 +1,8 @@
 package dev.talos.client.ui.draw;
 
 import dev.talos.client.ui.pipeline.RoundedRectRenderState;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 
 /**
  * Reusable immediate-mode drawing facade for Talos's "liquid glass" UI toolkit.
@@ -16,13 +16,13 @@ public final class TalosUi {
     }
 
     /** Solid-fill rounded rectangle. {@code color} is ARGB. */
-    public static void roundedRect(DrawContext ctx, float x, float y, float w, float h, float radius, int color) {
+    public static void roundedRect(GuiGraphicsExtractor ctx, float x, float y, float w, float h, float radius, int color) {
         RoundedRectRenderState.draw(ctx, Math.round(x), Math.round(y), Math.round(w), Math.round(h),
                 Math.round(radius), color);
     }
 
     /** Rounded rectangle with an independent ARGB color per corner, bilinearly interpolated. */
-    public static void roundedRect(DrawContext ctx, float x, float y, float w, float h, float radius,
+    public static void roundedRect(GuiGraphicsExtractor ctx, float x, float y, float w, float h, float radius,
             int colorTopLeft, int colorTopRight, int colorBottomLeft, int colorBottomRight) {
         RoundedRectRenderState.draw(ctx, Math.round(x), Math.round(y), Math.round(w), Math.round(h),
                 Math.round(radius), colorTopLeft, colorTopRight, colorBottomLeft, colorBottomRight);
@@ -34,14 +34,14 @@ public final class TalosUi {
      * {@link #roundedRect} — the fragment shader subtracts an inset SDF evaluation to
      * carve the ring out of the filled shape (see {@code ui_rounded_rect.fsh}).
      */
-    public static void roundedRectBorder(DrawContext ctx, float x, float y, float w, float h, float radius,
+    public static void roundedRectBorder(GuiGraphicsExtractor ctx, float x, float y, float w, float h, float radius,
             float borderWidth, int color) {
         RoundedRectRenderState.drawBorder(ctx, Math.round(x), Math.round(y), Math.round(w), Math.round(h),
                 Math.round(radius), Math.round(borderWidth), color);
     }
 
     /** Gradient variant of {@link #roundedRectBorder}, one ARGB color per corner. */
-    public static void roundedRectBorder(DrawContext ctx, float x, float y, float w, float h, float radius,
+    public static void roundedRectBorder(GuiGraphicsExtractor ctx, float x, float y, float w, float h, float radius,
             float borderWidth, int colorTopLeft, int colorTopRight, int colorBottomLeft, int colorBottomRight) {
         RoundedRectRenderState.drawBorder(ctx, Math.round(x), Math.round(y), Math.round(w), Math.round(h),
                 Math.round(radius), Math.round(borderWidth),
@@ -64,11 +64,11 @@ public final class TalosUi {
      * bounds-scoped blur would use {@code GuiRenderState.createNewRootLayer()} /
      * {@code goUpLayer()} layering to isolate the backdrop — left for a later phase.
      */
-    public static void glassPanel(DrawContext ctx, float x, float y, float w, float h, float radius, int tintColor) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.options.getMenuBackgroundBlurrinessValue() >= 1) {
+    public static void glassPanel(GuiGraphicsExtractor ctx, float x, float y, float w, float h, float radius, int tintColor) {
+        Minecraft client = Minecraft.getInstance();
+        if (client.options.getMenuBackgroundBlurriness() >= 1) {
             try {
-                ctx.applyBlur();
+                ctx.blurBeforeThisStratum();
             } catch (IllegalStateException alreadyBlurredThisFrame) {
                 // Only one backdrop blur allowed per frame; see method doc above.
             }

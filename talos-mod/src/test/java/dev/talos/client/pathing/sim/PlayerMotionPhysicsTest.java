@@ -3,10 +3,10 @@ package dev.talos.client.pathing.sim;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import net.minecraft.block.Blocks;
-import net.minecraft.block.BubbleColumnBlock;
-import net.minecraft.block.FluidBlock;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.BubbleColumnBlock;
+import net.minecraft.world.level.block.LiquidBlock;
+import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -28,12 +28,12 @@ class PlayerMotionPhysicsTest {
 
     private static FakeWorld flatStone() {
         FakeWorld world = new FakeWorld();
-        world.fill(-24, 63, -24, 24, 63, 24, Blocks.STONE.getDefaultState());
+        world.fill(-24, 63, -24, 24, 63, 24, Blocks.STONE.defaultBlockState());
         return world;
     }
 
     private static MotionState grounded(double x, double y, double z) {
-        return new MotionState(new Vec3d(x, y, z), Vec3d.ZERO, true, MotionState.Pose.STAND);
+        return new MotionState(new Vec3(x, y, z), Vec3.ZERO, true, MotionState.Pose.STAND);
     }
 
     private static MotionState run(FakeWorld world, MotionState state, Input input, int ticks) {
@@ -46,7 +46,7 @@ class PlayerMotionPhysicsTest {
     private static double perTickSpeed(FakeWorld world, Input input) {
         MotionState state = run(world, grounded(0.5, 64, 0.5), input, 60);
         MotionState next = PlayerMotion.step(world, state, input);
-        return next.position().subtract(state.position()).horizontalLength();
+        return next.position().subtract(state.position()).horizontalDistance();
     }
 
     @Test
@@ -62,7 +62,7 @@ class PlayerMotionPhysicsTest {
     @Test
     void jumpLaunchTickKeepsGroundFriction() {
         FakeWorld world = flatStone();
-        MotionState state = new MotionState(new Vec3d(0.5, 64, 0.5), new Vec3d(0, 0, 0.2),
+        MotionState state = new MotionState(new Vec3(0.5, 64, 0.5), new Vec3(0, 0, 0.2),
                 true, MotionState.Pose.STAND);
         Input jumpForward = new Input(1.0F, 0.0F, true, false, false, 0.0F);
         MotionState next = PlayerMotion.step(world, state, jumpForward);
@@ -75,7 +75,7 @@ class PlayerMotionPhysicsTest {
     @Test
     void heldJumpHonorsTenTickCooldown() {
         FakeWorld world = flatStone();
-        world.fill(-2, 66, -2, 2, 66, 2, Blocks.STONE.getDefaultState()); // low ceiling
+        world.fill(-2, 66, -2, 2, 66, 2, Blocks.STONE.defaultBlockState()); // low ceiling
         MotionState state = grounded(0.5, 64, 0.5);
         int launches = 0;
         for (int i = 0; i < 60; i++) {
@@ -91,7 +91,7 @@ class PlayerMotionPhysicsTest {
     @Test
     void sneakCannotWalkOffALedge() {
         FakeWorld world = new FakeWorld();
-        world.set(0, 63, 0, Blocks.STONE.getDefaultState()); // one lonely block
+        world.set(0, 63, 0, Blocks.STONE.defaultBlockState()); // one lonely block
         MotionState state = grounded(0.5, 64, 0.5);
         state = run(world, state, SNEAK, 40);
         assertEquals(64.0, state.position().y, 1.0E-6, "never fell off");
@@ -101,34 +101,34 @@ class PlayerMotionPhysicsTest {
     @Test
     void cobwebSmothersMovementAndZeroesVelocity() {
         FakeWorld world = flatStone();
-        world.set(0, 64, 0, Blocks.COBWEB.getDefaultState());
-        MotionState state = new MotionState(new Vec3d(0.5, 64, 0.5), new Vec3d(0, 0, 0.3),
+        world.set(0, 64, 0, Blocks.COBWEB.defaultBlockState());
+        MotionState state = new MotionState(new Vec3(0.5, 64, 0.5), new Vec3(0, 0, 0.3),
                 true, MotionState.Pose.STAND);
         MotionState next = PlayerMotion.step(world, state, SPRINT);
         double moved = next.position().z - state.position().z;
         assertTrue(moved < 0.13, "web-scaled movement, got " + moved);
-        assertEquals(0.0, next.velocity().horizontalLength(), 1.0E-9, "velocity zeroed");
+        assertEquals(0.0, next.velocity().horizontalDistance(), 1.0E-9, "velocity zeroed");
     }
 
     @Test
     void powderSnowIsPassableAndSlowing() {
         FakeWorld world = flatStone();
-        world.set(0, 64, 0, Blocks.POWDER_SNOW.getDefaultState());
-        world.set(0, 65, 0, Blocks.POWDER_SNOW.getDefaultState());
-        MotionState state = new MotionState(new Vec3d(0.5, 64, 0.5), new Vec3d(0, 0, 0.3),
+        world.set(0, 64, 0, Blocks.POWDER_SNOW.defaultBlockState());
+        world.set(0, 65, 0, Blocks.POWDER_SNOW.defaultBlockState());
+        MotionState state = new MotionState(new Vec3(0.5, 64, 0.5), new Vec3(0, 0, 0.3),
                 true, MotionState.Pose.STAND);
         MotionState next = PlayerMotion.step(world, state, WALK);
         double moved = next.position().z - state.position().z;
         assertTrue(moved > 0.15, "passable (not solid), moved " + moved);
         assertTrue(moved < 0.40, "slowed by the 0.9 factor, moved " + moved);
-        assertEquals(0.0, next.velocity().horizontalLength(), 1.0E-9, "velocity zeroed");
+        assertEquals(0.0, next.velocity().horizontalDistance(), 1.0E-9, "velocity zeroed");
     }
 
     @Test
     void ladderClimbsWhenPressingIntoTheWall() {
         FakeWorld world = flatStone();
-        world.fill(0, 64, 1, 0, 68, 1, Blocks.STONE.getDefaultState()); // wall ahead (+Z)
-        world.fill(0, 64, 0, 0, 68, 0, Blocks.LADDER.getDefaultState()); // ladder column
+        world.fill(0, 64, 1, 0, 68, 1, Blocks.STONE.defaultBlockState()); // wall ahead (+Z)
+        world.fill(0, 64, 0, 0, 68, 0, Blocks.LADDER.defaultBlockState()); // ladder column
         MotionState state = grounded(0.5, 64, 0.5);
         state = run(world, state, WALK, 25);
         assertTrue(state.position().y > 65.0,
@@ -138,9 +138,9 @@ class PlayerMotionPhysicsTest {
     @Test
     void ladderDescentIsClampedSlow() {
         FakeWorld world = flatStone();
-        world.fill(0, 64, 1, 0, 72, 1, Blocks.STONE.getDefaultState());
-        world.fill(0, 64, 0, 0, 72, 0, Blocks.LADDER.getDefaultState());
-        MotionState state = new MotionState(new Vec3d(0.5, 70, 0.5), Vec3d.ZERO, false,
+        world.fill(0, 64, 1, 0, 72, 1, Blocks.STONE.defaultBlockState());
+        world.fill(0, 64, 0, 0, 72, 0, Blocks.LADDER.defaultBlockState());
+        MotionState state = new MotionState(new Vec3(0.5, 70, 0.5), Vec3.ZERO, false,
                 MotionState.Pose.STAND);
         for (int i = 0; i < 15; i++) {
             double before = state.position().y;
@@ -156,8 +156,8 @@ class PlayerMotionPhysicsTest {
     @Test
     void slimeBlockBouncesTheFall() {
         FakeWorld world = new FakeWorld();
-        world.fill(-2, 63, -2, 2, 63, 2, Blocks.SLIME_BLOCK.getDefaultState());
-        MotionState state = new MotionState(new Vec3d(0.5, 69, 0.5), Vec3d.ZERO, false,
+        world.fill(-2, 63, -2, 2, 63, 2, Blocks.SLIME_BLOCK.defaultBlockState());
+        MotionState state = new MotionState(new Vec3(0.5, 69, 0.5), Vec3.ZERO, false,
                 MotionState.Pose.STAND);
         boolean bounced = false;
         for (int i = 0; i < 40 && !bounced; i++) {
@@ -175,8 +175,8 @@ class PlayerMotionPhysicsTest {
         // velocity that same tick and on every airborne tick after. Peaks must therefore
         // shrink monotonically and the player must settle — never bounce forever.
         FakeWorld world = new FakeWorld();
-        world.fill(-2, 63, -2, 2, 63, 2, Blocks.SLIME_BLOCK.getDefaultState());
-        MotionState state = new MotionState(new Vec3d(0.5, 72, 0.5), Vec3d.ZERO, false,
+        world.fill(-2, 63, -2, 2, 63, 2, Blocks.SLIME_BLOCK.defaultBlockState());
+        MotionState state = new MotionState(new Vec3(0.5, 72, 0.5), Vec3.ZERO, false,
                 MotionState.Pose.STAND);
         java.util.List<Double> peaks = new java.util.ArrayList<>();
         boolean landedOnce = false; // ignore the initial drop arc — it is not a bounce
@@ -208,8 +208,8 @@ class PlayerMotionPhysicsTest {
     @Test
     void slimeBounceIsCancelledBySneaking() {
         FakeWorld world = new FakeWorld();
-        world.fill(-2, 63, -2, 2, 63, 2, Blocks.SLIME_BLOCK.getDefaultState());
-        MotionState state = new MotionState(new Vec3d(0.5, 69, 0.5), Vec3d.ZERO, false,
+        world.fill(-2, 63, -2, 2, 63, 2, Blocks.SLIME_BLOCK.defaultBlockState());
+        MotionState state = new MotionState(new Vec3(0.5, 69, 0.5), Vec3.ZERO, false,
                 MotionState.Pose.STAND);
         Input sneakIdle = new Input(0.0F, 0.0F, false, false, true, 0.0F);
         for (int i = 0; i < 40; i++) {
@@ -221,16 +221,16 @@ class PlayerMotionPhysicsTest {
     @Test
     void bubbleColumnLiftsAndWhirlpoolSinks() {
         FakeWorld world = new FakeWorld();
-        world.fill(0, 62, 0, 0, 70, 0, Blocks.BUBBLE_COLUMN.getDefaultState()
-                .with(BubbleColumnBlock.DRAG, false));
-        MotionState state = new MotionState(new Vec3d(0.5, 65, 0.5), Vec3d.ZERO, false,
+        world.fill(0, 62, 0, 0, 70, 0, Blocks.BUBBLE_COLUMN.defaultBlockState()
+                .setValue(BubbleColumnBlock.DRAG_DOWN, false));
+        MotionState state = new MotionState(new Vec3(0.5, 65, 0.5), Vec3.ZERO, false,
                 MotionState.Pose.SWIM);
         state = run(world, state, IDLE, 8);
         assertTrue(state.velocity().y > 0.02, "upward column lifts, vy=" + state.velocity().y);
 
-        world.fill(0, 62, 0, 0, 70, 0, Blocks.BUBBLE_COLUMN.getDefaultState()
-                .with(BubbleColumnBlock.DRAG, true));
-        MotionState sinking = new MotionState(new Vec3d(0.5, 68, 0.5), Vec3d.ZERO, false,
+        world.fill(0, 62, 0, 0, 70, 0, Blocks.BUBBLE_COLUMN.defaultBlockState()
+                .setValue(BubbleColumnBlock.DRAG_DOWN, true));
+        MotionState sinking = new MotionState(new Vec3(0.5, 68, 0.5), Vec3.ZERO, false,
                 MotionState.Pose.SWIM);
         sinking = run(world, sinking, IDLE, 8);
         assertTrue(sinking.velocity().y < -0.02,
@@ -240,8 +240,8 @@ class PlayerMotionPhysicsTest {
     @Test
     void stillWaterSinkRateMatchesVanillaApproximation() {
         FakeWorld world = new FakeWorld();
-        world.fill(0, 58, 0, 0, 72, 0, Blocks.WATER.getDefaultState());
-        MotionState state = new MotionState(new Vec3d(0.5, 66, 0.5), Vec3d.ZERO, false,
+        world.fill(0, 58, 0, 0, 72, 0, Blocks.WATER.defaultBlockState());
+        MotionState state = new MotionState(new Vec3(0.5, 66, 0.5), Vec3.ZERO, false,
                 MotionState.Pose.SWIM);
         state = run(world, state, IDLE, 40);
         // Terminal sink speed of vy*0.8 - 0.005 is -0.025; the old (vy-0.02)*0.8 gave -0.08.
@@ -251,11 +251,11 @@ class PlayerMotionPhysicsTest {
     @Test
     void flowingWaterPushesTheSwimmer() {
         FakeWorld world = new FakeWorld();
-        world.fill(0, 63, -1, 4, 63, 1, Blocks.STONE.getDefaultState());
-        world.set(0, 64, 0, Blocks.WATER.getDefaultState());               // source
-        world.set(1, 64, 0, Blocks.WATER.getDefaultState().with(FluidBlock.LEVEL, 2));
-        world.set(2, 64, 0, Blocks.WATER.getDefaultState().with(FluidBlock.LEVEL, 5));
-        MotionState state = new MotionState(new Vec3d(1.5, 64.0, 0.5), Vec3d.ZERO, true,
+        world.fill(0, 63, -1, 4, 63, 1, Blocks.STONE.defaultBlockState());
+        world.set(0, 64, 0, Blocks.WATER.defaultBlockState());               // source
+        world.set(1, 64, 0, Blocks.WATER.defaultBlockState().setValue(LiquidBlock.LEVEL, 2));
+        world.set(2, 64, 0, Blocks.WATER.defaultBlockState().setValue(LiquidBlock.LEVEL, 5));
+        MotionState state = new MotionState(new Vec3(1.5, 64.0, 0.5), Vec3.ZERO, true,
                 MotionState.Pose.SWIM);
         state = run(world, state, IDLE, 5);
         assertTrue(state.velocity().x > 0.004,
@@ -268,10 +268,10 @@ class PlayerMotionPhysicsTest {
         Input diagonal = new Input(1.0F, 1.0F, false, false, true, 0.0F);
         MotionState cardinal = PlayerMotion.step(world, grounded(0.5, 64, 0.5), SNEAK);
         MotionState diag = PlayerMotion.step(world, grounded(0.5, 64, 0.5), diagonal);
-        double cardinalMoved = cardinal.position().subtract(new Vec3d(0.5, 64, 0.5))
-                .horizontalLength();
-        double diagonalMoved = diag.position().subtract(new Vec3d(0.5, 64, 0.5))
-                .horizontalLength();
+        double cardinalMoved = cardinal.position().subtract(new Vec3(0.5, 64, 0.5))
+                .horizontalDistance();
+        double diagonalMoved = diag.position().subtract(new Vec3(0.5, 64, 0.5))
+                .horizontalDistance();
         // Vanilla scales the input BEFORE normalization: 0.3/0.3 input is NOT normalized,
         // so its magnitude 0.424 beats the cardinal 0.3. The old code normalized first.
         assertTrue(diagonalMoved > cardinalMoved * 1.25,
@@ -281,7 +281,7 @@ class PlayerMotionPhysicsTest {
     @Test
     void honeyBlockSlowsAndStuntsJumps() {
         FakeWorld world = new FakeWorld();
-        world.fill(-24, 63, -24, 24, 63, 24, Blocks.HONEY_BLOCK.getDefaultState());
+        world.fill(-24, 63, -24, 24, 63, 24, Blocks.HONEY_BLOCK.defaultBlockState());
         double honey = perTickSpeed(world, SPRINT);
         double stone = perTickSpeed(flatStone(), SPRINT);
         assertTrue(honey < stone * 0.6, "honey slows: " + honey + " vs " + stone);

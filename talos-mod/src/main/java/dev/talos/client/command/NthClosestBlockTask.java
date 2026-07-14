@@ -8,17 +8,17 @@ import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Predicate;
-import net.minecraft.block.BlockState;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.entity.Entity;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.ChunkPos;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.chunk.ChunkSection;
-import net.minecraft.world.chunk.ChunkStatus;
-import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Cooperatively scans loaded chunks for the Nth-closest block matching a predicate, keeping only
@@ -38,7 +38,7 @@ final class NthClosestBlockTask extends SimpleTask {
     private final LongArrayFIFOQueue remainingChunks = new LongArrayFIFOQueue();
     private final PriorityQueue<Match> nearest;
 
-    private Vec3d origin;
+    private Vec3 origin;
     private long currentChunk;
     private boolean scanningChunk;
     private int sectionY;
@@ -63,15 +63,15 @@ final class NthClosestBlockTask extends SimpleTask {
 
     @Override
     public void initialize() {
-        MinecraftClient client = MinecraftClient.getInstance();
+        Minecraft client = Minecraft.getInstance();
         Entity camera = client.getCameraEntity();
-        if (client.world == null || camera == null) {
+        if (client.level == null || camera == null) {
             _break();
             return;
         }
-        origin = camera.getCameraPosVec(0.0F);
-        ChunkPos center = new ChunkPos(BlockPos.ofFloored(origin));
-        ChunkPos.stream(center, chunkRadius).forEach(pos -> remainingChunks.enqueue(pos.toLong()));
+        origin = camera.getEyePosition(0.0F);
+        ChunkPos center = ChunkPos.containing(BlockPos.containing(origin));
+        ChunkPos.rangeClosed(center, chunkRadius).forEach(pos -> remainingChunks.enqueue(pos.pack()));
     }
 
     @Override
@@ -81,9 +81,9 @@ final class NthClosestBlockTask extends SimpleTask {
 
     @Override
     protected void onTick() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        ClientWorld world = client.world;
-        if (world == null || !client.isOnThread()) {
+        Minecraft client = Minecraft.getInstance();
+        ClientLevel world = client.level;
+        if (world == null || !client.isSameThread()) {
             _break();
             return;
         }
@@ -91,12 +91,12 @@ final class NthClosestBlockTask extends SimpleTask {
         while (TalosClient.tickBudget().hasBudgetRemaining() && (scanningChunk || !remainingChunks.isEmpty())) {
             if (!scanningChunk) {
                 currentChunk = remainingChunks.dequeueLong();
-                ChunkPos chunkPos = new ChunkPos(currentChunk);
+                ChunkPos chunkPos = ChunkPos.unpack(currentChunk);
                 if (!columnCanBeatWorst(chunkPos)) {
                     continue;
                 }
-                WorldChunk chunk = getLoadedChunk(world, chunkPos);
-                sectionY = world.getBottomSectionCoord();
+                LevelChunk chunk = getLoadedChunk(world, chunkPos);
+                sectionY = world.getMinSectionY();
                 localIndex = 0;
                 scanningChunk = true;
                 if (chunk == null) {
@@ -109,20 +109,20 @@ final class NthClosestBlockTask extends SimpleTask {
         }
     }
 
-    private void scanNext(ClientWorld world) {
-        ChunkPos chunkPos = new ChunkPos(currentChunk);
-        WorldChunk chunk = getLoadedChunk(world, chunkPos);
+    private void scanNext(ClientLevel world) {
+        ChunkPos chunkPos = ChunkPos.unpack(currentChunk);
+        LevelChunk chunk = getLoadedChunk(world, chunkPos);
         if (chunk == null) {
             scanningChunk = false;
             return;
         }
-        if (sectionY >= world.getTopSectionCoord()) {
+        if (sectionY >= world.getMaxSectionY()) {
             scanningChunk = false;
             return;
         }
 
-        ChunkSection section = chunk.getSection(chunk.sectionCoordToIndex(sectionY));
-        if (localIndex == 0 && !section.hasAny(predicate)) {
+        LevelChunkSection section = chunk.getSection(chunk.getSectionIndexFromSectionY(sectionY));
+        if (localIndex == 0 && !section.maybeHas(predicate)) {
             sectionY++;
             return;
         }
@@ -132,10 +132,10 @@ final class NthClosestBlockTask extends SimpleTask {
         int y = localIndex >> 8 & 15;
         BlockState state = section.getBlockState(x, y, z);
         if (predicate.test(state)) {
-            int worldX = chunkPos.getStartX() + x;
+            int worldX = chunkPos.getMinBlockX() + x;
             int worldY = (sectionY << 4) + y;
-            int worldZ = chunkPos.getStartZ() + z;
-            double distanceSquared = BlockPos.ofFloored(worldX, worldY, worldZ).getSquaredDistance(origin);
+            int worldZ = chunkPos.getMinBlockZ() + z;
+            double distanceSquared = BlockPos.containing(worldX, worldY, worldZ).distToCenterSqr(origin);
             offer(new Match(BlockPos.asLong(worldX, worldY, worldZ), distanceSquared));
         }
 
@@ -157,20 +157,20 @@ final class NthClosestBlockTask extends SimpleTask {
         if (furthestMode || nearest.size() < keepCount) {
             return true;
         }
-        double closestX = MathHelper.clamp(origin.x, chunkPos.getStartX(), chunkPos.getStartX() + 16);
-        double closestZ = MathHelper.clamp(origin.z, chunkPos.getStartZ(), chunkPos.getStartZ() + 16);
+        double closestX = Mth.clamp(origin.x, chunkPos.getMinBlockX(), chunkPos.getMinBlockX() + 16);
+        double closestZ = Mth.clamp(origin.z, chunkPos.getMinBlockZ(), chunkPos.getMinBlockZ() + 16);
         double dx = origin.x - closestX;
         double dz = origin.z - closestZ;
         return dx * dx + dz * dz < nearest.peek().distSq;
     }
 
-    private static WorldChunk getLoadedChunk(ClientWorld world, ChunkPos pos) {
-        return world.getChunk(pos.x, pos.z, ChunkStatus.FULL, false) instanceof WorldChunk chunk ? chunk : null;
+    private static LevelChunk getLoadedChunk(ClientLevel world, ChunkPos pos) {
+        return world.getChunk(pos.x(), pos.z(), ChunkStatus.FULL, false) instanceof LevelChunk chunk ? chunk : null;
     }
 
     @Override
     public void onCompleted() {
-        BlockPos result = nearest.size() >= keepCount && nearest.peek() != null ? BlockPos.fromLong(nearest.peek().pos) : null;
+        BlockPos result = nearest.size() >= keepCount && nearest.peek() != null ? BlockPos.of(nearest.peek().pos) : null;
         resultCallback.accept(nearest.size(), result);
     }
 

@@ -8,15 +8,15 @@ import dev.talos.client.task.SimpleTask;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
-import net.minecraft.block.Block;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.item.BlockItem;
-import net.minecraft.item.ItemStack;
-import net.minecraft.util.Hand;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
 /** Humanized, verified block-placement state machine. */
@@ -41,7 +41,7 @@ public final class PlaceBlockAction extends SimpleTask {
     public PlaceBlockAction(BlockPos target) { this(target, null, Direction.UP, null); }
     public PlaceBlockAction(BlockPos target, @Nullable Predicate<ItemStack> selector,
                             Direction face, @Nullable HumanizationProfile profile) {
-        this.target = target.toImmutable();
+        this.target = target.immutable();
         this.selector = selector == null ? stack -> stack.getItem() instanceof BlockItem : selector;
         this.face = face;
         this.profile = profile == null ? TalosClient.humanizer().defaultProfile() : profile;
@@ -51,9 +51,9 @@ public final class PlaceBlockAction extends SimpleTask {
     @Override public Set<Object> getMutexKeys() { return MUTEX; }
 
     @Override protected void onTick() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (!client.isOnThread()) { finish(false, "Action left the client thread"); return; }
-        if (client.player == null || client.world == null || client.interactionManager == null) {
+        Minecraft client = Minecraft.getInstance();
+        if (!client.isSameThread()) { finish(false, "Action left the client thread"); return; }
+        if (client.player == null || client.level == null || client.gameMode == null) {
             finish(false, "No active world/player"); return;
         }
         if (++ticks > TIMEOUT_TICKS) { finish(false, "Timed out placing at " + target.toShortString()); return; }
@@ -67,14 +67,14 @@ public final class PlaceBlockAction extends SimpleTask {
         }
     }
 
-    private void prepare(MinecraftClient client) {
-        if (!client.world.getBlockState(target).isReplaceable()) {
+    private void prepare(Minecraft client) {
+        if (!client.level.getBlockState(target).canBeReplaced()) {
             finish(false, "Target is not replaceable"); return;
         }
         int slot = findSlot(client);
         if (slot < 0) { finish(false, "No matching block item in the hotbar"); return; }
         WeaponSelector.select(client, slot);
-        ItemStack stack = client.player.getMainHandStack();
+        ItemStack stack = client.player.getMainHandItem();
         if (!(stack.getItem() instanceof BlockItem blockItem)) {
             finish(false, "Selected item is not a block item"); return;
         }
@@ -85,22 +85,22 @@ public final class PlaceBlockAction extends SimpleTask {
         state = State.ACQUIRE;
     }
 
-    private void execute(MinecraftClient client) {
+    private void execute(Minecraft client) {
         BlockHitResult hit = new BlockHitResult(hitPosition(), face, target, false);
-        net.minecraft.util.ActionResult interaction =
-                client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, hit);
-        client.player.swingHand(Hand.MAIN_HAND);
-        if (!interaction.isAccepted()) { retry("Placement interaction was rejected"); return; }
+        net.minecraft.world.InteractionResult interaction =
+                client.gameMode.useItemOn(client.player, InteractionHand.MAIN_HAND, hit);
+        client.player.swing(InteractionHand.MAIN_HAND);
+        if (!interaction.consumesAction()) { retry("Placement interaction was rejected"); return; }
         waitUntil = ticks + TalosClient.humanizer().timing().sampleDelayTicks(profile, 0.35, rng);
         state = State.OBSERVE;
     }
 
-    private void observe(MinecraftClient client) {
-        var stateNow = client.world.getBlockState(target);
-        if (!stateNow.isAir() && stateNow.isOf(expectedBlock)) {
+    private void observe(Minecraft client) {
+        var stateNow = client.level.getBlockState(target);
+        if (!stateNow.isAir() && stateNow.is(expectedBlock)) {
             finish(true, "Placed block at " + target.toShortString()); return;
         }
-        if (!stateNow.isReplaceable()) {
+        if (!stateNow.canBeReplaced()) {
             finish(false, "A different block appeared at the target"); return;
         }
         if (ticks >= waitUntil) retry("Server did not confirm placement");
@@ -112,21 +112,21 @@ public final class PlaceBlockAction extends SimpleTask {
         state = State.BACKOFF;
     }
 
-    private int findSlot(MinecraftClient client) {
+    private int findSlot(Minecraft client) {
         int selected = client.player.getInventory().getSelectedSlot();
-        if (selector.test(client.player.getInventory().getStack(selected))) return selected;
+        if (selector.test(client.player.getInventory().getItem(selected))) return selected;
         for (int slot = 0; slot < 9; slot++) {
-            if (selector.test(client.player.getInventory().getStack(slot))) return slot;
+            if (selector.test(client.player.getInventory().getItem(slot))) return slot;
         }
         return -1;
     }
 
-    private Vec3d hitPosition() {
-        return Vec3d.ofCenter(target).add(Vec3d.of(face.getVector()).multiply(0.5));
+    private Vec3 hitPosition() {
+        return Vec3.atCenterOf(target).add(Vec3.atLowerCornerOf(face.getUnitVec3i()).scale(0.5));
     }
-    private boolean withinReach(MinecraftClient client) {
-        return client.player.getEyePos().squaredDistanceTo(hitPosition())
-                <= Math.pow(client.player.getBlockInteractionRange(), 2);
+    private boolean withinReach(Minecraft client) {
+        return client.player.getEyePosition().distanceToSqr(hitPosition())
+                <= Math.pow(client.player.blockInteractionRange(), 2);
     }
     private void finish(boolean success, String message) {
         if (state == State.RELEASE) return;

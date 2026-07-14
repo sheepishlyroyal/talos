@@ -12,16 +12,16 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.option.GameOptions;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.text.Text;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.Options;
+import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Input macros: record the player's real per-tick control state (all nine gameplay bindings,
- * look angles, hotbar slot) and replay it later. Replay presses logical {@link KeyBinding}s,
+ * look angles, hotbar slot) and replay it later. Replay presses logical {@link KeyMapping}s,
  * so rebound controls behave identically. Macros persist as JSON under ~/.talos/macros/.
  */
 public final class MacroSystem {
@@ -31,7 +31,7 @@ public final class MacroSystem {
             Path.of(System.getProperty("user.home"), ".talos", "macros");
     private static final int MAX_RECORD_TICKS = 20 * 300; // five minutes
 
-    /** One tick of input. Bit order matches {@link #bindings(GameOptions)}. */
+    /** One tick of input. Bit order matches {@link #bindings(Options)}. */
     public record Frame(int keys, float yaw, float pitch, int slot) {}
 
     /** Saved macro: which channels were recorded plus the per-tick frames. */
@@ -85,7 +85,7 @@ public final class MacroSystem {
         return String.join("+", names);
     }
 
-    /** Channel owning each index of {@link #bindings(GameOptions)}. */
+    /** Channel owning each index of {@link #bindings(Options)}. */
     private static final int[] KEY_CHANNEL = {
             CH_MOVE, CH_MOVE, CH_MOVE, CH_MOVE, CH_JUMP, CH_SNEAK, CH_SPRINT,
             CH_CLICKS, CH_CLICKS
@@ -101,11 +101,11 @@ public final class MacroSystem {
         ClientTickEvents.END_CLIENT_TICK.register(MacroSystem::sampleTick);
     }
 
-    private static KeyBinding[] bindings(GameOptions options) {
-        return new KeyBinding[] {
-                options.forwardKey, options.backKey, options.leftKey, options.rightKey,
-                options.jumpKey, options.sneakKey, options.sprintKey,
-                options.attackKey, options.useKey
+    private static KeyMapping[] bindings(Options options) {
+        return new KeyMapping[] {
+                options.keyUp, options.keyDown, options.keyLeft, options.keyRight,
+                options.keyJump, options.keyShift, options.keySprint,
+                options.keyAttack, options.keyUse
         };
     }
 
@@ -139,20 +139,20 @@ public final class MacroSystem {
     public static boolean isRecording() { return recording != null; }
     public static String recordingName() { return recordingName; }
 
-    private static void sampleTick(MinecraftClient client) {
+    private static void sampleTick(Minecraft client) {
         List<Frame> target = recording;
         if (target == null || client.player == null) return;
-        KeyBinding[] keys = bindings(client.options);
+        KeyMapping[] keys = bindings(client.options);
         int mask = 0;
         for (int i = 0; i < keys.length; i++) {
-            if (keys[i].isPressed()) mask |= 1 << i;
+            if (keys[i].isDown()) mask |= 1 << i;
         }
-        target.add(new Frame(mask, client.player.getYaw(), client.player.getPitch(),
+        target.add(new Frame(mask, client.player.getYRot(), client.player.getXRot(),
                 client.player.getInventory().getSelectedSlot()));
         if (target.size() >= MAX_RECORD_TICKS) {
             int frames = stopRecording();
-            client.player.sendMessage(Text.literal(
-                    "§bTalos §7» §fmacro recording auto-stopped at " + frames + " ticks"), false);
+            client.player.sendSystemMessage(Component.literal(
+                    "§bTalos §7» §fmacro recording auto-stopped at " + frames + " ticks"));
         }
     }
 
@@ -200,7 +200,7 @@ public final class MacroSystem {
     /* ------------------------------------------------------------------ replay */
 
     /** channelOverride limits playback further; 0 means play the recorded channels. */
-    public static boolean play(MinecraftClient client, String name, int repeats,
+    public static boolean play(Minecraft client, String name, int repeats,
             int channelOverride) {
         MacroData data = load(name);
         if (data == null || data.frames().isEmpty()) return false;
@@ -213,7 +213,7 @@ public final class MacroSystem {
     }
 
     private static final class PlayTask extends TalosTask {
-        private final MinecraftClient client;
+        private final Minecraft client;
         private final String name;
         private final List<Frame> frames;
         private final int repeats;
@@ -223,7 +223,7 @@ public final class MacroSystem {
         private int previousMask;
         private boolean done;
 
-        PlayTask(MinecraftClient client, String name, List<Frame> frames, int repeats,
+        PlayTask(Minecraft client, String name, List<Frame> frames, int repeats,
                 int channels) {
             this.client = client;
             this.name = name;
@@ -242,26 +242,26 @@ public final class MacroSystem {
                 if (++loop >= repeats) { finish(); return; }
             }
             Frame frame = frames.get(index++);
-            KeyBinding[] keys = bindings(client.options);
+            KeyMapping[] keys = bindings(client.options);
             for (int i = 0; i < keys.length; i++) {
                 // Keys outside the played channels are left untouched, so a clicks-only
                 // macro can run WHILE the player (or the pathfinder) drives movement.
                 if ((KEY_CHANNEL[i] & channels) == 0) continue;
                 boolean pressed = (frame.keys() & (1 << i)) != 0;
-                keys[i].setPressed(pressed);
+                keys[i].setDown(pressed);
                 // A rising edge is a fresh press event so single attack/use clicks replay.
                 if (pressed && (previousMask & (1 << i)) == 0) {
-                    KeyBinding.onKeyPressed(
-                            net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper
+                    KeyMapping.click(
+                            net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper
                                     .getBoundKeyOf(keys[i]));
                 }
             }
             previousMask = frame.keys();
             if ((channels & CH_LOOK) != 0) {
-                client.player.setYaw(frame.yaw());
-                client.player.setHeadYaw(frame.yaw());
-                client.player.setBodyYaw(frame.yaw());
-                client.player.setPitch(frame.pitch());
+                client.player.setYRot(frame.yaw());
+                client.player.setYHeadRot(frame.yaw());
+                client.player.setYBodyRot(frame.yaw());
+                client.player.setXRot(frame.pitch());
             }
             if ((channels & CH_HOTBAR) != 0) {
                 client.player.getInventory().setSelectedSlot(frame.slot());
@@ -272,14 +272,14 @@ public final class MacroSystem {
         private void finish() {
             done = true;
             release();
-            if (client.player != null) client.player.sendMessage(
-                    Text.literal("§bTalos §7» §fmacro '" + name + "' finished"), true);
+            if (client.player != null) client.player.sendOverlayMessage(
+                    Component.literal("§bTalos §7» §fmacro '" + name + "' finished"));
         }
 
         private void release() {
-            KeyBinding[] keys = bindings(client.options);
+            KeyMapping[] keys = bindings(client.options);
             for (int i = 0; i < keys.length; i++) {
-                if ((KEY_CHANNEL[i] & channels) != 0) keys[i].setPressed(false);
+                if ((KEY_CHANNEL[i] & channels) != 0) keys[i].setDown(false);
             }
         }
 

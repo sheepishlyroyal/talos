@@ -11,11 +11,11 @@ import dev.talos.client.scan.BlockStatePredicate;
 import java.util.Comparator;
 import java.util.concurrent.CompletableFuture;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.mob.HostileEntity;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.monster.Monster;
 
 final class ActionCommand {
     private ActionCommand() {
@@ -36,12 +36,12 @@ final class ActionCommand {
         FabricClientCommandSource source = context.getSource();
         BlockStatePredicate predicate = BlockStatePredicate.fromArgument(context, "blockPredicate");
 
-        int radius = MinecraftClient.getInstance().options.getViewDistance().getValue();
+        int radius = Minecraft.getInstance().options.renderDistance().get();
         NthClosestBlockTask task = new NthClosestBlockTask(
                 predicate, radius, n, (found, pos) ->
                         source.getClient().execute(() -> {
                             if (pos == null) {
-                                source.sendError(Text.literal(
+                                source.sendError(Component.literal(
                                         "Index %d out of range: %d match(es) (0-based, -1 = furthest)"
                                                 .formatted(n, found)));
                                 return;
@@ -51,10 +51,10 @@ final class ActionCommand {
         try {
             TalosClient.taskScheduler().addTask("mine-block", task);
         } catch (IllegalStateException conflict) {
-            source.sendError(Text.literal("A world scan is already running"));
+            source.sendError(Component.literal("A world scan is already running"));
             return 0;
         }
-        source.sendFeedback(Text.literal("Scanning loaded chunks..."));
+        source.sendFeedback(Component.literal("Scanning loaded chunks..."));
         return 1;
     }
 
@@ -66,15 +66,15 @@ final class ActionCommand {
     static int killNearest(CommandContext<FabricClientCommandSource> context, double radius) {
         FabricClientCommandSource source = context.getSource();
         var player = source.getPlayer();
-        var world = source.getWorld();
-        Entity nearest = world.getEntitiesByClass(HostileEntity.class,
-                        player.getBoundingBox().expand(radius),
+        var world = source.getLevel();
+        Entity nearest = world.getEntitiesOfClass(Monster.class,
+                        player.getBoundingBox().inflate(radius),
                         entity -> entity.isAlive())
                 .stream()
-                .min(Comparator.comparingDouble(player::squaredDistanceTo))
+                .min(Comparator.comparingDouble(player::distanceToSqr))
                 .orElse(null);
         if (nearest == null) {
-            source.sendError(Text.literal("No hostile entity found within " + radius + " blocks"));
+            source.sendError(Component.literal("No hostile entity found within " + radius + " blocks"));
             return 0;
         }
         KillEntityAction action = new KillEntityAction(nearest);
@@ -87,19 +87,19 @@ final class ActionCommand {
         FabricClientCommandSource source = context.getSource();
         try {
             String taskName = TalosClient.taskScheduler().addTask(name, task);
-            source.sendFeedback(Text.literal("Started " + taskName));
+            source.sendFeedback(Component.literal("Started " + taskName));
             future.whenComplete((result, error) -> source.getClient().execute(() -> {
                 if (error != null) {
-                    source.sendError(Text.literal(name + " failed: " + error.getMessage()));
+                    source.sendError(Component.literal(name + " failed: " + error.getMessage()));
                 } else if (result.success()) {
-                    source.sendFeedback(Text.literal(result.message()));
+                    source.sendFeedback(Component.literal(result.message()));
                 } else {
-                    source.sendError(Text.literal(result.message()));
+                    source.sendError(Component.literal(result.message()));
                 }
             }));
             return 1;
         } catch (IllegalStateException exception) {
-            source.sendError(Text.literal("Cannot start " + name + ": " + exception.getMessage()));
+            source.sendError(Component.literal("Cannot start " + name + ": " + exception.getMessage()));
             return 0;
         }
     }

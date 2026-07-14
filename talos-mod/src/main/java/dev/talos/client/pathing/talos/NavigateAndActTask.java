@@ -9,32 +9,32 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.Hand;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.item.BlockItem;
-import net.minecraft.block.FenceGateBlock;
-import net.minecraft.block.Blocks;
-import net.minecraft.block.SlabBlock;
-import net.minecraft.block.StairsBlock;
-import net.minecraft.block.TrapdoorBlock;
-import net.minecraft.registry.tag.FluidTags;
-import net.minecraft.state.property.Properties;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.tags.FluidTags;
+import net.minecraft.util.Mth;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.FenceGateBlock;
+import net.minecraft.world.level.block.SlabBlock;
+import net.minecraft.world.level.block.StairBlock;
+import net.minecraft.world.level.block.TrapDoorBlock;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
 /** One cooperative tick loop for waypoint movement, immediate looking, and route actions. */
 public final class NavigateAndActTask extends TalosTask {
     public interface RouteAction {
         /** Current world-space target, or null when there is no target to act on. */
-        @Nullable Vec3d target();
+        @Nullable Vec3 target();
         double reach();
         /** Performs at most one tick of work; true means the action is complete. */
-        boolean perform(MinecraftClient client);
+        boolean perform(Minecraft client);
     }
 
     private static final double NODE_DISTANCE_SQUARED = 0.36;
@@ -48,9 +48,9 @@ public final class NavigateAndActTask extends TalosTask {
     private static final double OPEN_SIDE_LIMIT = 0.70;
     private static final int MIN_MODE_DWELL_TICKS = 8;
     private enum PlannedMode { SPRINT_JUMP, WALK, SPRINT, SPAM_JUMP, SWIM, CRAWL }
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final List<BlockPos> nodes;
-    private final List<Vec3d> steeringNodes;
+    private final List<Vec3> steeringNodes;
     private final Predicate<BlockPos> goal;
     private final CompletableFuture<PathResult> future;
     private final @Nullable RouteAction action;
@@ -77,24 +77,24 @@ public final class NavigateAndActTask extends TalosTask {
         if (mode.equals(lastStatus)) return;
         lastStatus = mode;
         if (client.player != null) {
-            client.player.sendMessage(net.minecraft.text.Text.literal("§bTalos §7» §f" + mode), true);
+            client.player.sendOverlayMessage(net.minecraft.network.chat.Component.literal("§bTalos §7» §f" + mode));
         }
     }
 
-    public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
+    public NavigateAndActTask(Minecraft client, List<BlockPos> nodes,
                               Predicate<BlockPos> goal, @Nullable RouteAction action,
                               CompletableFuture<PathResult> future) {
         this(client, nodes, goal, action, future, true);
     }
 
-    public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
+    public NavigateAndActTask(Minecraft client, List<BlockPos> nodes,
                               Predicate<BlockPos> goal, @Nullable RouteAction action,
                               CompletableFuture<PathResult> future, boolean allowMining) {
         this(client, nodes, buildSteeringNodes(client, nodes), goal, action, future, allowMining);
     }
 
-    public NavigateAndActTask(MinecraftClient client, List<BlockPos> nodes,
-                              List<Vec3d> steeringNodes, Predicate<BlockPos> goal,
+    public NavigateAndActTask(Minecraft client, List<BlockPos> nodes,
+                              List<Vec3> steeringNodes, Predicate<BlockPos> goal,
                               @Nullable RouteAction action, CompletableFuture<PathResult> future,
                               boolean allowMining) {
         if (nodes.size() != steeringNodes.size()) {
@@ -117,16 +117,16 @@ public final class NavigateAndActTask extends TalosTask {
     @Override public void increment() { ticks++; }
 
     @Override public void body() {
-        ClientPlayerEntity player = client.player;
-        if (player == null || client.world == null) { finish(false, "World unloaded while navigating"); return; }
+        LocalPlayer player = client.player;
+        if (player == null || client.level == null) { finish(false, "World unloaded while navigating"); return; }
         advancePastReachedOrPassed(player);
         if (sprintJumpLanding != null) {
-            sprintJumpWasAirborne |= !player.isOnGround();
-            if (!(sprintJumpWasAirborne && player.isOnGround())) {
+            sprintJumpWasAirborne |= !player.onGround();
+            if (!(sprintJumpWasAirborne && player.onGround())) {
                 // An overshot landing must never remain the aim lock. While airborne,
                 // move the lock forward with the path as soon as its old node is passed.
                 if (index < nodes.size() && !nodes.get(index).equals(sprintJumpLanding)) {
-                    sprintJumpLanding = nodes.get(index).toImmutable();
+                    sprintJumpLanding = nodes.get(index).immutable();
                 }
                 continueSprintJump(player);
                 scheduleDelay();
@@ -135,7 +135,7 @@ public final class NavigateAndActTask extends TalosTask {
             sprintJumpLanding = null;
             sprintJumpWasAirborne = false;
         }
-        if (goal.test(player.getBlockPos())) { finish(true, "Arrived"); return; }
+        if (goal.test(player.blockPosition())) { finish(true, "Arrived"); return; }
         // Landing may have carried us over several short nodes. Discard all of them
         // before selecting a new steering target, rather than aiming back at one.
         advancePastReachedOrPassed(player);
@@ -144,74 +144,74 @@ public final class NavigateAndActTask extends TalosTask {
         BlockPos node = nodes.get(index);
         if (handleTraversal(player, node)) { scheduleDelay(); return; }
         updateCommittedMode();
-        Vec3d actionTarget = action == null ? null : action.target();
-        if (actionTarget != null && player.getEyePos().squaredDistanceTo(actionTarget)
+        Vec3 actionTarget = action == null ? null : action.target();
+        if (actionTarget != null && player.getEyePosition().distanceToSqr(actionTarget)
                 <= action.reach() * action.reach()) {
             releaseInputs();
             aim.aimAt(actionTarget);
             aim.tick();
             if (aim.isAimed() && TalosClient.tickBudget().hasBudgetRemaining()) action.perform(client);
         } else {
-            Vec3d followTarget = followTarget(player, node);
+            Vec3 followTarget = followTarget(player, node);
             // Recompute steering without flickering sprint/jump off for part of every
             // client tick. Normal travel keeps both inputs continuously held.
             releaseDirectionalInputs();
-            client.options.forwardKey.setPressed(true);
-            client.options.sprintKey.setPressed(true);
+            client.options.keyUp.setDown(true);
+            client.options.keySprint.setDown(true);
             int horizontalDistance = Math.max(Math.abs(node.getX() - player.getBlockX()),
                     Math.abs(node.getZ() - player.getBlockZ()));
             boolean jumpEdge = horizontalDistance > 1;
-            boolean stairOrSlab = isStairOrSlab(node.down()) || isStairOrSlab(player.getBlockPos().down());
-            boolean swimEdge = isFluid(node) || player.isSwimming() || player.isSubmergedInWater()
-                    || player.isTouchingWater() || player.isInLava();
-            boolean inCobweb = isCobweb(player.getBlockPos()) || isCobweb(node);
-            boolean stickyJumpSurface = isStickyJumpSurface(player.getBlockPos().down())
-                    || isStickyJumpSurface(node.down());
-            boolean headHitStep = isLowCeilingAscent(player.getBlockPos(), node);
+            boolean stairOrSlab = isStairOrSlab(node.below()) || isStairOrSlab(player.blockPosition().below());
+            boolean swimEdge = isFluid(node) || player.isSwimming() || player.isUnderWater()
+                    || player.isInWater() || player.isInLava();
+            boolean inCobweb = isCobweb(player.blockPosition()) || isCobweb(node);
+            boolean stickyJumpSurface = isStickyJumpSurface(player.blockPosition().below())
+                    || isStickyJumpSurface(node.below());
+            boolean headHitStep = isLowCeilingAscent(player.blockPosition(), node);
             boolean climbingOut = isConfinedVerticalEscape(player, node);
             if (swimEdge) {
                 // Swimming is driven by view pitch. Jump causes repeated surface
                 // breaches and sinking, so it is deliberately never used here.
                 status(isLava(node) || player.isInLava() ? "swimming (lava)" : "swimming");
-                client.options.jumpKey.setPressed(false);
+                client.options.keyJump.setDown(false);
                 steerSwimming(player, followTarget, node);
             } else if (climbingOut) {
                 // A boxed ascent is impossible without jumping. This deliberately
                 // precedes WALK and crawl/slow-terrain handling so precision mode can
                 // never pin the player against the wall of a one-wide pit.
                 status("climbing out");
-                client.options.sprintKey.setPressed(false);
-                client.options.jumpKey.setPressed(false);
+                client.options.keySprint.setDown(false);
+                client.options.keyJump.setDown(false);
                 steerToward(player, followTarget, false);
                 pressSpamJumpIfReady(player);
             } else if (inCobweb) {
                 // Sprinting and jumping only waste inputs against cobweb collision.
                 status("slow terrain (cobweb)");
-                client.options.sprintKey.setPressed(false);
-                client.options.jumpKey.setPressed(false);
+                client.options.keySprint.setDown(false);
+                client.options.keyJump.setDown(false);
                 steerToward(player, followTarget, false);
             } else if (stickyJumpSurface) {
                 // Honey suppresses jump velocity and slime turns repeated jumps into
                 // unwanted bounces. Push through without fighting either surface.
                 status("slow terrain (sticky)");
-                client.options.sprintKey.setPressed(false);
-                client.options.jumpKey.setPressed(false);
+                client.options.keySprint.setDown(false);
+                client.options.keyJump.setDown(false);
                 steerToward(player, followTarget, false);
             } else if (isCrawlNode(node)) {
                 status("crawling");
-                client.options.sneakKey.setPressed(true);
-                client.options.jumpKey.setPressed(false);
+                client.options.keyShift.setDown(true);
+                client.options.keyJump.setDown(false);
                 steerToward(player, followTarget, false);
             } else if (headHitStep) {
                 steerToward(player, followTarget, isSlippery(player, node));
                 status("spam-jump (head-hit)");
-                client.options.jumpKey.setPressed(false);
+                client.options.keyJump.setDown(false);
                 pressSpamJumpIfReady(player);
             } else if (stairOrSlab) {
                 steerToward(player, followTarget, isSlippery(player, node));
                 status("spam-jump (stairs)");
                 // Stair/slab travel deliberately pulses space instead of holding it.
-                client.options.jumpKey.setPressed(false);
+                client.options.keyJump.setDown(false);
                 pressSpamJumpIfReady(player);
             } else if (jumpEdge) {
                 steerToward(player, followTarget, isSlippery(player, node));
@@ -219,30 +219,30 @@ public final class NavigateAndActTask extends TalosTask {
                 // turn the player back toward a passed node during the airborne arc.
                 sprintJumpUsesSprint = committedMode != PlannedMode.WALK || horizontalDistance > 2;
                 status(sprintJumpUsesSprint ? "sprint-jump" : "precise jump");
-                sprintJumpLanding = node.toImmutable();
-                sprintJumpWasAirborne = !player.isOnGround();
-                client.options.sprintKey.setPressed(sprintJumpUsesSprint);
-                client.options.jumpKey.setPressed(true);
+                sprintJumpLanding = node.immutable();
+                sprintJumpWasAirborne = !player.onGround();
+                client.options.keySprint.setDown(sprintJumpUsesSprint);
+                client.options.keyJump.setDown(true);
             } else if (committedMode == PlannedMode.SPAM_JUMP) {
                 steerToward(player, followTarget, isSlippery(player, node));
                 status("spam-jump");
-                client.options.jumpKey.setPressed(false);
+                client.options.keyJump.setDown(false);
                 pressSpamJumpIfReady(player);
             } else if (committedMode == PlannedMode.WALK) {
                 steerToward(player, followTarget, isSlippery(player, node));
                 status("walk/precise");
-                client.options.sprintKey.setPressed(false);
-                client.options.jumpKey.setPressed(false);
+                client.options.keySprint.setDown(false);
+                client.options.keyJump.setDown(false);
             } else if (committedMode == PlannedMode.SPRINT) {
                 steerToward(player, followTarget, isSlippery(player, node));
                 status("sprint");
-                client.options.jumpKey.setPressed(false);
+                client.options.keyJump.setDown(false);
             } else {
                 steerToward(player, followTarget, isSlippery(player, node));
                 // Continuous bunny-hopping is only appropriate in a fully open
                 // corridor. A block in either jump headspace uses prompt pulses.
                 status("sprint-jump");
-                client.options.jumpKey.setPressed(true);
+                client.options.keyJump.setDown(true);
             }
         }
         scheduleDelay();
@@ -276,7 +276,7 @@ public final class NavigateAndActTask extends TalosTask {
             committedMode = desired;
             committedModeSinceTick = ticks;
             if (committedMode != PlannedMode.SPRINT_JUMP) {
-                client.options.jumpKey.setPressed(false);
+                client.options.keyJump.setDown(false);
             }
         }
     }
@@ -298,10 +298,10 @@ public final class NavigateAndActTask extends TalosTask {
         BlockPos from = at > 0 ? nodes.get(at - 1) : pos;
         if (isFluid(pos)) return PlannedMode.SWIM;
         if (isCrawlNode(pos)) return PlannedMode.CRAWL;
-        if (isLowCeilingAscent(from, pos) || isStairOrSlab(pos.down())
-                || isStairOrSlab(from.down())) return PlannedMode.SPAM_JUMP;
+        if (isLowCeilingAscent(from, pos) || isStairOrSlab(pos.below())
+                || isStairOrSlab(from.below())) return PlannedMode.SPAM_JUMP;
         if (!hasOpenJumpHeadroom(pos)) return PlannedMode.SPAM_JUMP;
-        if (isIce(pos.down())) return PlannedMode.SPRINT;
+        if (isIce(pos.below())) return PlannedMode.SPRINT;
 
         // Precision is intentionally rare: a true two-flank drop, a reversal-like
         // turn, or the last two edges when the actual goal cell is constrained.
@@ -335,17 +335,17 @@ public final class NavigateAndActTask extends TalosTask {
         int dx = Integer.compare(pos.getX(), other.getX());
         int dz = Integer.compare(pos.getZ(), other.getZ());
         if (dx == 0 && dz == 0) return false;
-        BlockPos left = pos.add(-dz, 0, dx);
-        BlockPos right = pos.add(dz, 0, -dx);
-        return isFallRisk(left.down()) && isFallRisk(right.down());
+        BlockPos left = pos.offset(-dz, 0, dx);
+        BlockPos right = pos.offset(dz, 0, -dx);
+        return isFallRisk(left.below()) && isFallRisk(right.below());
     }
 
     /** Goal-only check for cells genuinely bounded by multiple hazardous edges. */
     private boolean isGoalEdgeBounded(BlockPos pos) {
         int exposed = 0;
-        for (Direction direction : Direction.Type.HORIZONTAL) {
-            BlockPos side = pos.offset(direction);
-            if (isFallRisk(side.down()) || isHazardCell(side) || isHazardCell(side.down())) exposed++;
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            BlockPos side = pos.relative(direction);
+            if (isFallRisk(side.below()) || isHazardCell(side) || isHazardCell(side.below())) exposed++;
         }
         return exposed >= 2;
     }
@@ -357,31 +357,31 @@ public final class NavigateAndActTask extends TalosTask {
     }
 
     private boolean isHazardCell(BlockPos pos) {
-        var state = client.world.getBlockState(pos);
-        return state.isOf(Blocks.FIRE) || state.isOf(Blocks.SOUL_FIRE)
-                || state.isOf(Blocks.CACTUS) || state.isOf(Blocks.MAGMA_BLOCK)
-                || state.isOf(Blocks.CAMPFIRE) || state.isOf(Blocks.SOUL_CAMPFIRE);
+        var state = client.level.getBlockState(pos);
+        return state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE)
+                || state.is(Blocks.CACTUS) || state.is(Blocks.MAGMA_BLOCK)
+                || state.is(Blocks.CAMPFIRE) || state.is(Blocks.SOUL_CAMPFIRE);
     }
 
-    private void continueSprintJump(ClientPlayerEntity player) {
+    private void continueSprintJump(LocalPlayer player) {
         int landingIndex = nodes.indexOf(sprintJumpLanding);
-        Vec3d waypoint = landingIndex >= 0 ? steeringNodes.get(landingIndex)
+        Vec3 waypoint = landingIndex >= 0 ? steeringNodes.get(landingIndex)
                 : clearanceAdjustedCenter(sprintJumpLanding, player.getEyeY());
-        Vec3d landingAim = new Vec3d(waypoint.x, player.getEyeY(), waypoint.z);
+        Vec3 landingAim = new Vec3(waypoint.x, player.getEyeY(), waypoint.z);
         aim.aimAt(landingAim);
         aim.tick();
         releaseDirectionalInputs();
-        client.options.forwardKey.setPressed(true);
-        client.options.sprintKey.setPressed(sprintJumpUsesSprint);
+        client.options.keyUp.setDown(true);
+        client.options.keySprint.setDown(sprintJumpUsesSprint);
         // Holding jump is intentional for a single gap-crossing arc; randomized pulses
         // are reserved for repeated grounded stair/step/head-bump jumps.
-        client.options.jumpKey.setPressed(true);
+        client.options.keyJump.setDown(true);
     }
 
     /** A short look-ahead removes center-to-center yaw snaps without cutting corners. */
-    private Vec3d followTarget(ClientPlayerEntity player, BlockPos node) {
-        Vec3d waypoint = steeringNodes.get(index);
-        Vec3d current = new Vec3d(waypoint.x, player.getEyeY(), waypoint.z);
+    private Vec3 followTarget(LocalPlayer player, BlockPos node) {
+        Vec3 waypoint = steeringNodes.get(index);
+        Vec3 current = new Vec3(waypoint.x, player.getEyeY(), waypoint.z);
         if (index + 1 >= nodes.size()) return current;
         BlockPos next = nodes.get(index + 1);
         if (next.getY() != node.getY() || isCrawlNode(node) || isCrawlNode(next)) return current;
@@ -393,16 +393,16 @@ public final class NavigateAndActTask extends TalosTask {
             int outZ = Integer.compare(next.getZ(), node.getZ());
             if (inX != outX || inZ != outZ) return current;
         }
-        Vec3d nextWaypoint = steeringNodes.get(index + 1);
-        Vec3d ahead = new Vec3d(nextWaypoint.x, player.getEyeY(), nextWaypoint.z);
+        Vec3 nextWaypoint = steeringNodes.get(index + 1);
+        Vec3 ahead = new Vec3(nextWaypoint.x, player.getEyeY(), nextWaypoint.z);
         return current.lerp(ahead, 0.45);
     }
 
     /** Returns the exact precomputed clearance waypoint when this is a path node. */
-    private Vec3d clearanceAdjustedCenter(BlockPos pos, double y) {
+    private Vec3 clearanceAdjustedCenter(BlockPos pos, double y) {
         int at = nodes.indexOf(pos);
-        Vec3d waypoint = at >= 0 ? steeringNodes.get(at) : clearanceWaypoint(client, pos);
-        return new Vec3d(waypoint.x, y, waypoint.z);
+        Vec3 waypoint = at >= 0 ? steeringNodes.get(at) : clearanceWaypoint(client, pos);
+        return new Vec3(waypoint.x, y, waypoint.z);
     }
 
     /**
@@ -411,11 +411,11 @@ public final class NavigateAndActTask extends TalosTask {
      * producing a visible 0.10 offset toward free space beside a single wall while
      * keeping opposing one-wide walls safely balanced.
      */
-    public static List<Vec3d> buildSteeringNodes(MinecraftClient client, List<BlockPos> nodes) {
+    public static List<Vec3> buildSteeringNodes(Minecraft client, List<BlockPos> nodes) {
         return nodes.stream().map(pos -> clearanceWaypoint(client, pos)).toList();
     }
 
-    private static Vec3d clearanceWaypoint(MinecraftClient client, BlockPos pos) {
+    private static Vec3 clearanceWaypoint(Minecraft client, BlockPos pos) {
         double centerX = pos.getX() + 0.5;
         double centerZ = pos.getZ() + 0.5;
         double minX = pos.getX() + (blocksBody(client, pos.west()) ? WALL_CLEARANCE : 1.0 - OPEN_SIDE_LIMIT);
@@ -424,104 +424,104 @@ public final class NavigateAndActTask extends TalosTask {
         double maxZ = pos.getZ() + (blocksBody(client, pos.south()) ? 1.0 - WALL_CLEARANCE : OPEN_SIDE_LIMIT);
         double x = minX <= maxX ? (minX + maxX) * 0.5 : centerX;
         double z = minZ <= maxZ ? (minZ + maxZ) * 0.5 : centerZ;
-        return new Vec3d(x, pos.getY() + 0.5, z);
+        return new Vec3(x, pos.getY() + 0.5, z);
     }
 
     private boolean blocksBody(BlockPos pos) {
         return blocksBody(client, pos);
     }
 
-    private static boolean blocksBody(MinecraftClient client, BlockPos pos) {
-        return client.world != null
-                && (!client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty()
-                || !client.world.getBlockState(pos.up()).getCollisionShape(client.world, pos.up()).isEmpty());
+    private static boolean blocksBody(Minecraft client, BlockPos pos) {
+        return client.level != null
+                && (!client.level.getBlockState(pos).getCollisionShape(client.level, pos).isEmpty()
+                || !client.level.getBlockState(pos.above()).getCollisionShape(client.level, pos.above()).isEmpty());
     }
 
     /** A route rising out of a boxed feet cell or over its solid lip requires jump. */
-    private boolean isConfinedVerticalEscape(ClientPlayerEntity player, BlockPos node) {
-        BlockPos feet = player.getBlockPos();
+    private boolean isConfinedVerticalEscape(LocalPlayer player, BlockPos node) {
+        BlockPos feet = player.blockPosition();
         if (node.getY() <= feet.getY()) return false;
         int blockedSides = 0;
-        for (Direction direction : Direction.Type.HORIZONTAL) {
-            if (blocksBody(feet.offset(direction))) blockedSides++;
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            if (blocksBody(feet.relative(direction))) blockedSides++;
         }
         boolean directlyAbove = node.getX() == feet.getX() && node.getZ() == feet.getZ();
         int dx = Integer.compare(node.getX(), feet.getX());
         int dz = Integer.compare(node.getZ(), feet.getZ());
-        boolean solidLip = (dx != 0 || dz != 0) && blocksBody(feet.add(dx, 0, dz));
+        boolean solidLip = (dx != 0 || dz != 0) && blocksBody(feet.offset(dx, 0, dz));
         return blockedSides >= 3 || (directlyAbove && blockedSides >= 1)
                 || (solidLip && blockedSides >= 2);
     }
 
-    private void steerSwimming(ClientPlayerEntity player, Vec3d target, BlockPos node) {
-        Vec3d horizontalTarget = new Vec3d(target.x, player.getEyeY(), target.z);
+    private void steerSwimming(LocalPlayer player, Vec3 target, BlockPos node) {
+        Vec3 horizontalTarget = new Vec3(target.x, player.getEyeY(), target.z);
         steerToward(player, horizontalTarget, false);
         double horizontal = Math.hypot(target.x - player.getX(), target.z - player.getZ());
         double pathY = node.getY() + 0.5;
-        float pathPitch = (float) MathHelper.clamp(
+        float pathPitch = (float) Mth.clamp(
                 -Math.toDegrees(Math.atan2(pathY - player.getEyeY(), Math.max(0.01, horizontal))),
                 -32.0, 32.0);
         // Eyes below the fluid surface need a gentle, sustained rise. Near the
         // surface, a slight upward pitch maintains breathing without porpoising.
-        boolean needsAir = player.isSubmergedInWater();
+        boolean needsAir = player.isUnderWater();
         float desiredPitch = needsAir ? -18.0F : Math.min(pathPitch, -4.0F);
-        player.setPitch(MathHelper.lerp(0.22F, player.getPitch(), desiredPitch));
+        player.setXRot(Mth.lerp(0.22F, player.getXRot(), desiredPitch));
     }
 
-    private void steerToward(ClientPlayerEntity player, Vec3d target, boolean slippery) {
+    private void steerToward(LocalPlayer player, Vec3 target, boolean slippery) {
         double dx = target.x - player.getX(), dz = target.z - player.getZ();
-        float targetYaw = (float) MathHelper.wrapDegrees(Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
-        Vec3d velocity = player.getVelocity();
+        float targetYaw = (float) Mth.wrapDegrees(Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
+        Vec3 velocity = player.getDeltaMovement();
         double speed = Math.hypot(velocity.x, velocity.z);
         if (slippery && speed > 0.08) {
-            float velocityYaw = (float) MathHelper.wrapDegrees(
+            float velocityYaw = (float) Mth.wrapDegrees(
                     Math.toDegrees(Math.atan2(velocity.z, velocity.x)) - 90.0);
-            targetYaw = player.getYaw() + MathHelper.wrapDegrees(
-                    0.70F * MathHelper.wrapDegrees(targetYaw - player.getYaw())
-                            + 0.30F * MathHelper.wrapDegrees(velocityYaw - player.getYaw()));
+            targetYaw = player.getYRot() + Mth.wrapDegrees(
+                    0.70F * Mth.wrapDegrees(targetYaw - player.getYRot())
+                            + 0.30F * Mth.wrapDegrees(velocityYaw - player.getYRot()));
         }
-        float delta = MathHelper.wrapDegrees(targetYaw - player.getYaw());
+        float delta = Mth.wrapDegrees(targetYaw - player.getYRot());
         float deadzone = slippery ? 2.5F : 1.25F;
         if (Math.abs(delta) > deadzone) {
             // Snap the heading on normal terrain so jumps launch in the right direction
             // (the look-ahead target already smooths steering); only ice keeps a damped
             // turn to avoid overshooting on low friction.
             float yaw = slippery
-                    ? player.getYaw() + MathHelper.clamp(delta, -4.0F, 4.0F)
+                    ? player.getYRot() + Mth.clamp(delta, -4.0F, 4.0F)
                     : targetYaw;
-            player.setYaw(yaw); player.setHeadYaw(yaw); player.setBodyYaw(yaw);
+            player.setYRot(yaw); player.setYHeadRot(yaw); player.setYBodyRot(yaw);
         }
-        player.setPitch(MathHelper.lerp(0.18F, player.getPitch(), 0.0F));
+        player.setXRot(Mth.lerp(0.18F, player.getXRot(), 0.0F));
         if (slippery && (Math.abs(delta) > 28.0F || speed > 0.48)) {
-            client.options.sprintKey.setPressed(false);
+            client.options.keySprint.setDown(false);
         }
     }
 
-    private boolean isSlippery(ClientPlayerEntity player, BlockPos target) {
-        return isIce(player.getBlockPos().down()) || isIce(target.down());
+    private boolean isSlippery(LocalPlayer player, BlockPos target) {
+        return isIce(player.blockPosition().below()) || isIce(target.below());
     }
 
     private boolean isIce(BlockPos pos) {
-        var state = client.world.getBlockState(pos);
-        return state.isOf(net.minecraft.block.Blocks.ICE)
-                || state.isOf(net.minecraft.block.Blocks.PACKED_ICE)
-                || state.isOf(net.minecraft.block.Blocks.BLUE_ICE)
-                || state.isOf(net.minecraft.block.Blocks.FROSTED_ICE);
+        var state = client.level.getBlockState(pos);
+        return state.is(net.minecraft.world.level.block.Blocks.ICE)
+                || state.is(net.minecraft.world.level.block.Blocks.PACKED_ICE)
+                || state.is(net.minecraft.world.level.block.Blocks.BLUE_ICE)
+                || state.is(net.minecraft.world.level.block.Blocks.FROSTED_ICE);
     }
 
     private boolean isCrawlNode(BlockPos pos) {
-        return client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty()
-                && !client.world.getBlockState(pos.up()).getCollisionShape(client.world, pos.up()).isEmpty();
+        return client.level.getBlockState(pos).getCollisionShape(client.level, pos).isEmpty()
+                && !client.level.getBlockState(pos.above()).getCollisionShape(client.level, pos.above()).isEmpty();
     }
 
     private boolean isCobweb(BlockPos pos) {
-        return client.world.getBlockState(pos).isOf(Blocks.COBWEB);
+        return client.level.getBlockState(pos).is(Blocks.COBWEB);
     }
 
     private boolean isStickyJumpSurface(BlockPos pos) {
-        var state = client.world.getBlockState(pos);
-        return state.isOf(Blocks.HONEY_BLOCK) || state.isOf(Blocks.SLIME_BLOCK)
-                || state.getBlock().getJumpVelocityMultiplier() < 1.0F;
+        var state = client.level.getBlockState(pos);
+        return state.is(Blocks.HONEY_BLOCK) || state.is(Blocks.SLIME_BLOCK)
+                || state.getBlock().getJumpFactor() < 1.0F;
     }
 
     /** Detect a supported ascent whose low destination ceiling forces head-bump pulses. */
@@ -530,8 +530,8 @@ public final class NavigateAndActTask extends TalosTask {
                 && (!hasOpenJumpHeadroom(feet) || !hasOpenJumpHeadroom(destination));
     }
 
-    private void pressSpamJumpIfReady(ClientPlayerEntity player) {
-        if (!player.isOnGround()) {
+    private void pressSpamJumpIfReady(LocalPlayer player) {
+        if (!player.onGround()) {
             spamJumpWasGrounded = false;
             return;
         }
@@ -541,19 +541,19 @@ public final class NavigateAndActTask extends TalosTask {
         boolean justLanded = !spamJumpWasGrounded;
         spamJumpWasGrounded = true;
         if (!justLanded && now < nextSpamJumpNanos) return;
-        client.options.jumpKey.setPressed(true);
+        client.options.keyJump.setDown(true);
         long range = MAX_SPAM_JUMP_INTERVAL_NANOS - MIN_SPAM_JUMP_INTERVAL_NANOS;
         nextSpamJumpNanos = now + MIN_SPAM_JUMP_INTERVAL_NANOS
                 + (long) (jumpRandom.nextDouble() * (range + 1L));
     }
 
     private boolean hasOpenJumpHeadroom(BlockPos feet) {
-        return client.world.getBlockState(feet.up()).getCollisionShape(client.world, feet.up()).isEmpty()
-                && client.world.getBlockState(feet.up(2))
-                .getCollisionShape(client.world, feet.up(2)).isEmpty();
+        return client.level.getBlockState(feet.above()).getCollisionShape(client.level, feet.above()).isEmpty()
+                && client.level.getBlockState(feet.above(2))
+                .getCollisionShape(client.level, feet.above(2)).isEmpty();
     }
 
-    private void advancePastReachedOrPassed(ClientPlayerEntity player) {
+    private void advancePastReachedOrPassed(LocalPlayer player) {
         while (index < nodes.size()
                 && (reached(player, nodes.get(index)) || passed(player, nodes.get(index)))) {
             index++;
@@ -561,28 +561,28 @@ public final class NavigateAndActTask extends TalosTask {
     }
 
     /** True once the player has crossed the plane through this node along its path edge. */
-    private boolean passed(ClientPlayerEntity player, BlockPos node) {
+    private boolean passed(LocalPlayer player, BlockPos node) {
         if (index <= 0 || index >= nodes.size() || !nodes.get(index).equals(node)) return false;
         BlockPos previous = nodes.get(index - 1);
         double edgeX = node.getX() - previous.getX();
         double edgeZ = node.getZ() - previous.getZ();
         if (edgeX == 0.0 && edgeZ == 0.0) return player.getY() >= node.getY();
-        Vec3d waypoint = steeringNodes.get(index);
+        Vec3 waypoint = steeringNodes.get(index);
         double beyondX = player.getX() - waypoint.x;
         double beyondZ = player.getZ() - waypoint.z;
         return beyondX * edgeX + beyondZ * edgeZ >= 0.0;
     }
 
-    private boolean handleTraversal(ClientPlayerEntity player, BlockPos node) {
-        BlockPos support = node.down();
+    private boolean handleTraversal(LocalPlayer player, BlockPos node) {
+        BlockPos support = node.below();
         boolean unsupportedUp = node.getX() == player.getBlockX()
                 && node.getZ() == player.getBlockZ() && node.getY() > player.getBlockY()
                 && !isFluid(node) && !isFluid(support) && isFallRisk(support);
         // A vertical PLACE edge wins over mining even if a prior failed placement has
         // temporarily made the destination collide.
         if (unsupportedUp) return handlePillar(player);
-        var state = client.world.getBlockState(node);
-        if (!state.getCollisionShape(client.world, node).isEmpty()) {
+        var state = client.level.getBlockState(node);
+        if (!state.getCollisionShape(client.level, node).isEmpty()) {
             if (!allowMining) {
                 finish(false, "Route became blocked and mining is disabled");
                 return true;
@@ -590,26 +590,26 @@ public final class NavigateAndActTask extends TalosTask {
             status("mining");
             releaseInputs();
             aim.aimAt(node); aim.tick();
-            if (player.getEyePos().squaredDistanceTo(Vec3d.ofCenter(node))
-                    <= player.getBlockInteractionRange() * player.getBlockInteractionRange()
+            if (player.getEyePosition().distanceToSqr(Vec3.atCenterOf(node))
+                    <= player.blockInteractionRange() * player.blockInteractionRange()
                     && aim.isAimed() && TalosClient.tickBudget().hasBudgetRemaining()) {
                 int best = player.getInventory().getSelectedSlot();
-                float speed = player.getInventory().getStack(best).getMiningSpeedMultiplier(state);
+                float speed = player.getInventory().getItem(best).getDestroySpeed(state);
                 for (int i = 0; i < 9; i++) {
-                    float candidate = player.getInventory().getStack(i).getMiningSpeedMultiplier(state);
+                    float candidate = player.getInventory().getItem(i).getDestroySpeed(state);
                     if (candidate > speed) { best = i; speed = candidate; }
                 }
                 player.getInventory().setSelectedSlot(best);
                 if (!node.equals(breaking)) {
-                    client.interactionManager.attackBlock(node, Direction.UP);
-                    breaking = node.toImmutable();
-                } else client.interactionManager.updateBlockBreakingProgress(node, Direction.UP);
-                player.swingHand(Hand.MAIN_HAND);
+                    client.gameMode.startDestroyBlock(node, Direction.UP);
+                    breaking = node.immutable();
+                } else client.gameMode.continueDestroyBlock(node, Direction.UP);
+                player.swing(InteractionHand.MAIN_HAND);
             }
             return true;
         }
         breaking = null;
-        var supportState = client.world.getBlockState(support);
+        var supportState = client.level.getBlockState(support);
         if (isFluid(node) || isFluid(support)) return false;
         // Confirm placement from world state, then walk onto the new support before
         // handling the next PLACE edge. Sneak permits forward movement but catches us
@@ -617,10 +617,10 @@ public final class NavigateAndActTask extends TalosTask {
         if (support.equals(lastBridgeTarget) && !isFallRisk(support)) {
             status("bridging");
             releaseDirectionalInputs();
-            client.options.forwardKey.setPressed(true);
-            client.options.sneakKey.setPressed(true);
-            client.options.sprintKey.setPressed(false);
-            client.options.jumpKey.setPressed(false);
+            client.options.keyUp.setDown(true);
+            client.options.keyShift.setDown(true);
+            client.options.keySprint.setDown(false);
+            client.options.keyJump.setDown(false);
             steerToward(player, clearanceAdjustedCenter(node, player.getEyeY()), false);
             return true;
         }
@@ -629,9 +629,9 @@ public final class NavigateAndActTask extends TalosTask {
             // also makes a delayed server placement safe: the player stops at the lip.
             status("bridging");
             releaseInputs();
-            client.options.sneakKey.setPressed(true);
+            client.options.keyShift.setDown(true);
             // Open trapdoors/gates occupy the support cell: remove them before filling it.
-            if (!supportState.isAir() && (supportState.getBlock() instanceof TrapdoorBlock
+            if (!supportState.isAir() && (supportState.getBlock() instanceof TrapDoorBlock
                     || supportState.getBlock() instanceof FenceGateBlock)) {
                 breakBlock(player, support, supportState);
                 return true;
@@ -643,14 +643,14 @@ public final class NavigateAndActTask extends TalosTask {
             boolean pillar = dx == 0 && dz == 0 && node.getY() > player.getBlockY();
             if (pillar) return handlePillar(player);
 
-            BlockPos standingSupport = player.getBlockPos().down();
+            BlockPos standingSupport = player.blockPosition().below();
             BlockPos placementTarget = support;
             BlockPos anchor = standingSupport;
             Direction side;
             if (dx != 0 && dz != 0) {
                 // A diagonal bridge is an L-shaped two-block cycle.  First extend the
                 // standing block along X, then attach the diagonal block to its Z face.
-                BlockPos xSupport = standingSupport.add(dx, 0, 0);
+                BlockPos xSupport = standingSupport.offset(dx, 0, 0);
                 if (isFallRisk(xSupport)) {
                     placementTarget = xSupport;
                     side = dx > 0 ? Direction.EAST : Direction.WEST;
@@ -670,37 +670,37 @@ public final class NavigateAndActTask extends TalosTask {
         return false;
     }
 
-    private void placeBridgeBlock(ClientPlayerEntity player, int blockSlot, BlockPos anchor,
+    private void placeBridgeBlock(LocalPlayer player, int blockSlot, BlockPos anchor,
                                   Direction side, BlockPos placementTarget) {
         // Never attempt to replace either of the two cells occupied by the player.
-        BlockPos feet = player.getBlockPos();
-        if (placementTarget.equals(feet) || placementTarget.equals(feet.up())) return;
+        BlockPos feet = player.blockPosition();
+        if (placementTarget.equals(feet) || placementTarget.equals(feet.above())) return;
         // The hit must describe a fresh, existing anchor face adjacent to this exact
         // target. Invalid/stale faces otherwise silently no-op on every later retry.
-        if (isFallRisk(anchor) || !anchor.offset(side).equals(placementTarget)) return;
-        Vec3d hit = Vec3d.ofCenter(anchor).add(side.getOffsetX() * 0.5,
-                side.getOffsetY() * 0.5, side.getOffsetZ() * 0.5);
+        if (isFallRisk(anchor) || !anchor.relative(side).equals(placementTarget)) return;
+        Vec3 hit = Vec3.atCenterOf(anchor).add(side.getStepX() * 0.5,
+                side.getStepY() * 0.5, side.getStepZ() * 0.5);
         aim.aimAt(hit);
         aim.tick();
         boolean rateReady = !placementTarget.equals(lastBridgeTarget)
                 || ticks - lastBridgePlaceTick >= 2;
         if (!rateReady || !aim.isAimed() || !TalosClient.tickBudget().hasBudgetRemaining()) return;
         player.getInventory().setSelectedSlot(blockSlot);
-        client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
+        client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND,
                 new BlockHitResult(hit, side, anchor, false));
-        player.swingHand(Hand.MAIN_HAND);
-        lastBridgeTarget = placementTarget.toImmutable();
+        player.swing(InteractionHand.MAIN_HAND);
+        lastBridgeTarget = placementTarget.immutable();
         lastBridgePlaceTick = ticks;
     }
 
-    private boolean handlePillar(ClientPlayerEntity player) {
+    private boolean handlePillar(LocalPlayer player) {
         status("pillaring up");
         releaseInputs();
         int blockSlot = findBlockSlot(player);
         if (blockSlot < 0) { finish(false, "Ran out of pillar blocks"); return true; }
-        if (pillarOrigin == null || player.isOnGround()) pillarOrigin = player.getBlockPos().toImmutable();
-        BlockPos anchor = pillarOrigin.down();
-        Vec3d hit = Vec3d.ofCenter(anchor).add(0.0, 0.5, 0.0);
+        if (pillarOrigin == null || player.onGround()) pillarOrigin = player.blockPosition().immutable();
+        BlockPos anchor = pillarOrigin.below();
+        Vec3 hit = Vec3.atCenterOf(anchor).add(0.0, 0.5, 0.0);
         aim.aimAt(hit);
         aim.tick();
         player.getInventory().setSelectedSlot(blockSlot);
@@ -709,65 +709,65 @@ public final class NavigateAndActTask extends TalosTask {
         // clear the target cell; same-tick jump+place is rejected by collision checks.
         if (player.getY() >= pillarOrigin.getY() + 0.42 && aim.isAimed()
                 && TalosClient.tickBudget().hasBudgetRemaining()) {
-            client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
+            client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND,
                     new BlockHitResult(hit, Direction.UP, anchor, false));
-            player.swingHand(Hand.MAIN_HAND);
+            player.swing(InteractionHand.MAIN_HAND);
         }
         return true;
     }
 
-    private int findBlockSlot(ClientPlayerEntity player) {
+    private int findBlockSlot(LocalPlayer player) {
         for (int i = 0; i < 9; i++) {
-            if (player.getInventory().getStack(i).getItem() instanceof BlockItem) return i;
+            if (player.getInventory().getItem(i).getItem() instanceof BlockItem) return i;
         }
         return -1;
     }
 
-    private void breakBlock(ClientPlayerEntity player, BlockPos pos, net.minecraft.block.BlockState state) {
+    private void breakBlock(LocalPlayer player, BlockPos pos, net.minecraft.world.level.block.state.BlockState state) {
         aim.aimAt(pos); aim.tick();
-        if (player.getEyePos().squaredDistanceTo(Vec3d.ofCenter(pos))
-                > player.getBlockInteractionRange() * player.getBlockInteractionRange()
+        if (player.getEyePosition().distanceToSqr(Vec3.atCenterOf(pos))
+                > player.blockInteractionRange() * player.blockInteractionRange()
                 || !aim.isAimed() || !TalosClient.tickBudget().hasBudgetRemaining()) return;
         int best = player.getInventory().getSelectedSlot();
-        float speed = player.getInventory().getStack(best).getMiningSpeedMultiplier(state);
+        float speed = player.getInventory().getItem(best).getDestroySpeed(state);
         for (int i = 0; i < 9; i++) {
-            float candidate = player.getInventory().getStack(i).getMiningSpeedMultiplier(state);
+            float candidate = player.getInventory().getItem(i).getDestroySpeed(state);
             if (candidate > speed) { best = i; speed = candidate; }
         }
         player.getInventory().setSelectedSlot(best);
         if (!pos.equals(breaking)) {
-            client.interactionManager.attackBlock(pos, Direction.UP);
-            breaking = pos.toImmutable();
-        } else client.interactionManager.updateBlockBreakingProgress(pos, Direction.UP);
-        player.swingHand(Hand.MAIN_HAND);
+            client.gameMode.startDestroyBlock(pos, Direction.UP);
+            breaking = pos.immutable();
+        } else client.gameMode.continueDestroyBlock(pos, Direction.UP);
+        player.swing(InteractionHand.MAIN_HAND);
     }
 
     private boolean isFallRisk(BlockPos support) {
-        var state = client.world.getBlockState(support);
-        if (state.getBlock() instanceof TrapdoorBlock || state.getBlock() instanceof FenceGateBlock) {
-            return state.contains(Properties.OPEN) && state.get(Properties.OPEN);
+        var state = client.level.getBlockState(support);
+        if (state.getBlock() instanceof TrapDoorBlock || state.getBlock() instanceof FenceGateBlock) {
+            return state.hasProperty(BlockStateProperties.OPEN) && state.getValue(BlockStateProperties.OPEN);
         }
-        var shape = state.getCollisionShape(client.world, support);
-        return shape.isEmpty() || shape.getMax(Direction.Axis.Y) < 0.5;
+        var shape = state.getCollisionShape(client.level, support);
+        return shape.isEmpty() || shape.max(Direction.Axis.Y) < 0.5;
     }
 
     private boolean isStairOrSlab(BlockPos pos) {
-        var block = client.world.getBlockState(pos).getBlock();
-        return block instanceof StairsBlock || block instanceof SlabBlock;
+        var block = client.level.getBlockState(pos).getBlock();
+        return block instanceof StairBlock || block instanceof SlabBlock;
     }
 
     private boolean isWater(BlockPos pos) {
-        return client.world.getBlockState(pos).getFluidState().isIn(FluidTags.WATER);
+        return client.level.getBlockState(pos).getFluidState().is(FluidTags.WATER);
     }
 
     private boolean isLava(BlockPos pos) {
-        return client.world.getBlockState(pos).getFluidState().isIn(FluidTags.LAVA);
+        return client.level.getBlockState(pos).getFluidState().is(FluidTags.LAVA);
     }
 
     private boolean isFluid(BlockPos pos) { return isWater(pos) || isLava(pos); }
 
-    private boolean reached(ClientPlayerEntity player, BlockPos node) {
-        Vec3d waypoint = steeringNodes.get(index);
+    private boolean reached(LocalPlayer player, BlockPos node) {
+        Vec3 waypoint = steeringNodes.get(index);
         double dx = player.getX() - waypoint.x, dz = player.getZ() - waypoint.z;
         return dx * dx + dz * dz < NODE_DISTANCE_SQUARED
                 && Math.abs(player.getY() - node.getY()) <= 0.75;
@@ -776,20 +776,20 @@ public final class NavigateAndActTask extends TalosTask {
     public void cancel() { finish(false, "Pathing cancelled"); _break(); }
     private void finish(boolean success, String detail) {
         if (client.player != null) {
-            client.player.sendMessage(net.minecraft.text.Text.literal(
-                    (success ? "§aTalos §7» §f" : "§cTalos §7» §f") + detail), true);
+            client.player.sendOverlayMessage(net.minecraft.network.chat.Component.literal(
+                    (success ? "§aTalos §7» §f" : "§cTalos §7» §f") + detail));
         }
         releaseInputs();
         future.complete(new PathResult(success, detail));
     }
     private void releaseInputs() {
         releaseDirectionalInputs();
-        client.options.jumpKey.setPressed(false); client.options.sprintKey.setPressed(false);
+        client.options.keyJump.setDown(false); client.options.keySprint.setDown(false);
     }
     private void releaseDirectionalInputs() {
-        client.options.forwardKey.setPressed(false); client.options.backKey.setPressed(false);
-        client.options.leftKey.setPressed(false); client.options.rightKey.setPressed(false);
-        client.options.sneakKey.setPressed(false);
+        client.options.keyUp.setDown(false); client.options.keyDown.setDown(false);
+        client.options.keyLeft.setDown(false); client.options.keyRight.setDown(false);
+        client.options.keyShift.setDown(false);
     }
     @Override public void onCompleted() {
         releaseInputs();

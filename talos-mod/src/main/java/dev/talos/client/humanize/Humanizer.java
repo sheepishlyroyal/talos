@@ -1,8 +1,7 @@
 package dev.talos.client.humanize;
 
-import net.minecraft.util.math.Vec3d;
-
 import java.util.Objects;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Facade for action-scoped humanization planners.
@@ -55,7 +54,7 @@ public final class Humanizer {
     public TimingHumanizer timing() { return timing; }
     public MovementHumanizer movement() { return movement; }
 
-    public RotationHumanizer.RotationPlan lookAt(Vec3d eye, Vec3d target,
+    public RotationHumanizer.RotationPlan lookAt(Vec3 eye, Vec3 target,
                                                   HumanizationProfile profile, long seed) {
         float[] targetAngles = RotationHumanizer.yawPitchTo(eye, target);
         return rotation.plan(0, 0, targetAngles[0], targetAngles[1], profile, new SeededRng(seed));

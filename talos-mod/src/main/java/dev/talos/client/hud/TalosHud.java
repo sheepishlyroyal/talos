@@ -7,10 +7,10 @@ import java.util.Map;
 import dev.talos.client.TalosClient;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.font.TextRenderer;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.resources.Identifier;
 
 /**
  * Script-controlled text overlay in the top-left corner of the screen: a chat-free
@@ -45,7 +45,7 @@ public final class TalosHud {
     /** Registers the overlay layer; call once from client init. */
     public static void register() {
         HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT,
-                Identifier.of("talos", "script_hud"), (context, tickCounter) -> render(context));
+                Identifier.fromNamespaceAndPath("talos", "script_hud"), (context, tickCounter) -> render(context));
     }
 
     /** Sets (or updates in place) one line. Throws once {@value #MAX_LINES} distinct ids exist. */
@@ -79,7 +79,7 @@ public final class TalosHud {
         return text.length() <= max ? text : text.substring(0, max - 1) + "…";
     }
 
-    private static void render(DrawContext context) {
+    private static void render(GuiGraphicsExtractor context) {
         List<String> lines;
         synchronized (LINES) {
             lines = List.copyOf(LINES.values());
@@ -98,17 +98,17 @@ public final class TalosHud {
             lines = merged;
         }
         if (lines.isEmpty()) return;
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.getDebugHud().shouldShowDebugHud()) return;
-        TextRenderer font = client.textRenderer;
-        int step = font.fontHeight + 2;
+        Minecraft client = Minecraft.getInstance();
+        if (client.getDebugOverlay().showDebugScreen()) return;
+        Font font = client.font;
+        int step = font.lineHeight + 2;
         int width = 0;
-        for (String line : lines) width = Math.max(width, font.getWidth(line));
+        for (String line : lines) width = Math.max(width, font.width(line));
         context.fill(MARGIN - PADDING, MARGIN - PADDING,
                 MARGIN + width + PADDING, MARGIN + lines.size() * step - 2 + PADDING, BACKGROUND);
         int y = MARGIN;
         for (String line : lines) {
-            context.drawTextWithShadow(font, line, MARGIN, y, TEXT_COLOR);
+            context.text(font, line, MARGIN, y, TEXT_COLOR);
             y += step;
         }
     }

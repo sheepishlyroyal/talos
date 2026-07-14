@@ -4,11 +4,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
 
 /**
  * Client-side interpretation of vanilla-style target selectors for commands that need one
@@ -36,8 +36,8 @@ public final class EntitySelectors {
      * with a user-presentable reason. {@code excludeSelf} removes the local player from
      * every candidate set (follow can never target yourself); {@code @s} bypasses it.
      */
-    public static Entity resolve(MinecraftClient client, String input, boolean excludeSelf) {
-        if (client.world == null || client.player == null)
+    public static Entity resolve(Minecraft client, String input, boolean excludeSelf) {
+        if (client.level == null || client.player == null)
             throw new IllegalArgumentException("No world is loaded");
         String text = input == null ? "" : input.trim();
         if (text.isEmpty()) throw new IllegalArgumentException("Empty target selector");
@@ -61,10 +61,10 @@ public final class EntitySelectors {
 
         Filters filters = Filters.parse(args);
         List<Entity> candidates = new ArrayList<>();
-        for (Entity entity : client.world.getEntities()) {
+        for (Entity entity : client.level.entitiesForRendering()) {
             if (entity.isRemoved()) continue;
             if (excludeSelf && entity == client.player) continue;
-            if (playersOnly && !(entity instanceof PlayerEntity)) continue;
+            if (playersOnly && !(entity instanceof Player)) continue;
             if (filters.matches(client, entity)) candidates.add(entity);
         }
         if (candidates.isEmpty())
@@ -73,7 +73,7 @@ public final class EntitySelectors {
         String sort = filters.sort != null ? filters.sort
                 : (kind == 'r' ? "random" : "nearest");
         Comparator<Entity> byDistance =
-                Comparator.comparingDouble(entity -> entity.squaredDistanceTo(client.player));
+                Comparator.comparingDouble(entity -> entity.distanceToSqr(client.player));
         return switch (sort) {
             case "nearest" -> candidates.stream().min(byDistance).orElseThrow();
             case "furthest" -> candidates.stream().max(byDistance).orElseThrow();
@@ -84,22 +84,22 @@ public final class EntitySelectors {
         };
     }
 
-    private static Entity resolvePlain(MinecraftClient client, String text, boolean excludeSelf) {
-        for (Entity entity : client.world.getEntities()) {
-            if (!(entity instanceof PlayerEntity player) || entity.isRemoved()) continue;
+    private static Entity resolvePlain(Minecraft client, String text, boolean excludeSelf) {
+        for (Entity entity : client.level.entitiesForRendering()) {
+            if (!(entity instanceof Player player) || entity.isRemoved()) continue;
             if (excludeSelf && entity == client.player) continue;
             if (player.getGameProfile().name().equalsIgnoreCase(text)) return player;
         }
         Identifier typeId = Identifier.tryParse(
                 text.contains(":") ? text : "minecraft:" + text.toLowerCase(Locale.ROOT));
-        if (typeId != null && Registries.ENTITY_TYPE.containsId(typeId)) {
+        if (typeId != null && BuiltInRegistries.ENTITY_TYPE.containsKey(typeId)) {
             Entity nearest = null;
             double best = Double.MAX_VALUE;
-            for (Entity entity : client.world.getEntities()) {
+            for (Entity entity : client.level.entitiesForRendering()) {
                 if (entity.isRemoved()) continue;
                 if (excludeSelf && entity == client.player) continue;
-                if (!Registries.ENTITY_TYPE.getId(entity.getType()).equals(typeId)) continue;
-                double distance = entity.squaredDistanceTo(client.player);
+                if (!BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).equals(typeId)) continue;
+                double distance = entity.distanceToSqr(client.player);
                 if (distance < best) { best = distance; nearest = entity; }
             }
             if (nearest != null) return nearest;
@@ -153,17 +153,17 @@ public final class EntitySelectors {
             return id.contains(":") ? id : "minecraft:" + id.toLowerCase(Locale.ROOT);
         }
 
-        boolean matches(MinecraftClient client, Entity entity) {
-            String typeId = Registries.ENTITY_TYPE.getId(entity.getType()).toString();
+        boolean matches(Minecraft client, Entity entity) {
+            String typeId = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString();
             if (!types.isEmpty() && !types.contains(typeId)) return false;
             if (notTypes.contains(typeId)) return false;
-            String entityName = entity instanceof PlayerEntity player
+            String entityName = entity instanceof Player player
                     ? player.getGameProfile().name() : entity.getName().getString();
             if (name != null && !entityName.equalsIgnoreCase(name)) return false;
             if (notName != null && entityName.equalsIgnoreCase(notName)) return false;
-            for (String tag : tags) if (!entity.getCommandTags().contains(tag)) return false;
-            for (String tag : notTags) if (entity.getCommandTags().contains(tag)) return false;
-            double distanceSq = entity.squaredDistanceTo(client.player);
+            for (String tag : tags) if (!entity.entityTags().contains(tag)) return false;
+            for (String tag : notTags) if (entity.entityTags().contains(tag)) return false;
+            double distanceSq = entity.distanceToSqr(client.player);
             return distanceSq >= minSq && distanceSq <= maxSq;
         }
     }

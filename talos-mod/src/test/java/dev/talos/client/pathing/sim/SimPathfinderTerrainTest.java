@@ -4,10 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.function.Predicate;
-
-import net.minecraft.block.Blocks;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -35,7 +34,7 @@ class SimPathfinderTerrainTest {
 
     /** A standing start at the bottom-center of a feet cell, at rest. */
     private static MotionState standingAt(int x, int y, int z) {
-        return new MotionState(new Vec3d(x + 0.5, y, z + 0.5), Vec3d.ZERO, true,
+        return new MotionState(new Vec3(x + 0.5, y, z + 0.5), Vec3.ZERO, true,
                 MotionState.Pose.STAND);
     }
 
@@ -58,7 +57,7 @@ class SimPathfinderTerrainTest {
     @Test
     void flatWalkReachesGoalSixtyBlocksOut() {
         FakeWorld world = new FakeWorld();
-        world.fill(-2, 63, -3, 65, 63, 3, Blocks.STONE.getDefaultState());
+        world.fill(-2, 63, -3, 65, 63, 3, Blocks.STONE.defaultBlockState());
         BlockPos goal = new BlockPos(60, 64, 0);
         PlannedRoute route = find(world, standingAt(0, 64, 0), goal, near(goal), WALK_ONLY);
         assertTrue(route.reachedGoal(), route.detail());
@@ -72,7 +71,7 @@ class SimPathfinderTerrainTest {
         FakeWorld world = new FakeWorld();
         for (int step = 0; step <= 9; step++) {
             world.fill(2 * step, 63 + step, -2, 2 * step + 1, 63 + step, 2,
-                    Blocks.STONE.getDefaultState());
+                    Blocks.STONE.defaultBlockState());
         }
         BlockPos goal = new BlockPos(19, 73, 0);
         PlannedRoute route = find(world, standingAt(0, 64, 0), goal, near(goal), WALK_ONLY);
@@ -84,8 +83,8 @@ class SimPathfinderTerrainTest {
         // A narrow bridge with a 5-wide gap: landing 6 cells out exceeds even a
         // full-momentum sprint-jump arc (4-wide gaps are crossable with a run-up).
         FakeWorld world = new FakeWorld();
-        world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.getDefaultState());
-        world.fill(19, 63, -1, 23, 63, 1, Blocks.AIR.getDefaultState());
+        world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.defaultBlockState());
+        world.fill(19, 63, -1, 23, 63, 1, Blocks.AIR.defaultBlockState());
         BlockPos goal = new BlockPos(38, 64, 0);
         PlannedRoute route = find(world, standingAt(2, 64, 0), goal, near(goal), WALK_ONLY);
         assertFalse(route.reachedGoal(), "gap must not be crossed: " + route.detail());
@@ -101,9 +100,9 @@ class SimPathfinderTerrainTest {
     void uncrossableGapWithDetourTakesIt() {
         // Same gap, but a side platform at z=2..6 spans it: the route must detour.
         FakeWorld world = new FakeWorld();
-        world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.getDefaultState());
-        world.fill(19, 63, -1, 23, 63, 1, Blocks.AIR.getDefaultState());
-        world.fill(14, 63, 2, 28, 63, 6, Blocks.STONE.getDefaultState());
+        world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.defaultBlockState());
+        world.fill(19, 63, -1, 23, 63, 1, Blocks.AIR.defaultBlockState());
+        world.fill(14, 63, 2, 28, 63, 6, Blocks.STONE.defaultBlockState());
         BlockPos goal = new BlockPos(38, 64, 0);
         PlannedRoute route = find(world, standingAt(2, 64, 0), goal, near(goal), WALK_ONLY);
         assertTrue(route.reachedGoal(), route.detail());
@@ -118,8 +117,8 @@ class SimPathfinderTerrainTest {
         // The long runway lets chained SPRINT edges deliver momentum to the lip, where the
         // arc rollout (which inherits the node's velocity) clears it.
         FakeWorld world = new FakeWorld();
-        world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.getDefaultState());
-        world.fill(19, 63, -1, 21, 63, 1, Blocks.AIR.getDefaultState());
+        world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.defaultBlockState());
+        world.fill(19, 63, -1, 21, 63, 1, Blocks.AIR.defaultBlockState());
         BlockPos goal = new BlockPos(38, 64, 0);
         PlannedRoute route = find(world, standingAt(2, 64, 0), goal, near(goal), WALK_ONLY);
         assertTrue(route.reachedGoal(), route.detail());
@@ -134,8 +133,8 @@ class SimPathfinderTerrainTest {
         // the same edge-hugging takeoff human parkour uses — and that extra distance
         // plus approach speed is exactly what lands the far lip.
         FakeWorld world = new FakeWorld();
-        world.fill(8, 63, -1, 40, 63, 1, Blocks.STONE.getDefaultState());
-        world.fill(19, 63, -1, 22, 63, 1, Blocks.AIR.getDefaultState());
+        world.fill(8, 63, -1, 40, 63, 1, Blocks.STONE.defaultBlockState());
+        world.fill(19, 63, -1, 22, 63, 1, Blocks.AIR.defaultBlockState());
         BlockPos goal = new BlockPos(38, 64, 0);
         PlannedRoute route = find(world, standingAt(18, 64, 0), goal, near(goal), WALK_ONLY);
         assertTrue(route.reachedGoal(), route.detail());
@@ -151,10 +150,10 @@ class SimPathfinderTerrainTest {
         // speed (kept alive as a distinct A* state by the speed-bucketed node key),
         // then launch from the elevated edge across all five cells.
         FakeWorld world = new FakeWorld();
-        world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.getDefaultState());
-        world.fill(19, 63, -1, 23, 63, 1, Blocks.AIR.getDefaultState());
+        world.fill(0, 63, -1, 40, 63, 1, Blocks.STONE.defaultBlockState());
+        world.fill(19, 63, -1, 23, 63, 1, Blocks.AIR.defaultBlockState());
         world.fill(14, 64, -1, 18, 64, 1,
-                Blocks.SNOW.getDefaultState().with(net.minecraft.block.SnowBlock.LAYERS, 7));
+                Blocks.SNOW.defaultBlockState().setValue(net.minecraft.world.level.block.SnowLayerBlock.LAYERS, 7));
         BlockPos goal = new BlockPos(38, 64, 0);
         PlannedRoute route = find(world, standingAt(2, 64, 0), goal, near(goal), WALK_ONLY);
         assertTrue(route.reachedGoal(), route.detail());
@@ -171,10 +170,10 @@ class SimPathfinderTerrainTest {
         // A deep water channel one block below both shores: the only way across is to
         // drop in, swim (deep water: water at feet AND head), and climb out the far side.
         FakeWorld world = new FakeWorld();
-        world.fill(-2, 63, -1, 7, 63, 1, Blocks.STONE.getDefaultState());   // near shore
-        world.fill(8, 58, -1, 13, 58, 1, Blocks.STONE.getDefaultState());   // basin floor
-        world.fill(8, 59, -1, 13, 62, 1, Blocks.WATER.getDefaultState());   // water y=59..62
-        world.fill(14, 62, -1, 24, 62, 1, Blocks.STONE.getDefaultState());  // far shore
+        world.fill(-2, 63, -1, 7, 63, 1, Blocks.STONE.defaultBlockState());   // near shore
+        world.fill(8, 58, -1, 13, 58, 1, Blocks.STONE.defaultBlockState());   // basin floor
+        world.fill(8, 59, -1, 13, 62, 1, Blocks.WATER.defaultBlockState());   // water y=59..62
+        world.fill(14, 62, -1, 24, 62, 1, Blocks.STONE.defaultBlockState());  // far shore
         BlockPos goal = new BlockPos(20, 63, 0);
         PlannedRoute route = find(world, standingAt(4, 64, 0), goal, near(goal), SWIMMING);
         assertTrue(route.reachedGoal(), route.detail());
@@ -188,8 +187,8 @@ class SimPathfinderTerrainTest {
         // Planner mining edges end INSIDE each dug cell (the world is never mutated), so
         // the goal accepts the tunnel's far cell — execution re-plans onward from there.
         FakeWorld world = new FakeWorld();
-        world.fill(0, 63, -1, 20, 63, 1, Blocks.STONE.getDefaultState());
-        world.fill(10, 64, -1, 12, 66, 1, Blocks.STONE.getDefaultState());
+        world.fill(0, 63, -1, 20, 63, 1, Blocks.STONE.defaultBlockState());
+        world.fill(10, 64, -1, 12, 66, 1, Blocks.STONE.defaultBlockState());
         BlockPos goal = new BlockPos(12, 64, 0);
         Predicate<BlockPos> isGoal = pos -> pos.getX() >= 12 && pos.getY() == 64;
         PlannedRoute route = find(world, standingAt(2, 64, 0), goal, isGoal, MINING);

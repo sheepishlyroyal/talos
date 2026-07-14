@@ -7,19 +7,19 @@ import dev.talos.client.scan.BlockStatePredicate;
 import java.util.Comparator;
 import java.util.List;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.AbstractClientPlayerEntity;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * {@code /talos look <yaw> <pitch>} — set the player's look angles, supports {@code ^} relative syntax.
@@ -38,7 +38,7 @@ import net.minecraft.text.Text;
 final class LookCommand {
     /** Radius (in chunks) scanned for {@code /talos look block}, matching the client's view distance. */
     private static int defaultBlockRadius() {
-        return MinecraftClient.getInstance().options.getViewDistance().getValue();
+        return Minecraft.getInstance().options.renderDistance().get();
     }
 
     /** Radius (in blocks) searched for {@code /talos look entity}. */
@@ -49,15 +49,15 @@ final class LookCommand {
 
     static int execute(CommandContext<FabricClientCommandSource> context) {
         FabricClientCommandSource source = context.getSource();
-        ClientPlayerEntity player = source.getPlayer();
+        LocalPlayer player = source.getPlayer();
 
-        float yaw = RelativeAngleArgumentType.resolve(context, "yaw", player.getYaw());
-        float pitch = RelativeAngleArgumentType.resolve(context, "pitch", player.getPitch());
-        pitch = MathHelper.clamp(pitch, -90.0F, 90.0F);
+        float yaw = RelativeAngleArgumentType.resolve(context, "yaw", player.getYRot());
+        float pitch = RelativeAngleArgumentType.resolve(context, "pitch", player.getXRot());
+        pitch = Mth.clamp(pitch, -90.0F, 90.0F);
 
         aim(player, yaw, pitch);
 
-        source.sendFeedback(Text.literal("Looking at yaw %.2f, pitch %.2f".formatted(yaw, pitch)));
+        source.sendFeedback(Component.literal("Looking at yaw %.2f, pitch %.2f".formatted(yaw, pitch)));
         return 1;
     }
 
@@ -69,33 +69,33 @@ final class LookCommand {
                 predicate, defaultBlockRadius(), n, (found, pos) ->
                         source.getClient().execute(() -> {
                             if (pos == null) {
-                                source.sendError(Text.literal(
+                                source.sendError(Component.literal(
                                         "Index %d out of range: %d match(es) (0-based, -1 = furthest)"
                                                 .formatted(n, found)));
                                 return;
                             }
-                            ClientPlayerEntity player = source.getPlayer();
-                            Vec3d center = Vec3d.ofCenter(pos);
+                            LocalPlayer player = source.getPlayer();
+                            Vec3 center = Vec3.atCenterOf(pos);
                             aimAt(player, center);
-                            source.sendFeedback(Text.literal("Looking at block #%d at %d, %d, %d"
+                            source.sendFeedback(Component.literal("Looking at block #%d at %d, %d, %d"
                                     .formatted(n, pos.getX(), pos.getY(), pos.getZ())));
                         }));
         try {
             TalosClient.taskScheduler().addTask("look-block", task);
         } catch (IllegalStateException conflict) {
-            source.sendError(Text.literal("A world scan is already running"));
+            source.sendError(Component.literal("A world scan is already running"));
             return 0;
         }
-        source.sendFeedback(Text.literal("Scanning loaded chunks..."));
+        source.sendFeedback(Component.literal("Scanning loaded chunks..."));
         return 1;
     }
 
     /** {@code /talos look coords <x> <y> <z>} — aims at the center of the given block position. */
     static int executeCoords(CommandContext<FabricClientCommandSource> context, BlockPos pos) {
         FabricClientCommandSource source = context.getSource();
-        ClientPlayerEntity player = source.getPlayer();
-        aimAt(player, Vec3d.ofCenter(pos));
-        source.sendFeedback(Text.literal("Looking at %d, %d, %d"
+        LocalPlayer player = source.getPlayer();
+        aimAt(player, Vec3.atCenterOf(pos));
+        source.sendFeedback(Component.literal("Looking at %d, %d, %d"
                 .formatted(pos.getX(), pos.getY(), pos.getZ())));
         return 1;
     }
@@ -115,42 +115,42 @@ final class LookCommand {
 
         EntityType<?> entityType = null;
         if (entityTypeId != null) {
-            if (!Registries.ENTITY_TYPE.containsId(entityTypeId)) {
-                source.sendError(Text.literal("Unknown entity type: " + entityTypeId));
+            if (!BuiltInRegistries.ENTITY_TYPE.containsKey(entityTypeId)) {
+                source.sendError(Component.literal("Unknown entity type: " + entityTypeId));
                 return 0;
             }
-            entityType = Registries.ENTITY_TYPE.get(entityTypeId);
+            entityType = BuiltInRegistries.ENTITY_TYPE.getValue(entityTypeId);
         }
 
-        ClientPlayerEntity player = source.getPlayer();
-        MinecraftClient client = source.getClient();
-        if (client.world == null) {
-            source.sendError(Text.literal("No world loaded"));
+        LocalPlayer player = source.getPlayer();
+        Minecraft client = source.getClient();
+        if (client.level == null) {
+            source.sendError(Component.literal("No world loaded"));
             return 0;
         }
 
         EntityType<?> wantedType = entityType;
-        Box box = player.getBoundingBox().expand(ENTITY_SEARCH_RADIUS);
-        List<Entity> matches = client.world.getEntitiesByClass(Entity.class, box, entity ->
+        AABB box = player.getBoundingBox().inflate(ENTITY_SEARCH_RADIUS);
+        List<Entity> matches = client.level.getEntitiesOfClass(Entity.class, box, entity ->
                         entity != player
                                 && entity.isAlive()
                                 && (wantedType == null || entity.getType() == wantedType)
-                                && (tag == null || entity.getCommandTags().contains(tag)))
+                                && (tag == null || entity.entityTags().contains(tag)))
                 .stream()
-                .sorted(Comparator.comparingDouble(player::squaredDistanceTo))
+                .sorted(Comparator.comparingDouble(player::distanceToSqr))
                 .toList();
 
         Entity target = Indexed.select(matches, n);
         if (target == null) {
-            source.sendError(Text.literal("Index %d out of range: %d matching entit%s (%s)"
+            source.sendError(Component.literal("Index %d out of range: %d matching entit%s (%s)"
                     .formatted(n, matches.size(), matches.size() == 1 ? "y" : "ies",
                             Indexed.rangeHint(matches.size()))));
             return 0;
         }
-        aimAt(player, target.getEyePos());
+        aimAt(player, target.getEyePosition());
 
-        Identifier targetTypeId = Registries.ENTITY_TYPE.getId(target.getType());
-        source.sendFeedback(Text.literal("Looking at %s #%d at %.0f, %.0f, %.0f"
+        Identifier targetTypeId = BuiltInRegistries.ENTITY_TYPE.getKey(target.getType());
+        source.sendFeedback(Component.literal("Looking at %s #%d at %.0f, %.0f, %.0f"
                 .formatted(targetTypeId, n, target.getX(), target.getY(), target.getZ())));
         return 1;
     }
@@ -166,20 +166,20 @@ final class LookCommand {
         String[] error = new String[1];
         EntitySelector selector = EntitySelector.parse(token, error);
         if (selector == null) {
-            source.sendError(Text.literal(error[0]));
+            source.sendError(Component.literal(error[0]));
             return 0;
         }
 
-        ClientPlayerEntity player = source.getPlayer();
-        MinecraftClient client = source.getClient();
-        if (client.world == null) {
-            source.sendError(Text.literal("No world loaded"));
+        LocalPlayer player = source.getPlayer();
+        Minecraft client = source.getClient();
+        if (client.level == null) {
+            source.sendError(Component.literal("No world loaded"));
             return 0;
         }
 
         return switch (selector.kind()) {
             case SELF -> {
-                source.sendFeedback(Text.literal("@s is you — no aim change"));
+                source.sendFeedback(Component.literal("@s is you — no aim change"));
                 yield 1;
             }
             case PLAYER_NEAREST -> aimAtNth(source, player,
@@ -187,17 +187,17 @@ final class LookCommand {
             case PLAYERS_ALL -> aimAtNth(source, player,
                     playerCandidates(client, player, true), selector, n, "player");
             case ENTITIES -> {
-                Box box = player.getBoundingBox().expand(ENTITY_SEARCH_RADIUS);
-                List<Entity> candidates = client.world.getEntitiesByClass(Entity.class, box,
+                AABB box = player.getBoundingBox().inflate(ENTITY_SEARCH_RADIUS);
+                List<Entity> candidates = client.level.getEntitiesOfClass(Entity.class, box,
                         entity -> entity.isAlive() && selector.matchesFilters(entity));
                 yield aimAtNth(source, player, candidates, selector, n, "entity");
             }
         };
     }
 
-    private static List<Entity> playerCandidates(MinecraftClient client, ClientPlayerEntity self, boolean includeSelf) {
+    private static List<Entity> playerCandidates(Minecraft client, LocalPlayer self, boolean includeSelf) {
         List<Entity> players = new java.util.ArrayList<>();
-        for (AbstractClientPlayerEntity other : client.world.getPlayers()) {
+        for (AbstractClientPlayer other : client.level.players()) {
             if (includeSelf || other != self) {
                 players.add(other);
             }
@@ -206,11 +206,11 @@ final class LookCommand {
     }
 
     /** Filters by distance, sorts (nearest by default, furthest if requested), applies {@code limit=} then picks the Nth match. */
-    private static int aimAtNth(FabricClientCommandSource source, ClientPlayerEntity player,
+    private static int aimAtNth(FabricClientCommandSource source, LocalPlayer player,
             List<Entity> candidates, EntitySelector selector, int n, String noun) {
-        Comparator<Entity> byDistance = Comparator.comparingDouble(player::squaredDistanceTo);
+        Comparator<Entity> byDistance = Comparator.comparingDouble(player::distanceToSqr);
         List<Entity> filtered = candidates.stream()
-                .filter(entity -> selector.withinDistance(Math.sqrt(player.squaredDistanceTo(entity))))
+                .filter(entity -> selector.withinDistance(Math.sqrt(player.distanceToSqr(entity))))
                 .sorted(selector.furthest() ? byDistance.reversed() : byDistance)
                 .toList();
         Integer limit = selector.limit();
@@ -220,34 +220,34 @@ final class LookCommand {
 
         Entity target = Indexed.select(filtered, n);
         if (target == null) {
-            source.sendError(Text.literal("Index %d out of range: %d matching %s%s (%s)"
+            source.sendError(Component.literal("Index %d out of range: %d matching %s%s (%s)"
                     .formatted(n, filtered.size(), noun, filtered.size() == 1 ? "" : "s",
                             Indexed.rangeHint(filtered.size()))));
             return 0;
         }
-        aimAt(player, target.getEyePos());
+        aimAt(player, target.getEyePosition());
 
-        Text label = target instanceof PlayerEntity playerEntity
+        Component label = target instanceof Player playerEntity
                 ? playerEntity.getName()
-                : Text.literal(Registries.ENTITY_TYPE.getId(target.getType()).toString());
-        source.sendFeedback(Text.literal("Looking at ")
+                : Component.literal(BuiltInRegistries.ENTITY_TYPE.getKey(target.getType()).toString());
+        source.sendFeedback(Component.literal("Looking at ")
                 .append(label)
-                .append(Text.literal(" #%d at %.0f, %.0f, %.0f"
+                .append(Component.literal(" #%d at %.0f, %.0f, %.0f"
                         .formatted(n, target.getX(), target.getY(), target.getZ()))));
         return 1;
     }
 
     /** Runs a humanized cube-aim session toward {@code target} (fast->slow, red-X, path). */
-    private static void aimAt(ClientPlayerEntity player, Vec3d target) {
+    private static void aimAt(LocalPlayer player, Vec3 target) {
         dev.talos.client.action.AimController.startTask(
-                net.minecraft.client.MinecraftClient.getInstance(), target,
-                Double.doubleToLongBits(target.x * 31.0 + target.z) ^ player.age);
+                net.minecraft.client.Minecraft.getInstance(), target,
+                Double.doubleToLongBits(target.x * 31.0 + target.z) ^ player.tickCount);
     }
 
-    private static void aim(ClientPlayerEntity player, float yaw, float pitch) {
-        player.setYaw(yaw);
-        player.setPitch(pitch);
-        player.setHeadYaw(yaw);
-        player.setBodyYaw(yaw);
+    private static void aim(LocalPlayer player, float yaw, float pitch) {
+        player.setYRot(yaw);
+        player.setXRot(pitch);
+        player.setYHeadRot(yaw);
+        player.setYBodyRot(yaw);
     }
 }

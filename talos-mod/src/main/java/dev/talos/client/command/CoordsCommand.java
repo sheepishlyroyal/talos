@@ -2,8 +2,8 @@ package dev.talos.client.command;
 
 import com.mojang.brigadier.context.CommandContext;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
 
 /**
  * {@code /talos coords direction <yaw> <pitch>} — reports the block coordinates hit by a raycast
@@ -17,7 +17,7 @@ final class CoordsCommand {
     }
 
     static int executeDirection(CommandContext<FabricClientCommandSource> context, BlockPos pos) {
-        context.getSource().sendFeedback(Text.literal(
+        context.getSource().sendFeedback(Component.literal(
                 "Ray hits %d, %d, %d".formatted(pos.getX(), pos.getY(), pos.getZ())));
         return 1;
     }

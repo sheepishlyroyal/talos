@@ -7,12 +7,12 @@ import dev.talos.client.scan.ScanTask;
 import dev.talos.client.task.SimpleTask;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import net.minecraft.block.BlockState;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.item.ItemStack;
-import net.minecraft.util.Hand;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 
 /** Humanized, verified block-breaking state machine. */
@@ -36,7 +36,7 @@ public final class BreakBlockAction extends SimpleTask {
 
     public BreakBlockAction(BlockPos target) { this(target, null); }
     public BreakBlockAction(BlockPos target, @Nullable HumanizationProfile profile) {
-        this.target = target.toImmutable();
+        this.target = target.immutable();
         this.profile = profile == null ? TalosClient.humanizer().defaultProfile() : profile;
     }
     public CompletableFuture<ActionResult> future() { return result; }
@@ -44,9 +44,9 @@ public final class BreakBlockAction extends SimpleTask {
     @Override public Set<Object> getMutexKeys() { return MUTEX; }
 
     @Override protected void onTick() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (!client.isOnThread()) { finish(false, "Action left the client thread"); return; }
-        if (client.player == null || client.world == null || client.interactionManager == null) {
+        Minecraft client = Minecraft.getInstance();
+        if (!client.isSameThread()) { finish(false, "Action left the client thread"); return; }
+        if (client.player == null || client.level == null || client.gameMode == null) {
             finish(false, "No active world/player"); return;
         }
         if (++ticks > TIMEOUT_TICKS) { finish(false, "Timed out breaking " + target.toShortString()); return; }
@@ -60,41 +60,41 @@ public final class BreakBlockAction extends SimpleTask {
         }
     }
 
-    private void prepare(MinecraftClient client) {
-        original = client.world.getBlockState(target);
+    private void prepare(Minecraft client) {
+        original = client.level.getBlockState(target);
         // The desired end state (block gone) already holds — that's success, not an error.
         if (original.isAir()) { finish(true, "Block was already clear"); return; }
         if (!withinReach(client)) { finish(false, "Block is out of reach"); return; }
         int slot = bestToolSlot(client, original);
         WeaponSelector.select(client, slot);
-        selectedTool = client.player.getMainHandStack();
+        selectedTool = client.player.getMainHandItem();
         aim = new AimController(client, TalosClient.humanizer().rotation(), profile, rng.nextInt(Integer.MAX_VALUE));
         state = State.ACQUIRE;
     }
 
-    private void execute(MinecraftClient client) {
-        if (client.player.getMainHandStack() != selectedTool) {
+    private void execute(Minecraft client) {
+        if (client.player.getMainHandItem() != selectedTool) {
             finish(false, "Held tool changed during break"); return;
         }
-        boolean accepted = client.interactionManager.attackBlock(target, side);
-        client.player.swingHand(Hand.MAIN_HAND);
+        boolean accepted = client.gameMode.startDestroyBlock(target, side);
+        client.player.swing(InteractionHand.MAIN_HAND);
         if (!accepted) { retry("Server rejected break start"); return; }
         state = State.OBSERVE;
     }
 
-    private void observe(MinecraftClient client) {
-        BlockState current = client.world.getBlockState(target);
+    private void observe(Minecraft client) {
+        BlockState current = client.level.getBlockState(target);
         if (current.isAir()) { finish(true, "Broke " + target.toShortString()); return; }
         if (current != original && !current.equals(original)) {
             finish(false, "Target block changed unexpectedly"); return;
         }
-        if (client.player.getMainHandStack() != selectedTool) {
+        if (client.player.getMainHandItem() != selectedTool) {
             finish(false, "Held tool changed during break"); return;
         }
         if (!withinReach(client)) { finish(false, "Block moved out of reach"); return; }
         if (TalosClient.tickBudget().hasBudgetRemaining()) {
-            client.interactionManager.updateBlockBreakingProgress(target, side);
-            client.player.swingHand(Hand.MAIN_HAND);
+            client.gameMode.continueDestroyBlock(target, side);
+            client.player.swing(InteractionHand.MAIN_HAND);
         }
     }
 
@@ -104,16 +104,16 @@ public final class BreakBlockAction extends SimpleTask {
         state = State.BACKOFF;
     }
 
-    private boolean withinReach(MinecraftClient client) {
-        return client.player.getEyePos().squaredDistanceTo(net.minecraft.util.math.Vec3d.ofCenter(target))
-                <= Math.pow(client.player.getBlockInteractionRange(), 2);
+    private boolean withinReach(Minecraft client) {
+        return client.player.getEyePosition().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(target))
+                <= Math.pow(client.player.blockInteractionRange(), 2);
     }
 
-    private static int bestToolSlot(MinecraftClient client, BlockState state) {
+    private static int bestToolSlot(Minecraft client, BlockState state) {
         int best = client.player.getInventory().getSelectedSlot();
-        float speed = client.player.getInventory().getStack(best).getMiningSpeedMultiplier(state);
+        float speed = client.player.getInventory().getItem(best).getDestroySpeed(state);
         for (int slot = 0; slot < 9; slot++) {
-            float candidate = client.player.getInventory().getStack(slot).getMiningSpeedMultiplier(state);
+            float candidate = client.player.getInventory().getItem(slot).getDestroySpeed(state);
             if (candidate > speed) { speed = candidate; best = slot; }
         }
         return best;

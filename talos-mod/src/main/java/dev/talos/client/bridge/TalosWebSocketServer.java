@@ -13,8 +13,8 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
 import org.java_websocket.WebSocket;
 import org.java_websocket.framing.CloseFrame;
 import org.java_websocket.handshake.ClientHandshake;
@@ -203,9 +203,9 @@ public final class TalosWebSocketServer extends WebSocketServer {
     }
 
     private static void chat(String message) {
-        MinecraftClient client = MinecraftClient.getInstance();
+        Minecraft client = Minecraft.getInstance();
         client.execute(() -> {
-            if (client.player != null) client.player.sendMessage(Text.literal(message), false);
+            if (client.player != null) client.player.sendSystemMessage(Component.literal(message));
             else LOGGER.info(message);
         });
     }

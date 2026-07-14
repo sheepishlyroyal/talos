@@ -8,9 +8,8 @@ import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.function.Predicate;
-
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.CollisionView;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.CollisionGetter;
 
 /**
  * Cheap block-grid A* that sketches a global corridor for far goals. Where
@@ -44,13 +43,13 @@ public final class CoarsePathfinder {
     private static final Predicate<BlockPos> ALWAYS_LOADED = pos -> true;
 
     /** Runs the whole search inline. Callers on the client thread should slice via begin(). */
-    public static Result find(CollisionView world, BlockPos start, BlockPos goal,
+    public static Result find(CollisionGetter world, BlockPos start, BlockPos goal,
             Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos) {
         return find(world, start, goal, isGoal, blacklist, timeBudgetNanos, ALWAYS_LOADED);
     }
 
     /** Inline variant with an explicit loaded-chunk predicate (see {@link #begin}). */
-    public static Result find(CollisionView world, BlockPos start, BlockPos goal,
+    public static Result find(CollisionGetter world, BlockPos start, BlockPos goal,
             Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos,
             Predicate<BlockPos> loaded) {
         Search search = begin(world, start, goal, isGoal, blacklist, timeBudgetNanos, loaded);
@@ -59,7 +58,7 @@ public final class CoarsePathfinder {
     }
 
     /** Creates a resumable search; call {@link Search#advance} from successive ticks. */
-    public static Search begin(CollisionView world, BlockPos start, BlockPos goal,
+    public static Search begin(CollisionGetter world, BlockPos start, BlockPos goal,
             Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos) {
         return begin(world, start, goal, isGoal, blacklist, timeBudgetNanos, ALWAYS_LOADED);
     }
@@ -69,14 +68,14 @@ public final class CoarsePathfinder {
      * client chunks read back as pure air — indistinguishable from a bottomless void — so
      * refusing them keeps the corridor honest about where the world is actually known.
      */
-    public static Search begin(CollisionView world, BlockPos start, BlockPos goal,
+    public static Search begin(CollisionGetter world, BlockPos start, BlockPos goal,
             Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos,
             Predicate<BlockPos> loaded) {
         return new Search(world, start, goal, isGoal, blacklist, timeBudgetNanos, loaded);
     }
 
     public static final class Search {
-        private final CollisionView world;
+        private final CollisionGetter world;
         private final BlockPos goal;
         private final Predicate<BlockPos> isGoal;
         private final Set<BlockPos> blacklist;
@@ -95,7 +94,7 @@ public final class CoarsePathfinder {
         private int expanded;
         private String reason;
 
-        private Search(CollisionView world, BlockPos start, BlockPos goal,
+        private Search(CollisionGetter world, BlockPos start, BlockPos goal,
                 Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos,
                 Predicate<BlockPos> loaded) {
             if (world == null || start == null || goal == null || isGoal == null
@@ -126,7 +125,7 @@ public final class CoarsePathfinder {
                     && System.nanoTime() < sliceDeadline) {
                 Node node = open.poll();
                 if (node.g() > bestCost.getOrDefault(node.key(), Double.POSITIVE_INFINITY)) continue;
-                BlockPos cell = BlockPos.fromLong(node.key());
+                BlockPos cell = BlockPos.of(node.key());
                 if (isGoal.test(cell)) {
                     result = node;
                     reason = "goal reached";
@@ -153,7 +152,7 @@ public final class CoarsePathfinder {
             Node end = reached ? result : closest;
             List<BlockPos> reverse = new ArrayList<>();
             for (Long key = end.key(); key != null; key = cameFrom.get(key)) {
-                reverse.add(BlockPos.fromLong(key));
+                reverse.add(BlockPos.of(key));
             }
             List<BlockPos> corridor = new ArrayList<>(reverse.size());
             for (int i = reverse.size() - 1; i >= 0; i--) corridor.add(reverse.get(i));
@@ -169,24 +168,24 @@ public final class CoarsePathfinder {
                 double moveCost = diagonal ? DIAGONAL_COST : 1.0;
                 // Diagonals never cut corners: both flanking cardinal columns must be open
                 // at body height, or the corridor threads gaps the player cannot.
-                if (diagonal && (!open2(cell.add(dx, 0, 0)) || !open2(cell.add(0, 0, dz)))) {
+                if (diagonal && (!open2(cell.offset(dx, 0, 0)) || !open2(cell.offset(0, 0, dz)))) {
                     continue;
                 }
-                BlockPos flat = cell.add(dx, 0, dz);
+                BlockPos flat = cell.offset(dx, 0, dz);
                 if (walkable(flat)) {
                     relax(node, flat, moveCost);
                     continue;
                 }
                 // Step up one: the jump needs headroom above the CURRENT cell too.
-                BlockPos up = flat.up();
-                if (walkable(up) && passable(cell.up(2))) {
+                BlockPos up = flat.above();
+                if (walkable(up) && passable(cell.above(2))) {
                     relax(node, up, moveCost + STEP_UP_PENALTY);
                     continue;
                 }
                 // Drop up to MAX_DROP: the fall column must be clear the whole way down.
                 if (!open2(flat)) continue;
                 for (int depth = 1; depth <= MAX_DROP; depth++) {
-                    BlockPos landing = flat.down(depth);
+                    BlockPos landing = flat.below(depth);
                     if (walkable(landing)) {
                         relax(node, landing, moveCost);
                         break;
@@ -217,15 +216,15 @@ public final class CoarsePathfinder {
             if (!loaded.test(feet)) return false;
             if (!open2(feet)) return false;
             if (PlayerMotion.isLava(world.getFluidState(feet))
-                    || PlayerMotion.isLava(world.getFluidState(feet.up()))) return false;
+                    || PlayerMotion.isLava(world.getFluidState(feet.above()))) return false;
             if (PlayerMotion.isWater(world.getFluidState(feet))) return true; // swim leg
-            BlockPos support = feet.down();
+            BlockPos support = feet.below();
             return !passable(support) && !PlayerMotion.isLava(world.getFluidState(support));
         }
 
         /** Both body cells (feet and head) collision-free. */
         private boolean open2(BlockPos feet) {
-            return passable(feet) && passable(feet.up());
+            return passable(feet) && passable(feet.above());
         }
 
         private boolean passable(BlockPos pos) {

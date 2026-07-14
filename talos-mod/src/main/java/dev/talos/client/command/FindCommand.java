@@ -6,12 +6,12 @@ import dev.talos.client.TalosClient;
 import dev.talos.client.scan.BlockStatePredicate;
 import dev.talos.client.scan.ScanTask;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.HoverEvent;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
 
 final class FindCommand {
     /** How long the nearest match stays highlighted after a successful scan. */
@@ -28,36 +28,36 @@ final class FindCommand {
         try {
             TalosClient.taskScheduler().addTask("find-block", task);
         } catch (IllegalStateException conflict) {
-            source.sendError(Text.literal("A world scan is already running"));
+            source.sendError(Component.literal("A world scan is already running"));
             return 0;
         }
-        source.sendFeedback(Text.literal("Scanning loaded chunks..."));
+        source.sendFeedback(Component.literal("Scanning loaded chunks..."));
         return 1;
     }
 
     private static void report(FabricClientCommandSource source, BlockPos result) {
         if (result == null) {
-            source.sendError(Text.literal("No match found"));
+            source.sendError(Component.literal("No match found"));
             return;
         }
-        var camera = MinecraftClient.getInstance().getCameraEntity();
-        double distance = camera == null ? 0.0 : Math.sqrt(result.getSquaredDistance(camera.getCameraPosVec(0.0F)));
+        var camera = Minecraft.getInstance().getCameraEntity();
+        double distance = camera == null ? 0.0 : Math.sqrt(result.distToCenterSqr(camera.getEyePosition(0.0F)));
         GlowCommand.highlight(result, HIGHLIGHT_TICKS);
 
         String coords = "%d %d %d".formatted(result.getX(), result.getY(), result.getZ());
-        Text coordinates = Text.literal("%d, %d, %d".formatted(result.getX(), result.getY(), result.getZ()))
-                .styled(style -> style
+        Component coordinates = Component.literal("%d, %d, %d".formatted(result.getX(), result.getY(), result.getZ()))
+                .withStyle(style -> style
                         .withClickEvent(new ClickEvent.RunCommand("/talos goto " + coords))
-                        .withHoverEvent(new HoverEvent.ShowText(Text.literal("Click to walk there")))
-                        .withColor(Formatting.AQUA));
-        Text glow = Text.literal("[Glow]")
-                .styled(style -> style
+                        .withHoverEvent(new HoverEvent.ShowText(Component.literal("Click to walk there")))
+                        .withColor(ChatFormatting.AQUA));
+        Component glow = Component.literal("[Glow]")
+                .withStyle(style -> style
                         .withClickEvent(new ClickEvent.RunCommand("/talos glow " + coords + " 60"))
-                        .withHoverEvent(new HoverEvent.ShowText(Text.literal("Highlight for 60s")))
-                        .withColor(Formatting.YELLOW));
-        source.sendFeedback(Text.literal("Closest match at ")
+                        .withHoverEvent(new HoverEvent.ShowText(Component.literal("Highlight for 60s")))
+                        .withColor(ChatFormatting.YELLOW));
+        source.sendFeedback(Component.literal("Closest match at ")
                 .append(coordinates)
-                .append(Text.literal(" (%.2f blocks away) ".formatted(distance)))
+                .append(Component.literal(" (%.2f blocks away) ".formatted(distance)))
                 .append(glow));
     }
 }

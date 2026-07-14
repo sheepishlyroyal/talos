@@ -23,10 +23,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.graalvm.polyglot.Value;
 import dev.talos.client.hud.TalosHud;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.EnvironmentAccess;
@@ -292,9 +292,9 @@ public final class ScriptEngine {
      */
     private static void sendToChat(String level, String text) {
         GameThreadExecutor.instance().submit(() -> {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client == null || client.inGameHud == null) return null;
-            Formatting color = "error".equals(level) ? Formatting.RED : Formatting.GRAY;
+            Minecraft client = Minecraft.getInstance();
+            if (client == null || client.gui == null) return null;
+            ChatFormatting color = "error".equals(level) ? ChatFormatting.RED : ChatFormatting.GRAY;
             String prefix = "[Talos] ";
             String body = text;
             if (text.startsWith("[Talos:") && text.contains("] ")) {
@@ -302,9 +302,9 @@ public final class ScriptEngine {
                 prefix = text.substring(0, end);
                 body = text.substring(end);
             }
-            MutableText message = Text.literal(prefix).formatted(Formatting.AQUA, Formatting.BOLD)
-                    .append(Text.literal(body).formatted(color));
-            client.inGameHud.getChatHud().addMessage(message);
+            MutableComponent message = Component.literal(prefix).withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
+                    .append(Component.literal(body).withStyle(color));
+            client.player.sendSystemMessage(message);
             return null;
         });
     }

@@ -4,7 +4,7 @@ import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
-import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.Minecraft;
 
 /** Bounded mailbox for work that must run on the Minecraft client tick thread. */
 public final class GameThreadExecutor {
@@ -29,8 +29,8 @@ public final class GameThreadExecutor {
         return future;
     }
 
-    public void drain(MinecraftClient client) {
-        if (!client.isOnThread()) throw new IllegalStateException("GameThreadExecutor drained off client thread");
+    public void drain(Minecraft client) {
+        if (!client.isSameThread()) throw new IllegalStateException("GameThreadExecutor drained off client thread");
         Runnable work;
         while ((work = queue.poll()) != null) work.run();
     }

@@ -12,10 +12,10 @@ import dev.talos.client.ui.theme.ThemeMode;
 import dev.talos.client.ui.theme.ThemePalette;
 import dev.talos.client.ui.widget.Button;
 import dev.talos.client.ui.widget.ToggleSwitch;
-import net.minecraft.client.gui.Click;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.text.Text;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.network.chat.Component;
 
 /**
  * The real liquid-glass settings panel: a frosted, gradient-bordered rounded rect
@@ -34,9 +34,9 @@ public final class TalosScreen extends Screen {
     private static final int PANEL_RADIUS = 20;
     private static final long OPEN_DURATION_MILLIS = 220;
 
-    private static final Text DESCRIPTION = Text.literal("liquid-glass UI toolkit");
-    private static final Text TOGGLE_LABEL = Text.literal("Light theme");
-    private static final Text CLOSE_LABEL = Text.literal("Close");
+    private static final Component DESCRIPTION = Component.literal("liquid-glass UI toolkit");
+    private static final Component TOGGLE_LABEL = Component.literal("Light theme");
+    private static final Component CLOSE_LABEL = Component.literal("Close");
 
     private final Animation openAnim = new EaseOutQuad(OPEN_DURATION_MILLIS, Animation.Direction.FORWARDS);
     private ToggleSwitch themeToggle;
@@ -47,7 +47,7 @@ public final class TalosScreen extends Screen {
     private TalosGuiScale.Adjust scaleAdjust = new TalosGuiScale.Adjust(1f, 1, 1);
 
     public TalosScreen() {
-        super(Text.literal("Talos"));
+        super(Component.literal("Talos"));
     }
 
     @Override
@@ -63,15 +63,15 @@ public final class TalosScreen extends Screen {
 
         this.closeButton = new Button(
                 panelX + PANEL_WIDTH - Spacing.S24 - 80, panelY + PANEL_HEIGHT - Spacing.S24 - 20,
-                80, 20, CLOSE_LABEL, this::close);
+                80, 20, CLOSE_LABEL, this::onClose);
     }
 
     @Override
-    public void render(DrawContext context, int mouseX, int mouseY, float deltaTicks) {
-        super.render(context, mouseX, mouseY, deltaTicks);
+    public void extractRenderState(GuiGraphicsExtractor context, int mouseX, int mouseY, float deltaTicks) {
+        super.extractRenderState(context, mouseX, mouseY, deltaTicks);
 
         if (closing && openAnim.isSettled()) {
-            this.client.setScreen(null);
+            this.minecraft.setScreen(null);
             return;
         }
 
@@ -85,11 +85,11 @@ public final class TalosScreen extends Screen {
         float centerX = panelX + PANEL_WIDTH / 2.0f;
         float centerY = panelY + PANEL_HEIGHT / 2.0f;
 
-        context.getMatrices().pushMatrix();
-        context.getMatrices().scale(scaleAdjust.factor());
-        context.getMatrices().translate(centerX, centerY);
-        context.getMatrices().scale(scale);
-        context.getMatrices().translate(-centerX, -centerY);
+        context.pose().pushMatrix();
+        context.pose().scale(scaleAdjust.factor());
+        context.pose().translate(centerX, centerY);
+        context.pose().scale(scale);
+        context.pose().translate(-centerX, -centerY);
 
         ThemePalette palette = Theme.palette();
 
@@ -110,23 +110,23 @@ public final class TalosScreen extends Screen {
                 ColorUtil.withAlpha(accent.bottomLeft(), progress),
                 ColorUtil.withAlpha(accent.bottomRight(), progress));
 
-        context.drawCenteredTextWithShadow(this.textRenderer, this.title,
+        context.centeredText(this.font, this.title,
                 vw / 2, panelY + 16, ColorUtil.withAlpha(palette.text(), progress));
-        context.drawCenteredTextWithShadow(this.textRenderer, DESCRIPTION,
+        context.centeredText(this.font, DESCRIPTION,
                 vw / 2, panelY + 32, ColorUtil.withAlpha(palette.description(), progress));
 
-        context.drawText(this.textRenderer, TOGGLE_LABEL,
+        context.text(this.font, TOGGLE_LABEL,
                 panelX + Spacing.S24, panelY + 90, ColorUtil.withAlpha(palette.text(), progress), false);
 
         int vMouseX = (int) scaleAdjust.toVirtualX(mouseX), vMouseY = (int) scaleAdjust.toVirtualY(mouseY);
         this.themeToggle.render(context, vMouseX, vMouseY, deltaTicks);
         this.closeButton.render(context, vMouseX, vMouseY, deltaTicks);
 
-        context.getMatrices().popMatrix();
+        context.pose().popMatrix();
     }
 
     @Override
-    public boolean mouseClicked(Click click, boolean doubled) {
+    public boolean mouseClicked(MouseButtonEvent click, boolean doubled) {
         double vx = scaleAdjust.toVirtualX(click.x());
         double vy = scaleAdjust.toVirtualY(click.y());
         if (!closing) {
@@ -141,7 +141,7 @@ public final class TalosScreen extends Screen {
     }
 
     @Override
-    public void close() {
+    public void onClose() {
         // Defer the actual client.setScreen(null) until the close animation settles
         // (see render()) instead of popping instantly — this also fires on vanilla's
         // own Escape-key handling, since Screen.close() is the single choke point.

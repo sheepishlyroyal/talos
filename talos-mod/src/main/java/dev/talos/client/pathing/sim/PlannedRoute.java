@@ -1,8 +1,7 @@
 package dev.talos.client.pathing.sim;
 
 import java.util.List;
-
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.phys.Vec3;
 
 /** Immutable result of a bounded simulation search. */
 public record PlannedRoute(List<Waypoint> waypoints, boolean reachedGoal, String detail) {
@@ -14,7 +13,7 @@ public record PlannedRoute(List<Waypoint> waypoints, boolean reachedGoal, String
     }
 
     /** The first waypoint is the supplied start; its {@code via} value is {@code null}. */
-    public record Waypoint(Vec3d position, MotionState.Pose pose, Primitive via,
+    public record Waypoint(Vec3 position, MotionState.Pose pose, Primitive via,
             int simulatedTicks, double edgeCost) {
         public Waypoint {
             if (position == null || pose == null || simulatedTicks < 0 || edgeCost < 0.0) {

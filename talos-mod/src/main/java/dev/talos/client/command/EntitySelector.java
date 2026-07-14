@@ -3,9 +3,9 @@ package dev.talos.client.command;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import net.minecraft.entity.Entity;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.Entity;
 
 /**
  * Parses and applies a practical subset of Minecraft-style target selectors for
@@ -112,8 +112,8 @@ public final class EntitySelector {
             case "type" -> {
                 boolean negate = value.startsWith("!");
                 String idString = negate ? value.substring(1) : value;
-                Identifier id = idString.contains(":") ? Identifier.of(idString) : Identifier.of("minecraft", idString);
-                if (!Registries.ENTITY_TYPE.containsId(id)) {
+                Identifier id = idString.contains(":") ? Identifier.parse(idString) : Identifier.fromNamespaceAndPath("minecraft", idString);
+                if (!BuiltInRegistries.ENTITY_TYPE.containsKey(id)) {
                     error[0] = "Unknown entity type: " + idString;
                     return false;
                 }
@@ -170,18 +170,18 @@ public final class EntitySelector {
      */
     public boolean matchesFilters(Entity entity) {
         if (typeId != null) {
-            boolean isType = Registries.ENTITY_TYPE.get(typeId) == entity.getType();
+            boolean isType = BuiltInRegistries.ENTITY_TYPE.getValue(typeId) == entity.getType();
             if (isType == typeNegate) {
                 return false;
             }
         }
         for (String tag : requiredTags) {
-            if (!entity.getCommandTags().contains(tag)) {
+            if (!entity.entityTags().contains(tag)) {
                 return false;
             }
         }
         for (String tag : excludedTags) {
-            if (entity.getCommandTags().contains(tag)) {
+            if (entity.entityTags().contains(tag)) {
                 return false;
             }
         }

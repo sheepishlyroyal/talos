@@ -8,9 +8,9 @@ import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import net.minecraft.command.CommandSource;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
+import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
 
 /**
  * Registry-id argument that actually accepts what it suggests. The stock
@@ -35,12 +35,12 @@ public final class IdArgumentType implements ArgumentType<String> {
 
     /** Block-id argument: parses namespaced or bare ids, suggests every block. */
     public static IdArgumentType blockId() {
-        return new IdArgumentType(Registries.BLOCK.getIds());
+        return new IdArgumentType(BuiltInRegistries.BLOCK.keySet());
     }
 
     /** Item-id argument: parses namespaced or bare ids, suggests every item. */
     public static IdArgumentType itemId() {
-        return new IdArgumentType(Registries.ITEM.getIds());
+        return new IdArgumentType(BuiltInRegistries.ITEM.keySet());
     }
 
     @Override
@@ -62,10 +62,10 @@ public final class IdArgumentType implements ArgumentType<String> {
             CommandContext<S> context, SuggestionsBuilder builder) {
         // Suggest bare names for vanilla ids alongside the namespaced form — typing
         // "sto" should surface both "stone" and "minecraft:stone".
-        CommandSource.suggestMatching(ids.stream()
+        SharedSuggestionProvider.suggest(ids.stream()
                 .filter(id -> id.getNamespace().equals(Identifier.DEFAULT_NAMESPACE))
                 .map(Identifier::getPath), builder);
-        return CommandSource.suggestIdentifiers(ids, builder);
+        return SharedSuggestionProvider.suggestResource(ids, builder);
     }
 
     @Override

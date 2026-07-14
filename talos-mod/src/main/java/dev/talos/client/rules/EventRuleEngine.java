@@ -22,22 +22,22 @@ import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
-import net.minecraft.block.Block;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.network.PlayerListEntry;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
-import net.minecraft.text.Text;
-import net.minecraft.util.ActionResult;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -257,25 +257,25 @@ public final class EventRuleEngine {
                     message.getString(), sender == null ? null : sender.name());
         });
         AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
-            if (world.isClient()) fireText(Trigger.ATTACK_BLOCK, pos.toShortString());
-            return ActionResult.PASS;
+            if (world.isClientSide()) fireText(Trigger.ATTACK_BLOCK, pos.toShortString());
+            return InteractionResult.PASS;
         });
         UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
-            if (world.isClient()) fireText(Trigger.USE_BLOCK, hit.getBlockPos().toShortString());
-            return ActionResult.PASS;
+            if (world.isClientSide()) fireText(Trigger.USE_BLOCK, hit.getBlockPos().toShortString());
+            return InteractionResult.PASS;
         });
         AttackEntityCallback.EVENT.register((player, world, hand, entity, hit) -> {
-            if (world.isClient()) fireEntity(Trigger.ATTACK_ENTITY, entity, entityLabel(entity));
-            return ActionResult.PASS;
+            if (world.isClientSide()) fireEntity(Trigger.ATTACK_ENTITY, entity, entityLabel(entity));
+            return InteractionResult.PASS;
         });
         UseEntityCallback.EVENT.register((player, world, hand, entity, hit) -> {
-            if (world.isClient()) fireEntity(Trigger.USE_ENTITY, entity, entityLabel(entity));
-            return ActionResult.PASS;
+            if (world.isClientSide()) fireEntity(Trigger.USE_ENTITY, entity, entityLabel(entity));
+            return InteractionResult.PASS;
         });
         UseItemCallback.EVENT.register((player, world, hand) -> {
-            if (world.isClient()) fireText(Trigger.USE_ITEM,
-                    Registries.ITEM.getId(player.getStackInHand(hand).getItem()).toString());
-            return ActionResult.PASS;
+            if (world.isClientSide()) fireText(Trigger.USE_ITEM,
+                    BuiltInRegistries.ITEM.getKey(player.getItemInHand(hand).getItem()).toString());
+            return InteractionResult.PASS;
         });
     }
 
@@ -318,11 +318,11 @@ public final class EventRuleEngine {
     /* ------------------------------------------------------------------ external entry points */
 
     /** Mixin entry points (InGameHudTitleMixin / SoundSystemMixin). */
-    public static void onTitle(Text title) {
+    public static void onTitle(Component title) {
         if (title != null) fireText(Trigger.TITLE, title.getString());
     }
 
-    public static void onSubtitle(Text subtitle) {
+    public static void onSubtitle(Component subtitle) {
         if (subtitle != null) fireText(Trigger.SUBTITLE, subtitle.getString());
     }
 
@@ -349,16 +349,16 @@ public final class EventRuleEngine {
     }
 
     /** Generic S2C packet trigger (netty thread; skipped entirely unless a rule wants it). */
-    public static void onPacket(net.minecraft.network.packet.Packet<?> packet) {
+    public static void onPacket(net.minecraft.network.protocol.Packet<?> packet) {
         boolean wanted = false;
         for (Rule rule : RULES) {
             if (rule.triggerType() == Trigger.PACKET_RECEIVED) { wanted = true; break; }
         }
         if (!wanted || packet == null) return;
-        fireText(Trigger.PACKET_RECEIVED, packet.getPacketType().id().toString());
+        fireText(Trigger.PACKET_RECEIVED, packet.type().id().toString());
     }
 
-    public static void onExplosion(net.minecraft.util.math.Vec3d center) {
+    public static void onExplosion(net.minecraft.world.phys.Vec3 center) {
         fireText(Trigger.EXPLOSION, String.format(Locale.ROOT, "%.0f %.0f %.0f",
                 center.x, center.y, center.z));
     }
@@ -418,21 +418,21 @@ public final class EventRuleEngine {
     }
 
     /** Recent particles whose position lies within {@code maxMiss} meters of the look ray. */
-    public static java.util.List<String> particlesOnCrosshair(ClientPlayerEntity player,
+    public static java.util.List<String> particlesOnCrosshair(LocalPlayer player,
             double seconds, double maxMiss) {
         int horizon = tick - (int) (seconds * 20.0);
-        var eye = player.getEyePos();
-        var look = player.getRotationVecClient();
+        var eye = player.getEyePosition();
+        var look = player.getForward();
         java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
         synchronized (RECENT_PARTICLES) {
             for (Object[] entry : RECENT_PARTICLES) {
                 if ((Integer) entry[0] < horizon) continue;
-                var point = new net.minecraft.util.math.Vec3d(
+                var point = new net.minecraft.world.phys.Vec3(
                         (Double) entry[2], (Double) entry[3], (Double) entry[4]);
                 var toPoint = point.subtract(eye);
-                double along = toPoint.dotProduct(look);
+                double along = toPoint.dot(look);
                 if (along < 0.0 || along > 64.0) continue;
-                double miss = toPoint.subtract(look.multiply(along)).length();
+                double miss = toPoint.subtract(look.scale(along)).length();
                 if (miss <= maxMiss) ids.add((String) entry[1]);
             }
         }
@@ -446,20 +446,20 @@ public final class EventRuleEngine {
      * is discarded, so the stack is still readable.
      */
     public static void onItemPickup(int itemEntityId, int collectorEntityId, int amount) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (client.world == null) return;
-        Entity itemEntity = client.world.getEntityById(itemEntityId);
-        Entity collector = client.world.getEntityById(collectorEntityId);
-        String stack = itemEntity instanceof net.minecraft.entity.ItemEntity item
-                ? Registries.ITEM.getId(item.getStack().getItem()) + " x" + amount
+        Minecraft client = Minecraft.getInstance();
+        if (client.level == null) return;
+        Entity itemEntity = client.level.getEntity(itemEntityId);
+        Entity collector = client.level.getEntity(collectorEntityId);
+        String stack = itemEntity instanceof net.minecraft.world.entity.item.ItemEntity item
+                ? BuiltInRegistries.ITEM.getKey(item.getItem().getItem()) + " x" + amount
                 : "unknown x" + amount;
         String who = collector == null ? "entity#" + collectorEntityId : entityLabel(collector);
         explainedPickups.add(itemEntityId);
         // Additive script hook: only the LOCAL player's pickups become "item_pickup"
         // script events; ScriptGameEvents guards on a running session before posting.
         if (collector != null && collector == client.player) {
-            String itemId = itemEntity instanceof net.minecraft.entity.ItemEntity item
-                    ? Registries.ITEM.getId(item.getStack().getItem()).toString()
+            String itemId = itemEntity instanceof net.minecraft.world.entity.item.ItemEntity item
+                    ? BuiltInRegistries.ITEM.getKey(item.getItem().getItem()).toString()
                     : "unknown";
             dev.talos.client.script.ScriptGameEvents.onLocalItemPickup(itemId, amount);
         }
@@ -468,7 +468,7 @@ public final class EventRuleEngine {
 
     /** MENTION fires only when a message contains the local player's own name. */
     private static void fireMention(String message) {
-        ClientPlayerEntity player = MinecraftClient.getInstance().player;
+        LocalPlayer player = Minecraft.getInstance().player;
         if (player == null) return;
         String name = player.getName().getString();
         if (!name.isEmpty() && message.toLowerCase(Locale.ROOT)
@@ -529,14 +529,14 @@ public final class EventRuleEngine {
     }
 
     private static String substitute(String command, String value) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        ClientPlayerEntity player = client.player;
+        Minecraft client = Minecraft.getInstance();
+        LocalPlayer player = client.player;
         String result = command.replace("{value}", value == null ? "" : value);
         if (player != null) {
             result = result
                     .replace("{health}", String.format(Locale.ROOT, "%.1f", player.getHealth()))
-                    .replace("{hunger}", Integer.toString(player.getHungerManager().getFoodLevel()))
-                    .replace("{air}", Integer.toString(player.getAir()))
+                    .replace("{hunger}", Integer.toString(player.getFoodData().getFoodLevel()))
+                    .replace("{air}", Integer.toString(player.getAirSupply()))
                     .replace("{x}", Integer.toString(player.getBlockX()))
                     .replace("{y}", Integer.toString(player.getBlockY()))
                     .replace("{z}", Integer.toString(player.getBlockZ()));
@@ -546,12 +546,12 @@ public final class EventRuleEngine {
 
     /** Client commands (e.g. talos ...) run locally; anything unhandled goes to the server. */
     public static void runCommand(String command) {
-        MinecraftClient client = MinecraftClient.getInstance();
+        Minecraft client = Minecraft.getInstance();
         String stripped = command.startsWith("/") ? command.substring(1) : command;
         client.execute(() -> {
             if (client.player == null) return;
             if (stripped.startsWith("chat ")) {
-                client.player.networkHandler.sendChatMessage(stripped.substring(5));
+                client.player.connection.sendChat(stripped.substring(5));
                 return;
             }
             boolean handled = false;
@@ -563,13 +563,13 @@ public final class EventRuleEngine {
             } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
                 LOGGER.debug("Client command dispatch unavailable", exception);
             }
-            if (!handled) client.player.networkHandler.sendChatCommand(stripped);
+            if (!handled) client.player.connection.sendCommand(stripped);
         });
     }
 
     /* ------------------------------------------------------------------ per-tick polling */
 
-    private static void pollTick(MinecraftClient client) {
+    private static void pollTick(Minecraft client) {
         tick++;
 
         for (Schedule schedule : SCHEDULES) {
@@ -584,7 +584,7 @@ public final class EventRuleEngine {
         previous = now;
 
         // Condition families evaluate even without a prior snapshot; change families need one.
-        if (client.player != null && client.world != null) {
+        if (client.player != null && client.level != null) {
             if (before != null && before.worldPresent
                     && !now.position.equals(before.position)) {
                 lastMovedTick = tick;
@@ -612,7 +612,7 @@ public final class EventRuleEngine {
         } else {
             // A same-dimension jump no legitimate tick of movement can produce: pearls,
             // chorus fruit, /tp, respawn anchors. {value} = distance.
-            double jump = Math.sqrt(before.position.getSquaredDistance(now.position));
+            double jump = Math.sqrt(before.position.distSqr(now.position));
             if (jump > 12.0) fireText(Trigger.TELEPORTED,
                     String.format(Locale.ROOT, "%.0f", jump));
         }
@@ -758,7 +758,7 @@ public final class EventRuleEngine {
 
     /* ------------------------------------------------------- parameterized condition rules */
 
-    private static void evaluateConditionRules(MinecraftClient client, ClientPlayerEntity player) {
+    private static void evaluateConditionRules(Minecraft client, LocalPlayer player) {
         for (Rule rule : RULES) {
             Trigger trigger = rule.triggerType();
             switch (trigger.kind) {
@@ -848,15 +848,15 @@ public final class EventRuleEngine {
             }
         }
         EntitySelector selector = rule.parsedSelector;
-        ClientPlayerEntity self = MinecraftClient.getInstance().player;
+        LocalPlayer self = Minecraft.getInstance().player;
         if (self != null
-                && !selector.withinDistance(Math.sqrt(subject.squaredDistanceTo(self)))) {
+                && !selector.withinDistance(Math.sqrt(subject.distanceToSqr(self)))) {
             return false;
         }
         return switch (selector.kind()) {
             case SELF -> subject == self;
-            case PLAYERS_ALL -> subject instanceof PlayerEntity;
-            case PLAYER_NEAREST -> subject instanceof PlayerEntity && subject != self;
+            case PLAYERS_ALL -> subject instanceof Player;
+            case PLAYER_NEAREST -> subject instanceof Player && subject != self;
             case ENTITIES -> selector.matchesFilters(subject);
         };
     }
@@ -882,147 +882,147 @@ public final class EventRuleEngine {
         }
     }
 
-    private static double metric(Trigger trigger, MinecraftClient client,
-            ClientPlayerEntity player) {
+    private static double metric(Trigger trigger, Minecraft client,
+            LocalPlayer player) {
         return switch (trigger) {
             case HEALTH -> player.getHealth();
-            case HUNGER -> player.getHungerManager().getFoodLevel();
-            case AIR -> player.getAir();
+            case HUNGER -> player.getFoodData().getFoodLevel();
+            case AIR -> player.getAirSupply();
             case XP_LEVEL -> player.experienceLevel;
             case XP_PROGRESS -> player.experienceProgress;
             case ARMOR_DURABILITY -> {
                 double worst = 100.0;
-                for (net.minecraft.entity.EquipmentSlot slot : new net.minecraft.entity.EquipmentSlot[] {
-                        net.minecraft.entity.EquipmentSlot.HEAD, net.minecraft.entity.EquipmentSlot.CHEST,
-                        net.minecraft.entity.EquipmentSlot.LEGS, net.minecraft.entity.EquipmentSlot.FEET}) {
-                    ItemStack stack = player.getEquippedStack(slot);
-                    if (stack.isEmpty() || !stack.isDamageable()) continue;
+                for (net.minecraft.world.entity.EquipmentSlot slot : new net.minecraft.world.entity.EquipmentSlot[] {
+                        net.minecraft.world.entity.EquipmentSlot.HEAD, net.minecraft.world.entity.EquipmentSlot.CHEST,
+                        net.minecraft.world.entity.EquipmentSlot.LEGS, net.minecraft.world.entity.EquipmentSlot.FEET}) {
+                    ItemStack stack = player.getItemBySlot(slot);
+                    if (stack.isEmpty() || !stack.isDamageableItem()) continue;
                     worst = Math.min(worst,
-                            (stack.getMaxDamage() - stack.getDamage()) * 100.0 / stack.getMaxDamage());
+                            (stack.getMaxDamage() - stack.getDamageValue()) * 100.0 / stack.getMaxDamage());
                 }
                 yield worst;
             }
-            case FPS -> client.getCurrentFps();
+            case FPS -> client.getFps();
             case PING -> {
-                PlayerListEntry entry = player.networkHandler == null ? null
-                        : player.networkHandler.getPlayerListEntry(player.getUuid());
+                PlayerInfo entry = player.connection == null ? null
+                        : player.connection.getPlayerInfo(player.getUUID());
                 yield entry == null ? 0 : entry.getLatency();
             }
-            case CHUNKS_LOADED -> client.world.getChunkManager().getLoadedChunkCount();
-            case LIGHT_LEVEL -> client.world.getLightLevel(player.getBlockPos());
+            case CHUNKS_LOADED -> client.level.getChunkSource().getLoadedChunksCount();
+            case LIGHT_LEVEL -> client.level.getMaxLocalRawBrightness(player.blockPosition());
             case Y_POSITION -> player.getY();
             case X_POSITION -> player.getX();
             case Z_POSITION -> player.getZ();
-            case SPEED -> player.getVelocity().horizontalLength() * 20.0;
-            case SATURATION -> player.getHungerManager().getSaturationLevel();
+            case SPEED -> player.getDeltaMovement().horizontalDistance() * 20.0;
+            case SATURATION -> player.getFoodData().getSaturationLevel();
             case ABSORPTION -> player.getAbsorptionAmount();
-            case ARMOR_POINTS -> player.getArmor();
+            case ARMOR_POINTS -> player.getArmorValue();
             case HELD_DURABILITY -> {
-                ItemStack held = player.getMainHandStack();
-                yield !held.isDamageable() ? 100.0
-                        : (held.getMaxDamage() - held.getDamage()) * 100.0 / held.getMaxDamage();
+                ItemStack held = player.getMainHandItem();
+                yield !held.isDamageableItem() ? 100.0
+                        : (held.getMaxDamage() - held.getDamageValue()) * 100.0 / held.getMaxDamage();
             }
             case FALL_DISTANCE -> player.fallDistance;
-            case TIME_TICKS -> client.world.getTimeOfDay() % 24000L;
+            case TIME_TICKS -> client.level.getOverworldClockTime() % 24000L;
             case ENTITY_TOTAL -> {
                 int total = 0;
-                for (Entity ignored : client.world.getEntities()) total++;
+                for (Entity ignored : client.level.entitiesForRendering()) total++;
                 yield total;
             }
-            case PLAYERS_ONLINE -> player.networkHandler == null ? 0
-                    : player.networkHandler.getPlayerList().size();
+            case PLAYERS_ONLINE -> player.connection == null ? 0
+                    : player.connection.getOnlinePlayers().size();
             case IDLE_SECONDS -> (tick - lastMovedTick) / 20.0;
-            case VELOCITY_Y -> player.getVelocity().y * 20.0;
-            case MOON_PHASE -> (client.world.getTimeOfDay() / 24000L) % 8L;
-            case DAY_COUNT -> client.world.getTimeOfDay() / 24000L;
+            case VELOCITY_Y -> player.getDeltaMovement().y * 20.0;
+            case MOON_PHASE -> (client.level.getOverworldClockTime() / 24000L) % 8L;
+            case DAY_COUNT -> client.level.getOverworldClockTime() / 24000L;
             case EMPTY_SLOTS -> {
                 int empty = 0;
-                for (int i = 0; i < player.getInventory().size(); i++) {
-                    if (player.getInventory().getStack(i).isEmpty()) empty++;
+                for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+                    if (player.getInventory().getItem(i).isEmpty()) empty++;
                 }
                 yield empty;
             }
             case OCCUPIED_SLOTS -> {
                 int occupied = 0;
-                for (int i = 0; i < player.getInventory().size(); i++) {
-                    if (!player.getInventory().getStack(i).isEmpty()) occupied++;
+                for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+                    if (!player.getInventory().getItem(i).isEmpty()) occupied++;
                 }
                 yield occupied;
             }
-            case CONTAINER_ITEMS -> player.currentScreenHandler.slots.stream()
-                    .filter(slot -> slot.inventory != player.getInventory())
-                    .filter(slot -> !slot.getStack().isEmpty()).count();
+            case CONTAINER_ITEMS -> player.containerMenu.slots.stream()
+                    .filter(slot -> slot.container != player.getInventory())
+                    .filter(slot -> !slot.getItem().isEmpty()).count();
             case MEMORY_USED_PERCENT -> {
                 Runtime runtime = Runtime.getRuntime();
                 yield (runtime.totalMemory() - runtime.freeMemory()) * 100.0 / runtime.maxMemory();
             }
             case NEAREST_PLAYER_DISTANCE -> nearestDistance(client, player,
-                    entity -> entity instanceof PlayerEntity);
+                    entity -> entity instanceof Player);
             case NEAREST_HOSTILE_DISTANCE -> nearestDistance(client, player,
-                    entity -> entity instanceof net.minecraft.entity.mob.HostileEntity);
+                    entity -> entity instanceof net.minecraft.world.entity.monster.Monster);
             case NEAREST_ANIMAL_DISTANCE -> nearestDistance(client, player,
-                    entity -> entity instanceof net.minecraft.entity.passive.AnimalEntity);
+                    entity -> entity instanceof net.minecraft.world.entity.animal.Animal);
             case NEAREST_ITEM_DISTANCE -> nearestDistance(client, player,
-                    entity -> entity instanceof net.minecraft.entity.ItemEntity);
+                    entity -> entity instanceof net.minecraft.world.entity.item.ItemEntity);
             case DROPPED_ITEMS_NEAR -> countNear(client, player, 16.0,
-                    entity -> entity instanceof net.minecraft.entity.ItemEntity);
+                    entity -> entity instanceof net.minecraft.world.entity.item.ItemEntity);
             case XP_ORBS_NEAR -> countNear(client, player, 16.0,
-                    entity -> entity instanceof net.minecraft.entity.ExperienceOrbEntity);
+                    entity -> entity instanceof net.minecraft.world.entity.ExperienceOrb);
             case ARROWS_NEAR -> countNear(client, player, 16.0,
-                    entity -> entity instanceof net.minecraft.entity.projectile.PersistentProjectileEntity);
-            case CROSSHAIR_DISTANCE -> client.crosshairTarget == null
-                    || client.crosshairTarget.getType() == HitResult.Type.MISS ? 999.0
-                    : client.crosshairTarget.getPos().distanceTo(player.getEyePos());
-            case SPAWN_DISTANCE -> Math.sqrt(player.getBlockPos().getSquaredDistance(
-                    client.world.getSpawnPoint().getPos()));
-            case FIRE_TICKS -> player.getFireTicks();
-            case FROZEN_TICKS -> player.getFrozenTicks();
+                    entity -> entity instanceof net.minecraft.world.entity.projectile.arrow.AbstractArrow);
+            case CROSSHAIR_DISTANCE -> client.hitResult == null
+                    || client.hitResult.getType() == HitResult.Type.MISS ? 999.0
+                    : client.hitResult.getLocation().distanceTo(player.getEyePosition());
+            case SPAWN_DISTANCE -> Math.sqrt(player.blockPosition().distSqr(
+                    client.level.getRespawnData().pos()));
+            case FIRE_TICKS -> player.getRemainingFireTicks();
+            case FROZEN_TICKS -> player.getTicksFrozen();
             case HURT_TIME -> player.hurtTime;
-            case STUCK_ARROWS -> player.getStuckArrowCount();
+            case STUCK_ARROWS -> player.getArrowCount();
             case VEHICLE_SPEED -> player.getVehicle() == null ? 0.0
-                    : player.getVehicle().getVelocity().horizontalLength() * 20.0;
-            case EFFECT_COUNT -> player.getStatusEffects().size();
-            case WORLD_BORDER_DISTANCE -> client.world.getWorldBorder()
-                    .getDistanceInsideBorder(player);
+                    : player.getVehicle().getDeltaMovement().horizontalDistance() * 20.0;
+            case EFFECT_COUNT -> player.getActiveEffects().size();
+            case WORLD_BORDER_DISTANCE -> client.level.getWorldBorder()
+                    .getDistanceToBorder(player);
             case SERVER_TPS -> serverTps;
-            case YAW -> net.minecraft.util.math.MathHelper.wrapDegrees(player.getYaw());
-            case PITCH -> player.getPitch();
-            case HELD_COUNT -> player.getMainHandStack().getCount();
+            case YAW -> net.minecraft.util.Mth.wrapDegrees(player.getYRot());
+            case PITCH -> player.getXRot();
+            case HELD_COUNT -> player.getMainHandItem().getCount();
             case MAX_HEALTH -> player.getMaxHealth();
-            case WORLD_AGE -> client.world.getTime();
+            case WORLD_AGE -> client.level.getGameTime();
             case BOSSBAR_PERCENT -> bossbarPercent;
             default -> 0.0;
         };
     }
 
     /** Public readout used by /talos get; identical to what rules compare against. */
-    public static double metricValue(Trigger trigger, MinecraftClient client,
-            ClientPlayerEntity player) {
+    public static double metricValue(Trigger trigger, Minecraft client,
+            LocalPlayer player) {
         return metric(trigger, client, player);
     }
 
-    private static double nearestDistance(MinecraftClient client, ClientPlayerEntity player,
+    private static double nearestDistance(Minecraft client, LocalPlayer player,
             java.util.function.Predicate<Entity> filter) {
         double best = 999.0;
-        for (Entity entity : client.world.getEntities()) {
+        for (Entity entity : client.level.entitiesForRendering()) {
             if (entity == player || !filter.test(entity)) continue;
-            best = Math.min(best, Math.sqrt(entity.squaredDistanceTo(player)));
+            best = Math.min(best, Math.sqrt(entity.distanceToSqr(player)));
         }
         return best;
     }
 
-    private static int countNear(MinecraftClient client, ClientPlayerEntity player,
+    private static int countNear(Minecraft client, LocalPlayer player,
             double radius, java.util.function.Predicate<Entity> filter) {
         int count = 0;
         double radiusSquared = radius * radius;
-        for (Entity entity : client.world.getEntities()) {
+        for (Entity entity : client.level.entitiesForRendering()) {
             if (entity == player || !filter.test(entity)) continue;
-            if (entity.squaredDistanceTo(player) <= radiusSquared) count++;
+            if (entity.distanceToSqr(player) <= radiusSquared) count++;
         }
         return count;
     }
 
-    private static int entityCount(Rule rule, MinecraftClient client, ClientPlayerEntity player) {
+    private static int entityCount(Rule rule, Minecraft client, LocalPlayer player) {
         if (rule.selectorBroken) return -1;
         if (rule.parsedSelector == null) {
             String[] error = new String[1];
@@ -1037,48 +1037,48 @@ public final class EventRuleEngine {
         double radiusSquared = rule.radius < 0 ? Double.MAX_VALUE : rule.radius * rule.radius;
         if (selector.kind() == EntitySelector.Kind.SELF) return 1;
         int count = 0;
-        for (Entity entity : client.world.getEntities()) {
+        for (Entity entity : client.level.entitiesForRendering()) {
             if (entity == player) continue;
             boolean playersOnly = selector.kind() == EntitySelector.Kind.PLAYERS_ALL
                     || selector.kind() == EntitySelector.Kind.PLAYER_NEAREST;
-            if (playersOnly && !(entity instanceof PlayerEntity)) continue;
+            if (playersOnly && !(entity instanceof Player)) continue;
             if (selector.kind() == EntitySelector.Kind.ENTITIES
                     && !selector.matchesFilters(entity)) continue;
-            if (entity.squaredDistanceTo(player) > radiusSquared) continue;
+            if (entity.distanceToSqr(player) > radiusSquared) continue;
             count++;
             if (selector.kind() == EntitySelector.Kind.PLAYER_NEAREST && count > 0) break;
         }
         return count;
     }
 
-    private static int blockCount(Rule rule, MinecraftClient client, ClientPlayerEntity player) {
+    private static int blockCount(Rule rule, Minecraft client, LocalPlayer player) {
         if (rule.cachedBlock == null) {
             Identifier id = Identifier.tryParse(rule.block.contains(":")
                     ? rule.block : "minecraft:" + rule.block);
-            if (id == null || !Registries.BLOCK.containsId(id)) return -1;
-            rule.cachedBlock = Registries.BLOCK.get(id);
+            if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) return -1;
+            rule.cachedBlock = BuiltInRegistries.BLOCK.getValue(id);
         }
         int radius = (int) Math.max(1, Math.min(MAX_BLOCK_RADIUS, rule.radius));
-        BlockPos center = player.getBlockPos();
+        BlockPos center = player.blockPosition();
         int count = 0;
-        for (BlockPos pos : BlockPos.iterate(center.add(-radius, -radius, -radius),
-                center.add(radius, radius, radius))) {
-            if (client.world.getBlockState(pos).getBlock() == rule.cachedBlock) count++;
+        for (BlockPos pos : BlockPos.betweenClosed(center.offset(-radius, -radius, -radius),
+                center.offset(radius, radius, radius))) {
+            if (client.level.getBlockState(pos).getBlock() == rule.cachedBlock) count++;
         }
         return count;
     }
 
-    private static int itemCount(Rule rule, ClientPlayerEntity player, boolean hotbarOnly) {
+    private static int itemCount(Rule rule, LocalPlayer player, boolean hotbarOnly) {
         if (rule.cachedItem == null) {
             Identifier id = Identifier.tryParse(rule.block.contains(":")
                     ? rule.block : "minecraft:" + rule.block);
-            if (id == null || !Registries.ITEM.containsId(id)) return -1;
-            rule.cachedItem = Registries.ITEM.get(id);
+            if (id == null || !BuiltInRegistries.ITEM.containsKey(id)) return -1;
+            rule.cachedItem = BuiltInRegistries.ITEM.getValue(id);
         }
         int total = 0;
-        int size = hotbarOnly ? 9 : player.getInventory().size();
+        int size = hotbarOnly ? 9 : player.getInventory().getContainerSize();
         for (int i = 0; i < size; i++) {
-            ItemStack stack = player.getInventory().getStack(i);
+            ItemStack stack = player.getInventory().getItem(i);
             if (stack.getItem() == rule.cachedItem) total += stack.getCount();
         }
         return total;
@@ -1113,7 +1113,7 @@ public final class EventRuleEngine {
             Trigger.PEARL_THROWN, Trigger.PEARL_LANDED, Trigger.POTION_SPLASHED,
             Trigger.POTION_DRANK);
 
-    private static void evaluateEntityEvents(MinecraftClient client, ClientPlayerEntity player) {
+    private static void evaluateEntityEvents(Minecraft client, LocalPlayer player) {
         boolean anyRule = false;
         for (Rule rule : RULES) {
             if (ENTITY_EVENT_TRIGGERS.contains(rule.triggerType())) { anyRule = true; break; }
@@ -1122,7 +1122,7 @@ public final class EventRuleEngine {
         if (!anyRule) { trackedEntities = Map.of(); playerGamemodes = Map.of(); return; }
 
         Map<Integer, TrackedEntity> now = new HashMap<>();
-        for (Entity entity : client.world.getEntities()) {
+        for (Entity entity : client.level.entitiesForRendering()) {
             now.put(entity.getId(), track(entity));
         }
         Map<Integer, TrackedEntity> before = trackedEntities;
@@ -1161,7 +1161,7 @@ public final class EventRuleEngine {
                 // No timers, no guessing: if the chunk at the entity's last position is
                 // still loaded, it truly vanished there; otherwise it merely unloaded
                 // with its chunk and may come back.
-                boolean chunkStillLoaded = client.world.isChunkLoaded(
+                boolean chunkStillLoaded = client.level.hasChunk(
                         ((int) Math.floor(gone.x)) >> 4, ((int) Math.floor(gone.z)) >> 4);
                 if (gone.isItem) {
                     fireText(chunkStillLoaded ? Trigger.ITEM_DESPAWNED : Trigger.ITEM_UNLOADED,
@@ -1194,8 +1194,8 @@ public final class EventRuleEngine {
 
         // Gamemodes come from the tab list, not the entity, and cover the local player too.
         Map<String, String> modes = new HashMap<>();
-        if (player.networkHandler != null) {
-            for (PlayerListEntry entry : player.networkHandler.getPlayerList()) {
+        if (player.connection != null) {
+            for (PlayerInfo entry : player.connection.getOnlinePlayers()) {
                 modes.put(entry.getProfile().name(),
                         entry.getGameMode() == null ? "?" : entry.getGameMode().name());
             }
@@ -1280,33 +1280,33 @@ public final class EventRuleEngine {
      * and named mobs also carry their name.
      */
     public static String entityLabel(Entity entity) {
-        String type = Registries.ENTITY_TYPE.getId(entity.getType()).toString();
+        String type = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString();
         String label = type + "#" + entity.getId();
-        return entity instanceof PlayerEntity || entity.hasCustomName()
+        return entity instanceof Player || entity.hasCustomName()
                 ? label + "/" + entity.getName().getString() : label;
     }
 
     private static TrackedEntity track(Entity entity) {
-        String type = Registries.ENTITY_TYPE.getId(entity.getType()).toString();
+        String type = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString();
         String label = entityLabel(entity);
-        boolean living = entity instanceof net.minecraft.entity.LivingEntity;
+        boolean living = entity instanceof net.minecraft.world.entity.LivingEntity;
         String hand = "", offhand = "", armor = "";
         boolean usingItem = false, blocking = false, sleeping = false, baby = false;
         float health = 0.0F;
         String profession = "";
         int level = 0;
         if (living) {
-            net.minecraft.entity.LivingEntity livingEntity =
-                    (net.minecraft.entity.LivingEntity) entity;
-            hand = Registries.ITEM.getId(livingEntity.getMainHandStack().getItem()).toString();
-            offhand = Registries.ITEM.getId(livingEntity.getOffHandStack().getItem()).toString();
+            net.minecraft.world.entity.LivingEntity livingEntity =
+                    (net.minecraft.world.entity.LivingEntity) entity;
+            hand = BuiltInRegistries.ITEM.getKey(livingEntity.getMainHandItem().getItem()).toString();
+            offhand = BuiltInRegistries.ITEM.getKey(livingEntity.getOffhandItem().getItem()).toString();
             StringBuilder armorBuilder = new StringBuilder();
-            for (net.minecraft.entity.EquipmentSlot slot : new net.minecraft.entity.EquipmentSlot[] {
-                    net.minecraft.entity.EquipmentSlot.HEAD, net.minecraft.entity.EquipmentSlot.CHEST,
-                    net.minecraft.entity.EquipmentSlot.LEGS, net.minecraft.entity.EquipmentSlot.FEET}) {
+            for (net.minecraft.world.entity.EquipmentSlot slot : new net.minecraft.world.entity.EquipmentSlot[] {
+                    net.minecraft.world.entity.EquipmentSlot.HEAD, net.minecraft.world.entity.EquipmentSlot.CHEST,
+                    net.minecraft.world.entity.EquipmentSlot.LEGS, net.minecraft.world.entity.EquipmentSlot.FEET}) {
                 if (!armorBuilder.isEmpty()) armorBuilder.append(',');
-                armorBuilder.append(Registries.ITEM.getId(
-                        livingEntity.getEquippedStack(slot).getItem()).getPath());
+                armorBuilder.append(BuiltInRegistries.ITEM.getKey(
+                        livingEntity.getItemBySlot(slot).getItem()).getPath());
             }
             armor = armorBuilder.toString();
             usingItem = livingEntity.isUsingItem();
@@ -1314,57 +1314,57 @@ public final class EventRuleEngine {
             sleeping = livingEntity.isSleeping();
             baby = livingEntity.isBaby();
             health = livingEntity.getHealth();
-            if (entity instanceof net.minecraft.entity.passive.VillagerEntity villager) {
-                profession = villager.getVillagerData().profession().getIdAsString();
+            if (entity instanceof net.minecraft.world.entity.npc.villager.Villager villager) {
+                profession = villager.getVillagerData().profession().getRegisteredName();
                 level = villager.getVillagerData().level();
             }
         }
         String itemStack = "";
-        boolean isItem = entity instanceof net.minecraft.entity.ItemEntity;
+        boolean isItem = entity instanceof net.minecraft.world.entity.item.ItemEntity;
         if (isItem) {
-            ItemStack stack = ((net.minecraft.entity.ItemEntity) entity).getStack();
-            itemStack = Registries.ITEM.getId(stack.getItem()) + " x" + stack.getCount();
+            ItemStack stack = ((net.minecraft.world.entity.item.ItemEntity) entity).getItem();
+            itemStack = BuiltInRegistries.ITEM.getKey(stack.getItem()) + " x" + stack.getCount();
         }
-        boolean isProjectile = entity instanceof net.minecraft.entity.projectile.ProjectileEntity;
+        boolean isProjectile = entity instanceof net.minecraft.world.entity.projectile.Projectile;
         String ownerLabel = "";
         Entity ownerHandle = null;
         if (isProjectile) {
-            ownerHandle = ((net.minecraft.entity.projectile.ProjectileEntity) entity).getOwner();
+            ownerHandle = ((net.minecraft.world.entity.projectile.Projectile) entity).getOwner();
             if (ownerHandle != null) ownerLabel = entityLabel(ownerHandle);
         }
         return new TrackedEntity(entity, ownerHandle, type, label, living, isItem, isProjectile,
-                entity instanceof PlayerEntity,
-                entity instanceof net.minecraft.entity.projectile.thrown.EnderPearlEntity,
-                entity instanceof net.minecraft.entity.projectile.thrown.PotionEntity,
-                entity instanceof net.minecraft.entity.projectile.thrown.SnowballEntity,
-                entity instanceof net.minecraft.entity.projectile.thrown.EggEntity,
-                isProjectile ? entity.getVelocity().length() : 0.0,
-                entity instanceof net.minecraft.entity.decoration.ItemFrameEntity frame
-                        ? Registries.ITEM.getId(frame.getHeldItemStack().getItem()).toString() : "",
+                entity instanceof Player,
+                entity instanceof net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl,
+                entity instanceof net.minecraft.world.entity.projectile.throwableitemprojectile.AbstractThrownPotion,
+                entity instanceof net.minecraft.world.entity.projectile.throwableitemprojectile.Snowball,
+                entity instanceof net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEgg,
+                isProjectile ? entity.getDeltaMovement().length() : 0.0,
+                entity instanceof net.minecraft.world.entity.decoration.ItemFrame frame
+                        ? BuiltInRegistries.ITEM.getKey(frame.getItem().getItem()).toString() : "",
                 ownerLabel, hand, offhand, armor,
-                living && ((net.minecraft.entity.LivingEntity) entity).hurtTime > 0,
-                entity.getFireTicks() > 0,
+                living && ((net.minecraft.world.entity.LivingEntity) entity).hurtTime > 0,
+                entity.getRemainingFireTicks() > 0,
                 entity.getVehicle() == null ? -1 : entity.getVehicle().getId(),
-                entity.getVehicle() == null ? "" : Registries.ENTITY_TYPE.getId(
+                entity.getVehicle() == null ? "" : BuiltInRegistries.ENTITY_TYPE.getKey(
                         entity.getVehicle().getType()).toString(),
-                entity.isSneaking(), entity.isSprinting(), usingItem, blocking,
-                living && ((net.minecraft.entity.LivingEntity) entity).isGliding(),
+                entity.isShiftKeyDown(), entity.isSprinting(), usingItem, blocking,
+                living && ((net.minecraft.world.entity.LivingEntity) entity).isFallFlying(),
                 entity.isSwimming(), sleeping, baby, health, profession, level,
                 entity.getX(), entity.getY(), entity.getZ(), itemStack);
     }
 
     /** Open-container content diffs plus the container's title on open. */
-    private static void evaluateContainerEvents(MinecraftClient client,
-            ClientPlayerEntity player, boolean wasOpen, boolean isOpen) {
+    private static void evaluateContainerEvents(Minecraft client,
+            LocalPlayer player, boolean wasOpen, boolean isOpen) {
         if (!isOpen) { containerCounts = Map.of(); return; }
-        if (!wasOpen && client.currentScreen != null) {
-            fireText(Trigger.CONTAINER_TITLE, client.currentScreen.getTitle().getString());
+        if (!wasOpen && client.screen != null) {
+            fireText(Trigger.CONTAINER_TITLE, client.screen.getTitle().getString());
         }
         Map<String, Integer> now = new HashMap<>();
-        for (net.minecraft.screen.slot.Slot slot : player.currentScreenHandler.slots) {
-            if (slot.inventory == player.getInventory() || slot.getStack().isEmpty()) continue;
-            now.merge(Registries.ITEM.getId(slot.getStack().getItem()).toString(),
-                    slot.getStack().getCount(), Integer::sum);
+        for (net.minecraft.world.inventory.Slot slot : player.containerMenu.slots) {
+            if (slot.container == player.getInventory() || slot.getItem().isEmpty()) continue;
+            now.merge(BuiltInRegistries.ITEM.getKey(slot.getItem().getItem()).toString(),
+                    slot.getItem().getCount(), Integer::sum);
         }
         Map<String, Integer> before = containerCounts;
         containerCounts = now;
@@ -1383,7 +1383,7 @@ public final class EventRuleEngine {
     }
 
     /** Scoreboard sidebar: appearance, title, and per-line score diffs. */
-    private static void evaluateSidebar(MinecraftClient client) {
+    private static void evaluateSidebar(Minecraft client) {
         boolean wanted = false;
         for (Rule rule : RULES) {
             switch (rule.triggerType()) {
@@ -1395,8 +1395,8 @@ public final class EventRuleEngine {
         }
         if (!wanted) { sidebarTitle = null; sidebarScores = Map.of(); return; }
 
-        net.minecraft.scoreboard.ScoreboardObjective objective = client.world.getScoreboard()
-                .getObjectiveForSlot(net.minecraft.scoreboard.ScoreboardDisplaySlot.SIDEBAR);
+        net.minecraft.world.scores.Objective objective = client.level.getScoreboard()
+                .getDisplayObjective(net.minecraft.world.scores.DisplaySlot.SIDEBAR);
         if (objective == null) {
             if (sidebarTitle != null) fireText(Trigger.SIDEBAR_REMOVED, "");
             sidebarTitle = null;
@@ -1405,8 +1405,8 @@ public final class EventRuleEngine {
         }
         String title = objective.getDisplayName().getString();
         Map<String, Integer> scores = new HashMap<>();
-        for (net.minecraft.scoreboard.ScoreboardEntry entry
-                : client.world.getScoreboard().getScoreboardEntries(objective)) {
+        for (net.minecraft.world.scores.PlayerScoreEntry entry
+                : client.level.getScoreboard().listPlayerScores(objective)) {
             scores.put(entry.owner(), entry.value());
         }
         if (sidebarTitle == null) {
@@ -1428,19 +1428,19 @@ public final class EventRuleEngine {
     }
 
     /** Held-item enchantment level for HELD_ENCHANT rules; 0 when absent. */
-    private static int heldEnchantLevel(Rule rule, ClientPlayerEntity player) {
-        var enchantments = player.getMainHandStack().getEnchantments();
+    private static int heldEnchantLevel(Rule rule, LocalPlayer player) {
+        var enchantments = player.getMainHandItem().getEnchantments();
         if (enchantments.isEmpty()) return 0;
         String wanted = rule.block.contains(":") ? rule.block : "minecraft:" + rule.block;
-        for (var entry : enchantments.getEnchantments()) {
-            if (entry.getIdAsString().equals(wanted)) return enchantments.getLevel(entry);
+        for (var entry : enchantments.keySet()) {
+            if (entry.getRegisteredName().equals(wanted)) return enchantments.getLevel(entry);
         }
         return 0;
     }
 
     /** Server TPS estimated from world-time advancement over a rolling five-second window. */
-    private static void updateServerTps(MinecraftClient client) {
-        long worldTime = client.world.getTime();
+    private static void updateServerTps(Minecraft client) {
+        long worldTime = client.level.getGameTime();
         if (tpsWorldTimeAnchor < 0L) {
             tpsWorldTimeAnchor = worldTime;
             tpsClientTickAnchor = tick;
@@ -1480,118 +1480,118 @@ public final class EventRuleEngine {
             boolean projectileIncoming, boolean heldEnchanted, String heldName,
             String crosshairSign) {
 
-        static Snapshot capture(MinecraftClient client) {
-            ClientPlayerEntity player = client.player;
-            if (player == null || client.world == null) {
+        static Snapshot capture(Minecraft client) {
+            LocalPlayer player = client.player;
+            if (player == null || client.level == null) {
                 return new Snapshot(false, "", 0, false, 0, 0, 0, false, false, false, false,
                         false, false, false, false, "", "", false, 0, false, false, Set.of(),
-                        Map.of(), "", "", "", "", "", 0, 0, false, false, Set.of(), BlockPos.ORIGIN,
+                        Map.of(), "", "", "", "", "", 0, 0, false, false, Set.of(), BlockPos.ZERO,
                         false, false, false, false, false, false, false, false, 0.0F, 0.0,
                         false, "", "", "", false, false, false, false, false, false, "", "");
             }
-            ItemStack held = player.getMainHandStack();
+            ItemStack held = player.getMainHandItem();
             Set<String> effects = new HashSet<>();
-            for (StatusEffectInstance instance : player.getStatusEffects()) {
-                effects.add(instance.getEffectType().getIdAsString());
+            for (MobEffectInstance instance : player.getActiveEffects()) {
+                effects.add(instance.getEffect().getRegisteredName());
             }
             Set<String> players = new HashSet<>();
-            if (player.networkHandler != null) {
-                for (PlayerListEntry entry : player.networkHandler.getPlayerList()) {
+            if (player.connection != null) {
+                for (PlayerInfo entry : player.connection.getOnlinePlayers()) {
                     players.add(entry.getProfile().name());
                 }
             }
             Map<String, Integer> itemCounts = new HashMap<>();
-            for (int i = 0; i < player.getInventory().size(); i++) {
-                ItemStack stack = player.getInventory().getStack(i);
+            for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+                ItemStack stack = player.getInventory().getItem(i);
                 if (stack.isEmpty()) continue;
-                itemCounts.merge(Registries.ITEM.getId(stack.getItem()).toString(),
+                itemCounts.merge(BuiltInRegistries.ITEM.getKey(stack.getItem()).toString(),
                         stack.getCount(), Integer::sum);
             }
-            boolean containerOpen = player.currentScreenHandler.slots.stream()
-                    .anyMatch(slot -> slot.inventory != player.getInventory());
-            String lookingAt = client.crosshairTarget instanceof BlockHitResult hit
-                    && client.crosshairTarget.getType() == HitResult.Type.BLOCK
+            boolean containerOpen = player.containerMenu.slots.stream()
+                    .anyMatch(slot -> slot.container != player.getInventory());
+            String lookingAt = client.hitResult instanceof BlockHitResult hit
+                    && client.hitResult.getType() == HitResult.Type.BLOCK
                     ? blockId(client, hit.getBlockPos()) : "";
-            BlockPos feet = player.getBlockPos();
-            long timeOfDay = client.world.getTimeOfDay() % 24000L;
+            BlockPos feet = player.blockPosition();
+            long timeOfDay = client.level.getOverworldClockTime() % 24000L;
 
             boolean hotbarEmpty = true;
             for (int i = 0; i < 9 && hotbarEmpty; i++) {
-                hotbarEmpty = player.getInventory().getStack(i).isEmpty();
+                hotbarEmpty = player.getInventory().getItem(i).isEmpty();
             }
             boolean armorMissing = false;
-            for (net.minecraft.entity.EquipmentSlot slot : new net.minecraft.entity.EquipmentSlot[] {
-                    net.minecraft.entity.EquipmentSlot.HEAD, net.minecraft.entity.EquipmentSlot.CHEST,
-                    net.minecraft.entity.EquipmentSlot.LEGS, net.minecraft.entity.EquipmentSlot.FEET}) {
-                if (player.getEquippedStack(slot).isEmpty()) armorMissing = true;
+            for (net.minecraft.world.entity.EquipmentSlot slot : new net.minecraft.world.entity.EquipmentSlot[] {
+                    net.minecraft.world.entity.EquipmentSlot.HEAD, net.minecraft.world.entity.EquipmentSlot.CHEST,
+                    net.minecraft.world.entity.EquipmentSlot.LEGS, net.minecraft.world.entity.EquipmentSlot.FEET}) {
+                if (player.getItemBySlot(slot).isEmpty()) armorMissing = true;
             }
             int containerSlots = 0;
             int containerFilled = 0;
-            for (net.minecraft.screen.slot.Slot slot : player.currentScreenHandler.slots) {
-                if (slot.inventory == player.getInventory()) continue;
+            for (net.minecraft.world.inventory.Slot slot : player.containerMenu.slots) {
+                if (slot.container == player.getInventory()) continue;
                 containerSlots++;
-                if (!slot.getStack().isEmpty()) containerFilled++;
+                if (!slot.getItem().isEmpty()) containerFilled++;
             }
             String crosshairSign = "";
-            if (client.crosshairTarget instanceof BlockHitResult signHit
-                    && client.crosshairTarget.getType() == HitResult.Type.BLOCK
-                    && client.world.getBlockEntity(signHit.getBlockPos())
-                            instanceof net.minecraft.block.entity.SignBlockEntity sign) {
+            if (client.hitResult instanceof BlockHitResult signHit
+                    && client.hitResult.getType() == HitResult.Type.BLOCK
+                    && client.level.getBlockEntity(signHit.getBlockPos())
+                            instanceof net.minecraft.world.level.block.entity.SignBlockEntity sign) {
                 StringBuilder text = new StringBuilder();
-                for (Text line : sign.getFrontText().getMessages(false)) {
+                for (Component line : sign.getFrontText().getMessages(false)) {
                     String raw = line.getString();
                     if (!raw.isEmpty()) text.append(text.isEmpty() ? "" : " / ").append(raw);
                 }
                 crosshairSign = text.toString();
             }
-            String lookingAtEntity = client.crosshairTarget
-                    instanceof net.minecraft.util.hit.EntityHitResult entityHit
-                    ? Registries.ENTITY_TYPE.getId(entityHit.getEntity().getType()).toString() : "";
+            String lookingAtEntity = client.hitResult
+                    instanceof net.minecraft.world.phys.EntityHitResult entityHit
+                    ? BuiltInRegistries.ENTITY_TYPE.getKey(entityHit.getEntity().getType()).toString() : "";
             boolean projectileIncoming = false;
-            for (Entity entity : client.world.getEntities()) {
+            for (Entity entity : client.level.entitiesForRendering()) {
                 if (!projectileIncoming
-                        && entity instanceof net.minecraft.entity.projectile.PersistentProjectileEntity
-                        && entity.squaredDistanceTo(player) < 144.0
-                        && entity.getVelocity().lengthSquared() > 0.01) {
-                    var toPlayer = player.getEyePos().subtract(
+                        && entity instanceof net.minecraft.world.entity.projectile.arrow.AbstractArrow
+                        && entity.distanceToSqr(player) < 144.0
+                        && entity.getDeltaMovement().lengthSqr() > 0.01) {
+                    var toPlayer = player.getEyePosition().subtract(
                             entity.getX(), entity.getY(), entity.getZ());
-                    projectileIncoming = entity.getVelocity().dotProduct(toPlayer) > 0.0;
+                    projectileIncoming = entity.getDeltaMovement().dot(toPlayer) > 0.0;
                 }
             }
             return new Snapshot(true,
-                    client.world.getRegistryKey().getValue().toString(),
+                    client.level.dimension().identifier().toString(),
                     player.getHealth(), player.getHealth() <= 0.0F,
-                    player.getHungerManager().getFoodLevel(), player.getAir(),
+                    player.getFoodData().getFoodLevel(), player.getAirSupply(),
                     player.experienceLevel, player.isOnFire(), player.fallDistance > 3.0,
-                    player.isSneaking(), player.isSprinting(), player.isSwimming(),
-                    player.isGliding(), player.isSubmergedInWater(), player.isSleeping(),
+                    player.isShiftKeyDown(), player.isSprinting(), player.isSwimming(),
+                    player.isFallFlying(), player.isUnderWater(), player.isSleeping(),
                     player.getVehicle() == null ? ""
-                            : Registries.ENTITY_TYPE.getId(player.getVehicle().getType()).toString(),
-                    Registries.ITEM.getId(held.getItem()).toString(),
-                    held.isDamageable(), player.getInventory().getSelectedSlot(),
-                    player.getInventory().getEmptySlot() == -1, containerOpen,
+                            : BuiltInRegistries.ENTITY_TYPE.getKey(player.getVehicle().getType()).toString(),
+                    BuiltInRegistries.ITEM.getKey(held.getItem()).toString(),
+                    held.isDamageableItem(), player.getInventory().getSelectedSlot(),
+                    player.getInventory().getFreeSlot() == -1, containerOpen,
                     effects, itemCounts, lookingAt,
-                    blockId(client, feet.down()), blockId(client, feet), blockId(client, feet.up(2)),
-                    client.world.getBiome(feet).getIdAsString(),
+                    blockId(client, feet.below()), blockId(client, feet), blockId(client, feet.above(2)),
+                    client.level.getBiome(feet).getRegisteredName(),
                     feet.getX() >> 4, feet.getZ() >> 4,
-                    timeOfDay < 12000L, client.world.isRaining(), players, feet,
-                    player.getVelocity().horizontalLengthSquared() > 1.0E-4,
-                    player.isClimbing(), player.isBlocking(), player.isUsingItem(),
-                    player.horizontalCollision, player.hurtTime > 0, player.isFrozen(),
-                    player.isOnGround(), (float) player.fallDistance, player.getVelocity().y,
-                    client.isWindowFocused(),
-                    client.currentScreen == null ? "" : client.currentScreen.getClass().getSimpleName(),
-                    Registries.ITEM.getId(player.getOffHandStack().getItem()).toString(),
+                    timeOfDay < 12000L, client.level.isRaining(), players, feet,
+                    player.getDeltaMovement().horizontalDistanceSqr() > 1.0E-4,
+                    player.onClimbable(), player.isBlocking(), player.isUsingItem(),
+                    player.horizontalCollision, player.hurtTime > 0, player.isFullyFrozen(),
+                    player.onGround(), (float) player.fallDistance, player.getDeltaMovement().y,
+                    client.isWindowActive(),
+                    client.screen == null ? "" : client.screen.getClass().getSimpleName(),
+                    BuiltInRegistries.ITEM.getKey(player.getOffhandItem().getItem()).toString(),
                     lookingAtEntity, hotbarEmpty, armorMissing,
                     containerSlots > 0 && containerFilled == containerSlots,
                     containerSlots > 0 && containerFilled == 0,
-                    projectileIncoming, held.hasEnchantments(),
+                    projectileIncoming, held.isEnchanted(),
                     held.getCustomName() == null ? "" : held.getCustomName().getString(),
                     crosshairSign);
         }
 
-        private static String blockId(MinecraftClient client, BlockPos pos) {
-            return Registries.BLOCK.getId(client.world.getBlockState(pos).getBlock()).toString();
+        private static String blockId(Minecraft client, BlockPos pos) {
+            return BuiltInRegistries.BLOCK.getKey(client.level.getBlockState(pos).getBlock()).toString();
         }
     }
 

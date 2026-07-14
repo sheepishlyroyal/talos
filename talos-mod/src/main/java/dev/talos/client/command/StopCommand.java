@@ -4,7 +4,7 @@ import com.mojang.brigadier.context.CommandContext;
 import dev.talos.client.TalosClient;
 import dev.talos.client.script.ScriptEngine;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.text.Text;
+import net.minecraft.network.chat.Component;
 
 /** Implements {@code /talos stop} / {@code /talos stop all} — halts pathing, scripts, and tasks. */
 final class StopCommand {
@@ -16,7 +16,7 @@ final class StopCommand {
         TalosClient.pathingEngine().cancel();
         ScriptEngine.instance().stop();
         int cancelledTasks = TalosClient.taskScheduler().cancelAll();
-        source.sendFeedback(Text.literal(
+        source.sendFeedback(Component.literal(
                 "Talos: stopped " + cancelledTasks + " tasks, pathing, and scripts."));
         return 1;
     }

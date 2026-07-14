@@ -1,11 +1,11 @@
 package dev.talos.client.ui.pipeline;
 
 import com.mojang.blaze3d.pipeline.RenderPipeline;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.ScreenRect;
-import net.minecraft.client.gui.render.state.SimpleGuiElementRenderState;
-import net.minecraft.client.render.VertexConsumer;
-import net.minecraft.client.texture.TextureSetup;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.navigation.ScreenRectangle;
+import net.minecraft.client.gui.render.TextureSetup;
+import net.minecraft.client.renderer.state.gui.GuiElementRenderState;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix3x2f;
 import org.joml.Matrix3x2fc;
@@ -16,7 +16,7 @@ import org.joml.Matrix3x2fc;
  *
  * <p>Submitted through the vanilla 1.21.11 GUI batcher: {@code GuiRenderer} groups
  * consecutive states by (pipeline, texture, scissor) and writes them into a shared
- * vertex buffer using this state's {@link #setupVertices}, so any number of these
+ * vertex buffer using this state's {@link #buildVertices}, so any number of these
  * rects per frame collapses into a single draw call.
  *
  * <p>Corner colors interpolate bilinearly across the quad, giving the 4-corner
@@ -41,21 +41,21 @@ public record RoundedRectRenderState(
         int colorTopRight,
         int colorBottomLeft,
         int colorBottomRight,
-        @Nullable ScreenRect scissorArea,
-        @Nullable ScreenRect bounds) implements SimpleGuiElementRenderState {
+        @Nullable ScreenRectangle scissorArea,
+        @Nullable ScreenRectangle bounds) implements GuiElementRenderState {
 
     /**
      * Queues one filled rounded rect on the current GUI layer. Colors are ARGB.
      * Radius is clamped to half the smaller rect dimension by the SDF itself.
      */
-    public static void draw(DrawContext context, int x, int y, int width, int height, int radius,
+    public static void draw(GuiGraphicsExtractor context, int x, int y, int width, int height, int radius,
                             int colorTopLeft, int colorTopRight, int colorBottomLeft, int colorBottomRight) {
         submit(context, x, y, width, height, radius, 0,
                 colorTopLeft, colorTopRight, colorBottomLeft, colorBottomRight);
     }
 
     /** Convenience overload: single fill color. */
-    public static void draw(DrawContext context, int x, int y, int width, int height, int radius, int color) {
+    public static void draw(GuiGraphicsExtractor context, int x, int y, int width, int height, int radius, int color) {
         draw(context, x, y, width, height, radius, color, color, color, color);
     }
 
@@ -63,7 +63,7 @@ public record RoundedRectRenderState(
      * Queues one rounded rect outline (a {@code borderWidth}-px ring inset from the
      * SDF edge) on the current GUI layer. Colors are ARGB, one per corner.
      */
-    public static void drawBorder(DrawContext context, int x, int y, int width, int height, int radius,
+    public static void drawBorder(GuiGraphicsExtractor context, int x, int y, int width, int height, int radius,
                                   int borderWidth, int colorTopLeft, int colorTopRight,
                                   int colorBottomLeft, int colorBottomRight) {
         submit(context, x, y, width, height, radius, borderWidth,
@@ -71,28 +71,28 @@ public record RoundedRectRenderState(
     }
 
     /** Convenience overload: single border color. */
-    public static void drawBorder(DrawContext context, int x, int y, int width, int height, int radius,
+    public static void drawBorder(GuiGraphicsExtractor context, int x, int y, int width, int height, int radius,
                                   int borderWidth, int color) {
         drawBorder(context, x, y, width, height, radius, borderWidth, color, color, color, color);
     }
 
-    private static void submit(DrawContext context, int x, int y, int width, int height, int radius,
+    private static void submit(GuiGraphicsExtractor context, int x, int y, int width, int height, int radius,
                                int borderWidth, int colorTopLeft, int colorTopRight,
                                int colorBottomLeft, int colorBottomRight) {
         // Snapshot the pose: the context's matrix stack mutates as the screen renders,
         // but this state is only replayed at end of frame (mirrors vanilla fill()).
-        Matrix3x2f pose = new Matrix3x2f(context.getMatrices());
+        Matrix3x2f pose = new Matrix3x2f(context.pose());
         // DrawContext.state is access-widened (talos.accesswidener); vanilla offers no
         // public entry point for custom SimpleGuiElementRenderState implementations.
-        context.state.addSimpleElement(new RoundedRectRenderState(
+        context.guiRenderState.addGuiElement(new RoundedRectRenderState(
                 pose, x, y, x + width, y + height, radius, borderWidth,
                 colorTopLeft, colorTopRight, colorBottomLeft, colorBottomRight,
                 null,
-                new ScreenRect(x, y, width, height).transformEachVertex(pose)));
+                new ScreenRectangle(x, y, width, height).transformMaxBounds(pose)));
     }
 
     @Override
-    public void setupVertices(VertexConsumer vertices) {
+    public void buildVertices(VertexConsumer vertices) {
         float centerX = (this.x0 + this.x1) / 2.0f;
         float centerY = (this.y0 + this.y1) / 2.0f;
         // Same winding as vanilla ColoredQuadGuiElementRenderState.
@@ -103,15 +103,15 @@ public record RoundedRectRenderState(
     }
 
     private void vertex(VertexConsumer vertices, int x, int y, float centerX, float centerY, int color) {
-        vertices.vertex(this.pose, x, y)
-                .color(color)
+        vertices.addVertexWith2DPose(this.pose, x, y)
+                .setColor(color)
                 // UV0: this corner's offset from the rect center, in GUI px.
-                .texture(x - centerX, y - centerY)
+                .setUv(x - centerX, y - centerY)
                 // UV1 (overlay shorts): full extent; the shader halves it, keeping
                 // odd sizes exact.
-                .overlay(this.x1 - this.x0, this.y1 - this.y0)
+                .setUv1(this.x1 - this.x0, this.y1 - this.y0)
                 // UV2 (light shorts): corner radius + border width (0 = filled).
-                .light(this.radius, this.borderWidth);
+                .setUv2(this.radius, this.borderWidth);
     }
 
     @Override
@@ -121,6 +121,6 @@ public record RoundedRectRenderState(
 
     @Override
     public TextureSetup textureSetup() {
-        return TextureSetup.empty();
+        return TextureSetup.noTexture();
     }
 }

@@ -8,9 +8,9 @@ import dev.talos.client.task.SimpleTask;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.util.Hand;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
 import org.jetbrains.annotations.Nullable;
 
 /** Humanized melee loop that succeeds only after authoritative entity death/removal. */
@@ -31,7 +31,7 @@ public final class KillEntityAction extends SimpleTask {
 
     public KillEntityAction(Entity entity) { this(entity, null); }
     public KillEntityAction(Entity entity, @Nullable HumanizationProfile profile) {
-        this(entity.getId(), entity.getUuid(), profile);
+        this(entity.getId(), entity.getUUID(), profile);
     }
     public KillEntityAction(int entityId, @Nullable HumanizationProfile profile) {
         this(entityId, null, profile);
@@ -46,9 +46,9 @@ public final class KillEntityAction extends SimpleTask {
     @Override public Set<Object> getMutexKeys() { return MUTEX; }
 
     @Override protected void onTick() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (!client.isOnThread()) { finish(false, "Action left the client thread"); return; }
-        if (client.player == null || client.world == null || client.interactionManager == null) {
+        Minecraft client = Minecraft.getInstance();
+        if (!client.isSameThread()) { finish(false, "Action left the client thread"); return; }
+        if (client.player == null || client.level == null || client.gameMode == null) {
             finish(false, "No active world/player"); return;
         }
         if (++ticks > TIMEOUT_TICKS) { finish(false, "Timed out killing target"); return; }
@@ -65,7 +65,7 @@ public final class KillEntityAction extends SimpleTask {
         }
     }
 
-    private void prepare(MinecraftClient client, Entity entity) {
+    private void prepare(Minecraft client, Entity entity) {
         if (!withinReach(client, entity)) { finish(false, "Entity is out of attack reach"); return; }
         WeaponSelector.select(client, WeaponSelector.findBestMeleeHotbarSlot(client.player));
         aim = new AimController(client, TalosClient.humanizer().rotation(), profile,
@@ -73,43 +73,43 @@ public final class KillEntityAction extends SimpleTask {
         state = State.ACQUIRE;
     }
 
-    private void acquire(MinecraftClient client, Entity entity) {
+    private void acquire(Minecraft client, Entity entity) {
         aim.aimAt(entity);
         aim.tick();
         if (!withinReach(client, entity)) { finish(false, "Entity moved out of attack reach"); return; }
         if (aim.isAimed()) state = State.EXECUTE;
     }
 
-    private void execute(MinecraftClient client, Entity entity) {
+    private void execute(Minecraft client, Entity entity) {
         var point = entity.getBoundingBox().getCenter();
         if (profile.alwaysVisibilityChecked() && !aim.hasLineOfSight(point)) {
             finish(false, "Target is not visible"); return;
         }
-        if (client.player.getAttackCooldownProgress(0.0F) < 0.99F) {
+        if (client.player.getAttackStrengthScale(0.0F) < 0.99F) {
             state = State.OBSERVE; return;
         }
-        client.interactionManager.attackEntity(client.player, entity);
-        client.player.swingHand(Hand.MAIN_HAND);
+        client.gameMode.attack(client.player, entity);
+        client.player.swing(InteractionHand.MAIN_HAND);
         nextAttackTick = ticks + Math.max(1,
                 TalosClient.humanizer().timing().sampleDelayTicks(profile, 0.7, rng));
         state = State.BACKOFF;
     }
 
-    private void observe(MinecraftClient client, Entity entity) {
+    private void observe(Minecraft client, Entity entity) {
         aim.aimAt(entity);
         aim.tick();
-        if (client.player.getAttackCooldownProgress(0.0F) >= 0.99F) state = State.EXECUTE;
+        if (client.player.getAttackStrengthScale(0.0F) >= 0.99F) state = State.EXECUTE;
     }
 
-    private Entity resolve(MinecraftClient client) {
-        Entity entity = client.world.getEntityById(entityId);
+    private Entity resolve(Minecraft client) {
+        Entity entity = client.level.getEntity(entityId);
         if (entity == null) return null;
-        if (entityUuid == null) entityUuid = entity.getUuid();
-        return entityUuid == null || entityUuid.equals(entity.getUuid()) ? entity : null;
+        if (entityUuid == null) entityUuid = entity.getUUID();
+        return entityUuid == null || entityUuid.equals(entity.getUUID()) ? entity : null;
     }
-    private boolean withinReach(MinecraftClient client, Entity entity) {
-        return client.player.getEyePos().squaredDistanceTo(entity.getBoundingBox().getCenter())
-                <= Math.pow(client.player.getEntityInteractionRange(), 2);
+    private boolean withinReach(Minecraft client, Entity entity) {
+        return client.player.getEyePosition().distanceToSqr(entity.getBoundingBox().getCenter())
+                <= Math.pow(client.player.entityInteractionRange(), 2);
     }
     private void finish(boolean success, String message) {
         if (state == State.RELEASE) return;

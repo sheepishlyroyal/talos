@@ -12,19 +12,19 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.item.BlockItem;
-import net.minecraft.registry.tag.FluidTags;
-import net.minecraft.text.Text;
-import net.minecraft.util.Hand;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
+import net.minecraft.tags.FluidTags;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -68,7 +68,7 @@ public final class SimFollowTask extends TalosTask {
     private static final int CAUSE_FIT = 4;
     private static final int CAUSE_BRAKE = 8;
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private PlannedRoute route;
     private volatile Predicate<BlockPos> goal;
     private final CompletableFuture<PathResult> future;
@@ -101,9 +101,9 @@ public final class SimFollowTask extends TalosTask {
     // spot (the red mark) on a visible face of a full-block yellow cube, itself centered on
     // a random center-biased point of the aim anchor's standing hitbox. Resampled whenever
     // the anchor strays, so the gaze wanders the way a walking player's does.
-    private Vec3d navAnchor;
-    private Vec3d navCubeCenter;
-    private Vec3d navMark;
+    private Vec3 navAnchor;
+    private Vec3 navCubeCenter;
+    private Vec3 navMark;
     // The random look noise is PRE-SAMPLED: slot 0 is applied to the real view this tick,
     // slot i feeds simulated tick i of every rollout/prediction. Random to an observer,
     // fully known to the simulator — so predictions include the wobble before it happens.
@@ -113,7 +113,7 @@ public final class SimFollowTask extends TalosTask {
     // an exponentially-decayed drift score, and suppression windows around events where a
     // prediction/actual mismatch is EXPECTED (server corrections, route swaps).
     private static volatile SimFollowTask activeFollower;
-    private Vec3d predictedNext;
+    private Vec3 predictedNext;
     private double driftScore;
     private int driftHighTicks;
     private int lastDriftLogTick = -1000;
@@ -126,7 +126,7 @@ public final class SimFollowTask extends TalosTask {
     private final byte[] causeRing = new byte[STUCK_TICKS];
     private int causeCursor;
 
-    public SimFollowTask(MinecraftClient client, PlannedRoute route, Predicate<BlockPos> goal,
+    public SimFollowTask(Minecraft client, PlannedRoute route, Predicate<BlockPos> goal,
             CompletableFuture<PathResult> future) {
         this.client = client;
         this.route = route;
@@ -175,17 +175,17 @@ public final class SimFollowTask extends TalosTask {
         // scan is floored just behind the current index: a route that folds back near the
         // player must not teleport progress onto a spatially-close but distant leg.
         int nearest = 0;
-        ClientPlayerEntity player = client.player;
+        LocalPlayer player = client.player;
         if (player != null) {
             List<PlannedRoute.Waypoint> waypoints = replacement.waypoints();
             int floor = !route.waypoints().isEmpty() && !waypoints.isEmpty()
                     && waypoints.getFirst() == route.waypoints().getFirst()
                     ? Math.max(0, Math.min(index, waypoints.size() - 1) - 4) : 0;
             nearest = floor;
-            Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
+            Vec3 feet = new Vec3(player.getX(), player.getY(), player.getZ());
             double best = Double.MAX_VALUE;
             for (int i = floor; i < waypoints.size(); i++) {
-                double distance = waypoints.get(i).position().squaredDistanceTo(feet);
+                double distance = waypoints.get(i).position().distanceToSqr(feet);
                 if (distance < best) { best = distance; nearest = i; }
             }
         }
@@ -234,8 +234,8 @@ public final class SimFollowTask extends TalosTask {
 
     @Override
     public void body() {
-        ClientPlayerEntity player = client.player;
-        if (player == null || client.world == null) {
+        LocalPlayer player = client.player;
+        if (player == null || client.level == null) {
             finish(false, "World unloaded while navigating");
             return;
         }
@@ -260,7 +260,7 @@ public final class SimFollowTask extends TalosTask {
         // failure to make progress — and arrival is still checked so a break ON the goal ends.
         if (TalosClient.humanizer().sessionArc().onBreak()) {
             advance(player);
-            if (goal.test(player.getBlockPos())) { finish(true, "Arrived"); return; }
+            if (goal.test(player.blockPosition())) { finish(true, "Arrived"); return; }
             status("idle (break)");
             releaseInputs();
             lastProgressTick = ticks;
@@ -270,7 +270,7 @@ public final class SimFollowTask extends TalosTask {
         checkPredictionDrift(player);
 
         advance(player);
-        if (goal.test(player.getBlockPos())) {
+        if (goal.test(player.blockPosition())) {
             finish(true, "Arrived");
             return;
         }
@@ -313,7 +313,7 @@ public final class SimFollowTask extends TalosTask {
         // chunk means every rollout would read air and steer into fiction. Hold at the
         // frontier — genuinely waiting is not "stuck" — but bound the wait so a stalled
         // stream still fails with a message that names what actually happened.
-        if (!client.world.isChunkLoaded(BlockPos.ofFloored(waypoint.position()))) {
+        if (!client.level.hasChunkAt(BlockPos.containing(waypoint.position()))) {
             if (++chunkWaitTicks > CHUNK_WAIT_LIMIT_TICKS) {
                 finish(false, "Waited 15s for chunks to load near waypoint " + index
                         + " and gave up");
@@ -326,7 +326,7 @@ public final class SimFollowTask extends TalosTask {
             return;
         }
         chunkWaitTicks = 0;
-        updateProgress(new Vec3d(player.getX(), player.getY(), player.getZ()), waypoint.position());
+        updateProgress(new Vec3(player.getX(), player.getY(), player.getZ()), waypoint.position());
         if (ticks - lastProgressTick > STUCK_TICKS) {
             finish(false, "Pathing is stuck near route waypoint " + index + dominantCause());
             return;
@@ -356,28 +356,28 @@ public final class SimFollowTask extends TalosTask {
         MotionState live = liveState(player);
         MovementProfile profile = MovementProfile.capture(player); // Effects/attributes are live.
         advanceJitter(); // pre-sampled look noise: slot 0 is THIS tick, the rest feed rollouts
-        Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
-        Vec3d anchor = aimPoint(feet, waypoint);
-        Vec3d aim = navAim(player, anchor);
+        Vec3 feet = new Vec3(player.getX(), player.getY(), player.getZ());
+        Vec3 anchor = aimPoint(feet, waypoint);
+        Vec3 aim = navAim(player, anchor);
         renderAim(player, aim);
         // The gaze pursues the randomized mark, but the WALKING bearing must stay honest:
         // cap the mark's pull to a small deviation from the route bearing so a sideways
         // mark at close range can never steer the body off the line the rollouts verify.
         float routeYaw = yawTo(feet, anchor);
-        float markPull = net.minecraft.util.math.MathHelper.wrapDegrees(
+        float markPull = net.minecraft.util.Mth.wrapDegrees(
                 yawTo(feet, aim) - routeYaw);
         float yaw = routeYaw + Math.max(-10.0F, Math.min(10.0F, markPull));
         Input selected = chooseInput(live, profile, waypoint, yaw);
         if (live.fluid() == MotionState.Fluid.WATER) {
             updateAirMode(player);
-            player.setPitch(swimPitch(player, waypoint));
+            player.setXRot(swimPitch(player, waypoint));
         }
         apply(player, selected, live, waypoint);
         // Predict AFTER the humanized view is applied: the trail starts from the yaw the
         // player really faces and keeps turning through the same view model each tick, so
         // orange shows where the body will truly be — friction, effects, momentum, AND the
         // natural eye movement included.
-        renderPrediction(live, selected, profile, player.getYaw());
+        renderPrediction(live, selected, profile, player.getYRot());
         status(ticks < recalibratingUntil ? "recalibrating (prediction drift)"
                 : live.inFluid()
                 ? live.fluid() == MotionState.Fluid.LAVA ? "swimming (lava)" : "swimming"
@@ -389,23 +389,23 @@ public final class SimFollowTask extends TalosTask {
     }
 
     /** Entity coordinates are feet/bottom-center, exactly the origin MotionState.box uses. */
-    public static MotionState liveState(ClientPlayerEntity player) {
-        MotionState.Pose pose = player.isCrawling() ? MotionState.Pose.CRAWL
-                : (player.isSubmergedInWater() || player.isSwimming()
-                        || player.isInSwimmingPose())
+    public static MotionState liveState(LocalPlayer player) {
+        MotionState.Pose pose = player.isVisuallyCrawling() ? MotionState.Pose.CRAWL
+                : (player.isUnderWater() || player.isSwimming()
+                        || player.isVisuallySwimming())
                         ? MotionState.Pose.SWIM : MotionState.Pose.STAND;
         // Classify fluid from the same exact AABB used by simulation, rather than trusting
         // entity flags whose update may trail the current client-world collision state.
         MotionState.Fluid fluid = MotionState.Fluid.NONE;
-        var box = MotionState.box(pose, new Vec3d(player.getX(), player.getY(), player.getZ()));
-        for (BlockPos cell : BlockPos.iterate(
-                BlockPos.ofFloored(box.minX, box.minY, box.minZ),
-                BlockPos.ofFloored(box.maxX - 1.0E-7, box.maxY - 1.0E-7, box.maxZ - 1.0E-7))) {
-            var state = player.getEntityWorld().getFluidState(cell);
-            if (state.isIn(FluidTags.LAVA)) { fluid = MotionState.Fluid.LAVA; break; }
-            if (state.isIn(FluidTags.WATER)) fluid = MotionState.Fluid.WATER;
+        var box = MotionState.box(pose, new Vec3(player.getX(), player.getY(), player.getZ()));
+        for (BlockPos cell : BlockPos.betweenClosed(
+                BlockPos.containing(box.minX, box.minY, box.minZ),
+                BlockPos.containing(box.maxX - 1.0E-7, box.maxY - 1.0E-7, box.maxZ - 1.0E-7))) {
+            var state = player.level().getFluidState(cell);
+            if (state.is(FluidTags.LAVA)) { fluid = MotionState.Fluid.LAVA; break; }
+            if (state.is(FluidTags.WATER)) fluid = MotionState.Fluid.WATER;
         }
-        return new MotionState(new Vec3d(player.getX(), player.getY(), player.getZ()), player.getVelocity(), player.isOnGround(), pose,
+        return new MotionState(new Vec3(player.getX(), player.getY(), player.getZ()), player.getDeltaMovement(), player.onGround(), pose,
                 fluid, false);
     }
 
@@ -417,11 +417,11 @@ public final class SimFollowTask extends TalosTask {
      * stop trusting the current plan and recalibrate from live state. Cost per tick is one
      * Vec3d distance.
      */
-    private void checkPredictionDrift(ClientPlayerEntity player) {
-        Vec3d expected = predictedNext;
+    private void checkPredictionDrift(LocalPlayer player) {
+        Vec3 expected = predictedNext;
         predictedNext = null; // re-armed only when a fresh rollout runs this tick
         if (expected == null || ticks < driftSuppressedUntil) return;
-        Vec3d actual = new Vec3d(player.getX(), player.getY(), player.getZ());
+        Vec3 actual = new Vec3(player.getX(), player.getY(), player.getZ());
         double drift = actual.distanceTo(expected);
         driftScore = driftScore * DRIFT_DECAY + drift;
         driftHighTicks = driftScore > DRIFT_SCORE_HIGH ? driftHighTicks + 1 : 0;
@@ -432,8 +432,8 @@ public final class SimFollowTask extends TalosTask {
                     + "predicted {}; underfoot {}, pose {}, touching water {}, in lava {}",
                     String.format("%.3f", drift), String.format("%.2f", driftScore),
                     actual, expected,
-                    client.world.getBlockState(player.getBlockPos().down()),
-                    player.getPose(), player.isTouchingWater(), player.isInLava());
+                    client.level.getBlockState(player.blockPosition().below()),
+                    player.getPose(), player.isInWater(), player.isInLava());
         }
         recalibratingUntil = ticks + 20;
         driftScore = 0.0;
@@ -496,7 +496,7 @@ public final class SimFollowTask extends TalosTask {
         // Vertical position in water is owned entirely by the pitch controller (swimPitch);
         // jump is reserved for climbing out onto a bank at the end of the swim.
         if (live.fluid() == MotionState.Fluid.WATER) {
-            ClientPlayerEntity player = client.player;
+            LocalPlayer player = client.player;
             // Climb out whenever the waypoint is a bank ABOVE us (even one block), not only
             // when it sits above the measured surface — the strict check left the follower
             // swimming against a 1-high ledge forever.
@@ -516,9 +516,9 @@ public final class SimFollowTask extends TalosTask {
                 || primitive == Primitive.SWIM;
         boolean wantsSneak = primitive == Primitive.CRAWL || primitive == Primitive.PLACE;
         boolean continuousRun = primitive == Primitive.SPRINT_JUMP;
-        Vec3d from = index > 0 ? route.waypoints().get(index - 1).position() : live.position();
-        Vec3d finalTarget = route.waypoints().getLast().position();
-        Vec3d finalFrom = route.waypoints().size() > 1
+        Vec3 from = index > 0 ? route.waypoints().get(index - 1).position() : live.position();
+        Vec3 finalTarget = route.waypoints().getLast().position();
+        Vec3 finalFrom = route.waypoints().size() > 1
                 ? route.waypoints().get(route.waypoints().size() - 2).position()
                 : live.position();
         boolean approachingFinal = route.reachedGoal()
@@ -532,7 +532,7 @@ public final class SimFollowTask extends TalosTask {
         MotionState heldLanding = approachingFinal ? predictLanding(live, held, profile) : null;
         double speed = Math.hypot(live.velocity().x, live.velocity().z);
         double drag = Math.min(0.985,
-                PlayerMotion.slipperinessBelow(client.world, live.position()) * 0.91);
+                PlayerMotion.slipperinessBelow(client.level, live.position()) * 0.91);
         double stoppingDistance = speed / (1.0 - drag);
         double targetDistance = horizontalDistance(live.position(), waypoint.position());
         double landingTravel = heldLanding == null ? 0.0
@@ -614,7 +614,7 @@ public final class SimFollowTask extends TalosTask {
             double oldDistance = horizontalDistance(state.position(), waypoint.position());
             // The rollout turns its head like the real player will: yaw evolves through the
             // eased view model each tick instead of snapping to the candidate heading.
-            double simYaw = client.player.getYaw();
+            double simYaw = client.player.getYRot();
             double simVel = yawVelocity;
             double accel = turnAccel();
             // Ice's consequences play out over dozens of ticks; a 6-tick window scored the
@@ -624,14 +624,14 @@ public final class SimFollowTask extends TalosTask {
                 double[] view = steerStep(simYaw, simVel, candidate.yaw(), accel, jitterAt(tick));
                 simYaw = view[0];
                 simVel = view[1];
-                state = PlayerMotion.step(client.world, state, withYaw(candidate, (float) simYaw), profile);
+                state = PlayerMotion.step(client.level, state, withYaw(candidate, (float) simYaw), profile);
                 double distance = horizontalDistance(state.position(), waypoint.position());
                 score += (oldDistance - distance) * 12.0; // primary route progress
                 score -= distanceToSegment(state.position(), from, waypoint.position()) * 1.8;
                 if (state.bumpedHorizontally()) { score -= 7.0; rolloutBumped = true; }
                 if (state.fluid() == MotionState.Fluid.LAVA) score -= 100.0;
-                if (isHazard(BlockPos.ofFloored(state.position()))) score -= 60.0;
-                if (!PlayerMotion.hitboxFits(client.world, state.pose(), state.position())) {
+                if (isHazard(BlockPos.containing(state.position()))) score -= 60.0;
+                if (!PlayerMotion.hitboxFits(client.level, state.pose(), state.position())) {
                     score -= 1_000.0;
                     rolloutMisfit = true;
                     break;
@@ -719,9 +719,9 @@ public final class SimFollowTask extends TalosTask {
      */
     private float[] steeringYaws(MotionState live, PlannedRoute.Waypoint waypoint,
             float base, double drag) {
-        Vec3d to = waypoint.position().subtract(live.position());
+        Vec3 to = waypoint.position().subtract(live.position());
         double length = Math.hypot(to.x, to.z);
-        Vec3d velocity = live.velocity();
+        Vec3 velocity = live.velocity();
         double speed = Math.hypot(velocity.x, velocity.z);
         if (length < 1.0E-6 || speed < 0.06) return new float[]{base};
         double tx = to.x / length, tz = to.z / length;
@@ -733,7 +733,7 @@ public final class SimFollowTask extends TalosTask {
         double gain = Math.min(3.5, drag / (1.0 - drag) * 0.35) / Math.max(speed, 0.15);
         double steerX = tx - lateralX * gain, steerZ = tz - lateralZ * gain;
         float compensated = (float) Math.toDegrees(Math.atan2(-steerX, steerZ));
-        float correction = net.minecraft.util.math.MathHelper.wrapDegrees(compensated - base);
+        float correction = net.minecraft.util.Mth.wrapDegrees(compensated - base);
         if (Math.abs(correction) < 3.0F) return new float[]{base};
         correction = Math.max(-55.0F, Math.min(55.0F, correction));
         return new float[]{base, base + correction, base + correction * 0.5F};
@@ -750,7 +750,7 @@ public final class SimFollowTask extends TalosTask {
             double[] view = steerStep(simYaw, simVel, selected.yaw(), accel, jitterAt(i));
             simYaw = view[0];
             simVel = view[1];
-            predicted = PlayerMotion.step(client.world, predicted,
+            predicted = PlayerMotion.step(client.level, predicted,
                     withYaw(selected, (float) simYaw), profile);
             // The first rollout step from the APPLIED input is exactly where the player
             // should stand next tick; the desync watchdog compares it against reality.
@@ -765,40 +765,40 @@ public final class SimFollowTask extends TalosTask {
     }
 
     private boolean isHazard(BlockPos pos) {
-        BlockState state = client.world.getBlockState(pos);
-        return state.isOf(Blocks.FIRE) || state.isOf(Blocks.SOUL_FIRE)
-                || state.isOf(Blocks.CACTUS) || state.isOf(Blocks.MAGMA_BLOCK)
-                || state.isOf(Blocks.CAMPFIRE) || state.isOf(Blocks.SOUL_CAMPFIRE);
+        BlockState state = client.level.getBlockState(pos);
+        return state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE)
+                || state.is(Blocks.CACTUS) || state.is(Blocks.MAGMA_BLOCK)
+                || state.is(Blocks.CAMPFIRE) || state.is(Blocks.SOUL_CAMPFIRE);
     }
 
-    private boolean mine(ClientPlayerEntity player, Vec3d target) {
-        BlockPos origin = player.getBlockPos();
-        BlockPos destination = BlockPos.ofFloored(target);
+    private boolean mine(LocalPlayer player, Vec3 target) {
+        BlockPos origin = player.blockPosition();
+        BlockPos destination = BlockPos.containing(target);
         int dx = Integer.compare(destination.getX(), origin.getX());
         int dz = Integer.compare(destination.getZ(), origin.getZ());
         BlockPos block = null;
         if (dx == 0 && dz == 0 && destination.getY() < origin.getY()) {
             // Vertical shaft: dig the block directly underfoot.
-            if (blocking(origin.down())) block = origin.down();
+            if (blocking(origin.below())) block = origin.below();
         }
         // MINE waypoints describe the post-edit cell, so inspect the intervening tunnel.
         for (int step = 1; step <= 3 && block == null && (dx != 0 || dz != 0); step++) {
-            BlockPos feet = origin.add(dx * step, 0, dz * step);
+            BlockPos feet = origin.offset(dx * step, 0, dz * step);
             if (blocking(feet)) block = feet;
-            else if (blocking(feet.up())) block = feet.up();
+            else if (blocking(feet.above())) block = feet.above();
             if (feet.getX() == destination.getX() && feet.getZ() == destination.getZ()) break;
         }
         if (block == null) {
             // The tunnel scan assumes a standing approach. From a swim (or any odd angle),
             // fall back to the first blocking cell along the eye-to-waypoint line — this is
             // what un-sticks "swimming" against a wall that a MINE waypoint says to dig.
-            Vec3d eye = player.getEyePos();
-            Vec3d toTarget = target.add(0.0, 0.5, 0.0).subtract(eye);
+            Vec3 eye = player.getEyePosition();
+            Vec3 toTarget = target.add(0.0, 0.5, 0.0).subtract(eye);
             double length = toTarget.length();
             if (length > 1.0E-3 && length <= 6.0) {
-                Vec3d direction = toTarget.multiply(1.0 / length);
+                Vec3 direction = toTarget.scale(1.0 / length);
                 for (double d = 0.5; d <= Math.min(length, 4.5); d += 0.25) {
-                    BlockPos cell = BlockPos.ofFloored(eye.add(direction.multiply(d)));
+                    BlockPos cell = BlockPos.containing(eye.add(direction.scale(d)));
                     if (blocking(cell)) { block = cell; break; }
                 }
             }
@@ -807,37 +807,37 @@ public final class SimFollowTask extends TalosTask {
         status("mining");
         // Same aim language as the action cube-aim: yellow cube = the block being worked,
         // red X = the face point under attack.
-        RenderQueue.add("talos-aim-cube", new Box(block).expand(0.002),
+        RenderQueue.add("talos-aim-cube", new AABB(block).inflate(0.002),
                 AIM_TARGET_COLOR, PREDICTION_TTL * 3);
-        Vec3d face = Vec3d.ofCenter(block).add(0.0, 0.5, 0.0);
+        Vec3 face = Vec3.atCenterOf(block).add(0.0, 0.5, 0.0);
         RenderQueue.add("talos-aim-mark",
-                new Box(face.x - 0.07, face.y - 0.07, face.z - 0.07,
+                new AABB(face.x - 0.07, face.y - 0.07, face.z - 0.07,
                         face.x + 0.07, face.y + 0.07, face.z + 0.07),
                 AIM_GAZE_COLOR, PREDICTION_TTL * 3);
         releaseInputs();
         // Mining while afloat: hold jump so buoyancy doesn't sink the player away from a
         // dig line at or above them while the aim converges and the block breaks.
-        if (player.isTouchingWater() && target.y >= player.getY() - 0.5) {
-            client.options.jumpKey.setPressed(true);
+        if (player.isInWater() && target.y >= player.getY() - 0.5) {
+            client.options.keyJump.setDown(true);
         }
         // Face the block with the eased look before a single swing: converge this tick,
         // dig on the tick the crosshair actually rests on it.
-        if (!steerLook(player, Vec3d.ofCenter(block), 12.0)) return true;
-        BlockState state = client.world.getBlockState(block);
+        if (!steerLook(player, Vec3.atCenterOf(block), 12.0)) return true;
+        BlockState state = client.level.getBlockState(block);
         int best = player.getInventory().getSelectedSlot();
-        float speed = player.getInventory().getStack(best).getMiningSpeedMultiplier(state);
+        float speed = player.getInventory().getItem(best).getDestroySpeed(state);
         for (int slot = 0; slot < 9; slot++) {
-            float candidate = player.getInventory().getStack(slot).getMiningSpeedMultiplier(state);
+            float candidate = player.getInventory().getItem(slot).getDestroySpeed(state);
             if (candidate > speed) { best = slot; speed = candidate; }
         }
         player.getInventory().setSelectedSlot(best);
         if (!block.equals(breaking)) {
-            client.interactionManager.attackBlock(block, Direction.UP);
-            breaking = block.toImmutable();
+            client.gameMode.startDestroyBlock(block, Direction.UP);
+            breaking = block.immutable();
         } else {
-            client.interactionManager.updateBlockBreakingProgress(block, Direction.UP);
+            client.gameMode.continueDestroyBlock(block, Direction.UP);
         }
-        player.swingHand(Hand.MAIN_HAND);
+        player.swing(InteractionHand.MAIN_HAND);
         return true;
     }
 
@@ -846,9 +846,9 @@ public final class SimFollowTask extends TalosTask {
      * planner (unreliable in execution; scripts can still place blocks explicitly). Any
      * non-vertical PLACE waypoint is stale and is walked like an ordinary node.
      */
-    private boolean place(ClientPlayerEntity player, Vec3d target) {
-        BlockPos destination = BlockPos.ofFloored(target);
-        BlockPos feet = player.getBlockPos();
+    private boolean place(LocalPlayer player, Vec3 target) {
+        BlockPos destination = BlockPos.containing(target);
+        BlockPos feet = player.blockPosition();
         if (destination.getX() == feet.getX() && destination.getZ() == feet.getZ()
                 && destination.getY() > feet.getY()) {
             return pillar(player);
@@ -857,34 +857,34 @@ public final class SimFollowTask extends TalosTask {
     }
 
     /** Nerdpole: hold jump and place under the feet once they clear the origin cell. */
-    private boolean pillar(ClientPlayerEntity player) {
+    private boolean pillar(LocalPlayer player) {
         status("pillaring up");
         int slot = findBlockSlot(player);
         if (slot < 0) { finish(false, "Ran out of pillar blocks"); return true; }
         releaseInputs();
-        client.options.jumpKey.setPressed(true);
-        if (pillarOrigin == null || player.isOnGround()) {
-            pillarOrigin = player.getBlockPos().toImmutable();
+        client.options.keyJump.setDown(true);
+        if (pillarOrigin == null || player.onGround()) {
+            pillarOrigin = player.blockPosition().immutable();
         }
-        BlockPos anchor = pillarOrigin.down();
-        Vec3d hit = Vec3d.ofCenter(anchor).add(0.0, 0.5, 0.0);
+        BlockPos anchor = pillarOrigin.below();
+        Vec3 hit = Vec3.atCenterOf(anchor).add(0.0, 0.5, 0.0);
         // Nerdpole gaze: ease the view down onto the anchor while airborne, like a player.
         boolean aimed = steerLook(player, hit, 22.0);
         player.getInventory().setSelectedSlot(slot);
         // Jump input applies after this tick; place only once the feet clear the target cell,
         // since same-tick jump+place is rejected by the placement collision check.
         if (aimed && player.getY() >= pillarOrigin.getY() + 0.42) {
-            client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
+            client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND,
                     new BlockHitResult(hit, Direction.UP, anchor, false));
-            player.swingHand(Hand.MAIN_HAND);
+            player.swing(InteractionHand.MAIN_HAND);
         }
         return true;
     }
 
-    private void advance(ClientPlayerEntity player) {
+    private void advance(LocalPlayer player) {
         while (index < route.waypoints().size()) {
-            Vec3d target = route.waypoints().get(index).position();
-            Vec3d previous = route.waypoints().get(index - 1).position();
+            Vec3 target = route.waypoints().get(index).position();
+            Vec3 previous = route.waypoints().get(index - 1).position();
             double edgeX = target.x - previous.x, edgeZ = target.z - previous.z;
             boolean horizontalEdge = edgeX * edgeX + edgeZ * edgeZ > 1.0E-6;
             double dx = player.getX() - target.x, dz = player.getZ() - target.z;
@@ -917,10 +917,10 @@ public final class SimFollowTask extends TalosTask {
      * where the Y check used to fail forever) shows up as the horizontal distance growing
      * again after a close pass. Give up on that waypoint and steer for the next one.
      */
-    private void orbitBreaker(ClientPlayerEntity player) {
+    private void orbitBreaker(LocalPlayer player) {
         if (index >= route.waypoints().size() - 1) return; // never skip the final goal
-        Vec3d target = route.waypoints().get(index).position();
-        Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
+        Vec3 target = route.waypoints().get(index).position();
+        Vec3 feet = new Vec3(player.getX(), player.getY(), player.getZ());
         double horizontal = horizontalDistance(feet, target);
         if (horizontal < closestApproach - 1.0E-3) {
             closestApproach = horizontal;
@@ -933,8 +933,8 @@ public final class SimFollowTask extends TalosTask {
         }
     }
 
-    private void updateProgress(Vec3d position, Vec3d target) {
-        double remaining = position.squaredDistanceTo(target);
+    private void updateProgress(Vec3 position, Vec3 target) {
+        double remaining = position.distanceToSqr(target);
         if (remaining + .04 < bestRemaining) {
             bestRemaining = remaining;
             lastProgressTick = ticks;
@@ -946,8 +946,8 @@ public final class SimFollowTask extends TalosTask {
      * the walk direction) starts blending toward the next one, so turns are carved as smooth
      * arcs the way a player steers, instead of pivoting on top of every node.
      */
-    private Vec3d aimPoint(Vec3d feet, PlannedRoute.Waypoint waypoint) {
-        Vec3d target = waypoint.position();
+    private Vec3 aimPoint(Vec3 feet, PlannedRoute.Waypoint waypoint) {
+        Vec3 target = waypoint.position();
         if (index + 1 >= route.waypoints().size()) return target;
         double distance = horizontalDistance(feet, target);
         if (distance >= 1.6) return target;
@@ -963,8 +963,8 @@ public final class SimFollowTask extends TalosTask {
      * holds while the anchor drifts a little and resamples once it strays — so the gaze
      * hops between plausible rest points instead of tracking a mathematical line.
      */
-    private Vec3d navAim(ClientPlayerEntity player, Vec3d anchor) {
-        if (navAnchor == null || anchor.squaredDistanceTo(navAnchor) > 0.6 * 0.6
+    private Vec3 navAim(LocalPlayer player, Vec3 anchor) {
+        if (navAnchor == null || anchor.distanceToSqr(navAnchor) > 0.6 * 0.6
                 || navMark == null) {
             navAnchor = anchor;
             // Triangular [-1,1] offsets: sloppy but center-biased, like the action cube.
@@ -974,7 +974,7 @@ public final class SimFollowTask extends TalosTask {
             // Anchor is a FEET position; the stand hitbox is 0.6 wide and 1.8 tall.
             navCubeCenter = anchor.add(u * 0.3, 0.9 + v * 0.45, w * 0.3);
             navMark = dev.talos.client.action.AimController.markOn(
-                    navCubeCenter, player.getEyePos(), steerRng);
+                    navCubeCenter, player.getEyePosition(), steerRng);
         }
         return navMark;
     }
@@ -985,36 +985,36 @@ public final class SimFollowTask extends TalosTask {
      * dot = where the crosshair points right now at that same depth. The red dot easing
      * onto the red mark IS the humanized look, made visible.
      */
-    private void renderAim(ClientPlayerEntity player, Vec3d mark) {
+    private void renderAim(LocalPlayer player, Vec3 mark) {
         if (navCubeCenter == null) return;
         RenderQueue.add("talos-goto-aim",
-                new Box(navCubeCenter.x - 0.5, navCubeCenter.y - 0.5, navCubeCenter.z - 0.5,
+                new AABB(navCubeCenter.x - 0.5, navCubeCenter.y - 0.5, navCubeCenter.z - 0.5,
                         navCubeCenter.x + 0.5, navCubeCenter.y + 0.5, navCubeCenter.z + 0.5),
                 AIM_TARGET_COLOR, PREDICTION_TTL);
         RenderQueue.add("talos-goto-mark",
-                new Box(mark.x - 0.07, mark.y - 0.07, mark.z - 0.07,
+                new AABB(mark.x - 0.07, mark.y - 0.07, mark.z - 0.07,
                         mark.x + 0.07, mark.y + 0.07, mark.z + 0.07),
                 AIM_GAZE_COLOR, PREDICTION_TTL);
-        Vec3d eye = player.getEyePos();
-        Vec3d gaze = eye.add(player.getRotationVecClient()
-                .multiply(Math.max(eye.distanceTo(mark), 1.0)));
+        Vec3 eye = player.getEyePosition();
+        Vec3 gaze = eye.add(player.getForward()
+                .scale(Math.max(eye.distanceTo(mark), 1.0)));
         RenderQueue.add("talos-goto-gaze",
-                new Box(gaze.x - 0.05, gaze.y - 0.05, gaze.z - 0.05,
+                new AABB(gaze.x - 0.05, gaze.y - 0.05, gaze.z - 0.05,
                         gaze.x + 0.05, gaze.y + 0.05, gaze.z + 0.05),
                 AIM_GAZE_COLOR, PREDICTION_TTL);
     }
 
-    private void apply(ClientPlayerEntity player, Input input, MotionState live,
+    private void apply(LocalPlayer player, Input input, MotionState live,
             PlannedRoute.Waypoint waypoint) {
         // Set the complete desired state directly. Releasing first created a real per-tick
         // false/true pulse that broke continuous sprint-jump holds and bunny-hop momentum.
-        client.options.forwardKey.setPressed(input.forward() > .1F);
-        client.options.backKey.setPressed(input.forward() < -.1F);
-        client.options.leftKey.setPressed(input.strafe() > .1F);
-        client.options.rightKey.setPressed(input.strafe() < -.1F);
-        client.options.jumpKey.setPressed(input.jump());
-        client.options.sprintKey.setPressed(input.sprint());
-        client.options.sneakKey.setPressed(input.sneak());
+        client.options.keyUp.setDown(input.forward() > .1F);
+        client.options.keyDown.setDown(input.forward() < -.1F);
+        client.options.keyLeft.setDown(input.strafe() > .1F);
+        client.options.keyRight.setDown(input.strafe() < -.1F);
+        client.options.keyJump.setDown(input.jump());
+        client.options.keySprint.setDown(input.sprint());
+        client.options.keyShift.setDown(input.sneak());
         steerYaw(player, input.yaw());
         // Water pitch is owned by the swim controller; on land the gaze is humanized.
         if (live.fluid() == MotionState.Fluid.NONE) steerPitch(player, waypoint);
@@ -1033,17 +1033,17 @@ public final class SimFollowTask extends TalosTask {
      * Every block the follower breaks or places gates its interaction on this, so edits
      * only ever happen to blocks the player is visibly looking at.
      */
-    private boolean steerLook(ClientPlayerEntity player, Vec3d point, double toleranceDegrees) {
-        float[] desired = RotationHumanizer.yawPitchTo(player.getEyePos(), point);
+    private boolean steerLook(LocalPlayer player, Vec3 point, double toleranceDegrees) {
+        float[] desired = RotationHumanizer.yawPitchTo(player.getEyePosition(), point);
         steerYaw(player, desired[0]);
-        double pitchStep = (desired[1] - player.getPitch()) * 0.55;
+        double pitchStep = (desired[1] - player.getXRot()) * 0.55;
         pitchStep = Math.max(-14.0, Math.min(14.0, pitchStep));
-        player.setPitch(net.minecraft.util.math.MathHelper.clamp(
-                (float) (player.getPitch() + pitchStep + steerRng.nextGaussian() * 0.15),
+        player.setXRot(net.minecraft.util.Mth.clamp(
+                (float) (player.getXRot() + pitchStep + steerRng.nextGaussian() * 0.15),
                 -90.0F, 90.0F));
-        double yawError = Math.abs(net.minecraft.util.math.MathHelper.wrapDegrees(
-                desired[0] - player.getYaw()));
-        double pitchError = Math.abs(desired[1] - player.getPitch());
+        double yawError = Math.abs(net.minecraft.util.Mth.wrapDegrees(
+                desired[0] - player.getYRot()));
+        double pitchError = Math.abs(desired[1] - player.getXRot());
         return yawError <= toleranceDegrees && pitchError <= toleranceDegrees;
     }
 
@@ -1084,7 +1084,7 @@ public final class SimFollowTask extends TalosTask {
      */
     private double[] steerStep(double yaw, double velocity, float targetYaw, double accel,
             double jitter) {
-        double delta = net.minecraft.util.math.MathHelper.wrapDegrees(targetYaw - yaw);
+        double delta = net.minecraft.util.Mth.wrapDegrees(targetYaw - yaw);
         double cap = Math.abs(delta) > 60.0 ? Math.max(maxTurnSpeed * 2.5, 28.0) : maxTurnSpeed;
         double stopCap = Math.sqrt(2.0 * accel * Math.abs(delta));
         double limit = Math.min(cap, stopCap);
@@ -1094,19 +1094,19 @@ public final class SimFollowTask extends TalosTask {
         return new double[]{yaw + velocity + applied, velocity};
     }
 
-    private void steerYaw(ClientPlayerEntity player, float targetYaw) {
+    private void steerYaw(LocalPlayer player, float targetYaw) {
         double accel = turnAccel();
-        double delta = net.minecraft.util.math.MathHelper.wrapDegrees(targetYaw - player.getYaw());
-        double[] next = steerStep(player.getYaw(), yawVelocity, targetYaw, accel, jitterAt(0));
+        double delta = net.minecraft.util.Mth.wrapDegrees(targetYaw - player.getYRot());
+        double[] next = steerStep(player.getYRot(), yawVelocity, targetYaw, accel, jitterAt(0));
         yawVelocity = next[1];
         float yaw = (float) next[0];
         if (Math.abs(delta) < 1.2 && Math.abs(yawVelocity) < 1.2) {
-            yaw = (float) (player.getYaw() + delta * 0.6); // settle without a visible snap
+            yaw = (float) (player.getYRot() + delta * 0.6); // settle without a visible snap
             yawVelocity *= 0.5;
         }
-        player.setYaw(yaw);
-        player.setHeadYaw(yaw);
-        player.setBodyYaw(yaw);
+        player.setYRot(yaw);
+        player.setYHeadRot(yaw);
+        player.setYBodyRot(yaw);
     }
 
     private static Input withYaw(Input input, float yaw) {
@@ -1119,27 +1119,27 @@ public final class SimFollowTask extends TalosTask {
      * gently toward the route ahead, with a slowly wandering offset so the view is alive
      * instead of locked to the horizon.
      */
-    private void steerPitch(ClientPlayerEntity player, PlannedRoute.Waypoint waypoint) {
+    private void steerPitch(LocalPlayer player, PlannedRoute.Waypoint waypoint) {
         if (--pitchWanderTicks <= 0) {
             pitchWanderTicks = 25 + steerRng.nextInt(35);
             pitchWander = steerRng.nextGaussian() * 3.5;
         }
-        Vec3d eye = player.getEyePos();
+        Vec3 eye = player.getEyePosition();
         // Gaze rests on the red mark of the navigation aim cube, so yaw and pitch converge
         // on the SAME randomized point; the waypoint head is only the sessionless fallback.
-        Vec3d target = navMark != null ? navMark : waypoint.position().add(0.0, 1.62, 0.0);
+        Vec3 target = navMark != null ? navMark : waypoint.position().add(0.0, 1.62, 0.0);
         double horizontal = Math.max(horizontalDistance(eye, target), 3.0);
         double toward = Math.toDegrees(Math.atan2(eye.y - target.y, horizontal));
         double desired = Math.max(-30.0, Math.min(35.0, toward + pitchWander));
-        double step = Math.max(-2.5, Math.min(2.5, desired - player.getPitch()));
-        player.setPitch((float) (player.getPitch() + step
+        double step = Math.max(-2.5, Math.min(2.5, desired - player.getXRot()));
+        player.setXRot((float) (player.getXRot() + step
                 + steerRng.nextGaussian() * 0.12));
     }
 
-    private void updateAirMode(ClientPlayerEntity player) {
-        int maxAir = player.getMaxAir();
-        if (player.getAir() <= Math.max(20, maxAir / 5)) surfacingForAir = true;
-        else if (player.getAir() >= maxAir * 3 / 4) surfacingForAir = false;
+    private void updateAirMode(LocalPlayer player) {
+        int maxAir = player.getMaxAirSupply();
+        if (player.getAirSupply() <= Math.max(20, maxAir / 5)) surfacingForAir = true;
+        else if (player.getAirSupply() >= maxAir * 3 / 4) surfacingForAir = false;
     }
 
     /**
@@ -1147,10 +1147,10 @@ public final class SimFollowTask extends TalosTask {
      * compact hitbox straddling the surface (in water, head in air) so it breathes while
      * sprint-swimming. Only a genuinely deep waypoint — with air to spare — dives off it.
      */
-    private float swimPitch(ClientPlayerEntity player, PlannedRoute.Waypoint waypoint) {
+    private float swimPitch(LocalPlayer player, PlannedRoute.Waypoint waypoint) {
         double surface = waterSurfaceY(player);
-        Vec3d target = waypoint.position();
-        Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
+        Vec3 target = waypoint.position();
+        Vec3 feet = new Vec3(player.getX(), player.getY(), player.getZ());
         // Exiting onto a bank: look UP at it. The surface-hold controller otherwise pins the
         // gaze down at the waterline, which fights the climb-out.
         if (target.y > feet.y + 0.3 && horizontalDistance(feet, target) < 3.5) {
@@ -1166,40 +1166,40 @@ public final class SimFollowTask extends TalosTask {
     }
 
     /** Y of the top of the water column at the player's position. */
-    private double waterSurfaceY(ClientPlayerEntity player) {
+    private double waterSurfaceY(LocalPlayer player) {
         int x = player.getBlockX(), z = player.getBlockZ();
         int y = player.getBlockY();
         int limit = y + 64;
         while (y < limit
-                && client.world.getFluidState(new BlockPos(x, y + 1, z)).isIn(FluidTags.WATER)) {
+                && client.level.getFluidState(new BlockPos(x, y + 1, z)).is(FluidTags.WATER)) {
             y++;
         }
         BlockPos top = new BlockPos(x, y, z);
-        var fluid = client.world.getFluidState(top);
-        double height = fluid.isIn(FluidTags.WATER) ? fluid.getHeight(client.world, top) : 0.9;
+        var fluid = client.level.getFluidState(top);
+        double height = fluid.is(FluidTags.WATER) ? fluid.getHeight(client.level, top) : 0.9;
         return y + height;
     }
 
     private boolean blocking(BlockPos pos) {
-        return !client.world.getBlockState(pos).getCollisionShape(client.world, pos).isEmpty();
+        return !client.level.getBlockState(pos).getCollisionShape(client.level, pos).isEmpty();
     }
 
-    private static int findBlockSlot(ClientPlayerEntity player) {
+    private static int findBlockSlot(LocalPlayer player) {
         for (int slot = 0; slot < 9; slot++) {
-            if (player.getInventory().getStack(slot).getItem() instanceof BlockItem) return slot;
+            if (player.getInventory().getItem(slot).getItem() instanceof BlockItem) return slot;
         }
         return -1;
     }
 
-    private static float yawTo(Vec3d from, Vec3d to) {
+    private static float yawTo(Vec3 from, Vec3 to) {
         return (float) Math.toDegrees(Math.atan2(-(to.x - from.x), to.z - from.z));
     }
 
-    private static double horizontalDistance(Vec3d a, Vec3d b) {
+    private static double horizontalDistance(Vec3 a, Vec3 b) {
         return Math.hypot(a.x - b.x, a.z - b.z);
     }
 
-    private static double distanceToSegment(Vec3d point, Vec3d a, Vec3d b) {
+    private static double distanceToSegment(Vec3 point, Vec3 a, Vec3 b) {
         double dx = b.x - a.x, dz = b.z - a.z;
         double length = dx * dx + dz * dz;
         if (length < 1.0E-8) return horizontalDistance(point, b);
@@ -1209,7 +1209,7 @@ public final class SimFollowTask extends TalosTask {
     }
 
     /** Horizontal distance beyond {@code target}, measured along this route edge. */
-    private static double overshoot(Vec3d point, Vec3d from, Vec3d target) {
+    private static double overshoot(Vec3 point, Vec3 from, Vec3 target) {
         double dx = target.x - from.x, dz = target.z - from.z;
         double length = Math.hypot(dx, dz);
         if (length < 1.0E-8) return 0.0;
@@ -1222,15 +1222,15 @@ public final class SimFollowTask extends TalosTask {
             MovementProfile profile) {
         MotionState state = start;
         boolean airborne = !start.onGround();
-        double simYaw = client.player == null ? input.yaw() : client.player.getYaw();
+        double simYaw = client.player == null ? input.yaw() : client.player.getYRot();
         double simVel = yawVelocity;
         double accel = turnAccel();
         for (int tick = 0; tick < LANDING_ROLLOUT_TICKS; tick++) {
             double[] view = steerStep(simYaw, simVel, input.yaw(), accel, jitterAt(tick));
             simYaw = view[0];
             simVel = view[1];
-            state = PlayerMotion.step(client.world, state, withYaw(input, (float) simYaw), profile);
-            if (!PlayerMotion.hitboxFits(client.world, state.pose(), state.position())) return null;
+            state = PlayerMotion.step(client.level, state, withYaw(input, (float) simYaw), profile);
+            if (!PlayerMotion.hitboxFits(client.level, state.pose(), state.position())) return null;
             airborne |= !state.onGround();
             if (airborne && state.onGround()) return state;
             // A non-jumping grounded control is already at its next grounded sample. Its
@@ -1256,8 +1256,8 @@ public final class SimFollowTask extends TalosTask {
     private void status(String mode) {
         if (mode.equals(lastStatus)) return;
         lastStatus = mode;
-        if (client.player != null) client.player.sendMessage(
-                Text.literal("§bTalos §7» §f" + mode), true);
+        if (client.player != null) client.player.sendOverlayMessage(
+                Component.literal("§bTalos §7» §f" + mode));
     }
 
     public void cancel() { finish(false, "Pathing cancelled"); _break(); }
@@ -1265,19 +1265,19 @@ public final class SimFollowTask extends TalosTask {
     private void finish(boolean success, String detail) {
         RouteRenderer.clear();
         releaseInputs();
-        if (client.player != null) client.player.sendMessage(Text.literal(
-                (success ? "§aTalos §7» §f" : "§cTalos §7» §f") + detail), true);
+        if (client.player != null) client.player.sendOverlayMessage(Component.literal(
+                (success ? "§aTalos §7» §f" : "§cTalos §7» §f") + detail));
         future.complete(new PathResult(success, detail));
     }
 
     private void releaseInputs() {
-        client.options.forwardKey.setPressed(false);
-        client.options.backKey.setPressed(false);
-        client.options.leftKey.setPressed(false);
-        client.options.rightKey.setPressed(false);
-        client.options.jumpKey.setPressed(false);
-        client.options.sprintKey.setPressed(false);
-        client.options.sneakKey.setPressed(false);
+        client.options.keyUp.setDown(false);
+        client.options.keyDown.setDown(false);
+        client.options.keyLeft.setDown(false);
+        client.options.keyRight.setDown(false);
+        client.options.keyJump.setDown(false);
+        client.options.keySprint.setDown(false);
+        client.options.keyShift.setDown(false);
     }
 
     @Override public void onCompleted() {

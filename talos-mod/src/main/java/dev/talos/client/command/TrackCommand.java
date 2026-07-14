@@ -6,17 +6,17 @@ import dev.talos.client.TalosClient;
 import dev.talos.client.action.AimController;
 import dev.talos.client.task.TalosTask;
 import java.util.Set;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.block.Block;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Continuous humanized tracking with the cube-aim controller:
@@ -31,32 +31,32 @@ public final class TrackCommand {
     private TrackCommand() {}
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> node() {
-        return ClientCommandManager.literal("track")
+        return ClientCommands.literal("track")
                 .executes(context -> start(context.getSource(), "@p", null, 0))
-                .then(ClientCommandManager.literal("stop").executes(context -> {
+                .then(ClientCommands.literal("stop").executes(context -> {
                     TrackTask task = active;
                     if (task == null) {
-                        context.getSource().sendError(Text.literal("Not tracking anything"));
+                        context.getSource().sendError(Component.literal("Not tracking anything"));
                         return 0;
                     }
                     task.stop();
-                    context.getSource().sendFeedback(Text.literal("Tracking stopped"));
+                    context.getSource().sendFeedback(Component.literal("Tracking stopped"));
                     return 1;
                 }))
-                .then(ClientCommandManager.literal("block")
-                        .then(ClientCommandManager.argument("block", IdArgumentType.blockId())
+                .then(ClientCommands.literal("block")
+                        .then(ClientCommands.argument("block", IdArgumentType.blockId())
                                 .executes(context -> start(context.getSource(), null,
                                         StringArgumentType.getString(context, "block"), 0))
-                                .then(ClientCommandManager.argument("index",
+                                .then(ClientCommands.argument("index",
                                                 com.mojang.brigadier.arguments.IntegerArgumentType.integer())
                                         .executes(context -> start(context.getSource(), null,
                                                 StringArgumentType.getString(context, "block"),
                                                 com.mojang.brigadier.arguments.IntegerArgumentType
                                                         .getInteger(context, "index"))))))
-                .then(ClientCommandManager.argument("selector", SelectorArgumentType.selector())
+                .then(ClientCommands.argument("selector", SelectorArgumentType.selector())
                         .executes(context -> start(context.getSource(),
                                 StringArgumentType.getString(context, "selector"), null, 0))
-                        .then(ClientCommandManager.argument("index",
+                        .then(ClientCommands.argument("index",
                                         com.mojang.brigadier.arguments.IntegerArgumentType.integer())
                                 .executes(context -> start(context.getSource(),
                                         StringArgumentType.getString(context, "selector"), null,
@@ -66,9 +66,9 @@ public final class TrackCommand {
 
     private static int start(FabricClientCommandSource source, String selectorToken,
             String blockId, int index) {
-        MinecraftClient client = source.getClient();
-        if (client.player == null || client.world == null) {
-            source.sendError(Text.literal("No world is loaded"));
+        Minecraft client = source.getClient();
+        if (client.player == null || client.level == null) {
+            source.sendError(Component.literal("No world is loaded"));
             return 0;
         }
         EntitySelector selector = null;
@@ -76,16 +76,16 @@ public final class TrackCommand {
         if (blockId != null) {
             Identifier id = Identifier.tryParse(blockId.contains(":")
                     ? blockId : "minecraft:" + blockId);
-            if (id == null || !Registries.BLOCK.containsId(id)) {
-                source.sendError(Text.literal("Unknown block: " + blockId));
+            if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) {
+                source.sendError(Component.literal("Unknown block: " + blockId));
                 return 0;
             }
-            block = Registries.BLOCK.get(id);
+            block = BuiltInRegistries.BLOCK.getValue(id);
         } else {
             String[] error = new String[1];
             selector = EntitySelector.parse(selectorToken, error);
             if (selector == null) {
-                source.sendError(Text.literal(error[0]));
+                source.sendError(Component.literal(error[0]));
                 return 0;
             }
         }
@@ -96,11 +96,11 @@ public final class TrackCommand {
         try {
             TalosClient.taskScheduler().addTask("talos-track", task);
         } catch (RuntimeException exception) {
-            source.sendError(Text.literal(exception.getMessage()));
+            source.sendError(Component.literal(exception.getMessage()));
             return 0;
         }
         active = task;
-        source.sendFeedback(Text.literal("Tracking " + (blockId != null
+        source.sendFeedback(Component.literal("Tracking " + (blockId != null
                 ? "block " + blockId : selectorToken)
                 + (index != 0 ? " [" + index + "]" : "") + " — /talos track stop to end"));
         return 1;
@@ -111,7 +111,7 @@ public final class TrackCommand {
         private static final int BLOCK_SCAN_RADIUS = 32;
         private static final int LOST_TICKS = 60;
 
-        private final MinecraftClient client;
+        private final Minecraft client;
         private final EntitySelector selector;
         private final Block block;
         private final String description;
@@ -122,7 +122,7 @@ public final class TrackCommand {
         private int lastSeenTick;
         private boolean stopped;
 
-        TrackTask(MinecraftClient client, EntitySelector selector, Block block,
+        TrackTask(Minecraft client, EntitySelector selector, Block block,
                 String description, int index) {
             this.client = client;
             this.selector = selector;
@@ -130,20 +130,20 @@ public final class TrackCommand {
             this.description = description;
             this.index = index;
             this.aim = new AimController(client, null, null,
-                    description.hashCode() * 31L + (client.player == null ? 0 : client.player.age));
+                    description.hashCode() * 31L + (client.player == null ? 0 : client.player.tickCount));
         }
 
         void stop() { stopped = true; }
 
         @Override public void initialize() { }
         @Override public boolean condition() {
-            return !stopped && client.player != null && client.world != null
+            return !stopped && client.player != null && client.level != null
                     && ticks - lastSeenTick <= LOST_TICKS;
         }
         @Override public void increment() { ticks++; }
 
         @Override public void body() {
-            Vec3d target = block != null ? blockTarget() : entityTarget();
+            Vec3 target = block != null ? blockTarget() : entityTarget();
             if (target != null) {
                 lastSeenTick = ticks;
                 aim.aimAt(target);
@@ -152,48 +152,48 @@ public final class TrackCommand {
             scheduleDelay();
         }
 
-        private Vec3d entityTarget() {
+        private Vec3 entityTarget() {
             var player = client.player;
             if (selector.kind() == EntitySelector.Kind.SELF) return null; // nothing to track
             java.util.List<Entity> matches = new java.util.ArrayList<>();
-            for (Entity entity : client.world.getEntities()) {
+            for (Entity entity : client.level.entitiesForRendering()) {
                 if (entity == player) continue;
                 boolean playersOnly = selector.kind() == EntitySelector.Kind.PLAYERS_ALL
                         || selector.kind() == EntitySelector.Kind.PLAYER_NEAREST;
-                if (playersOnly && !(entity instanceof PlayerEntity)) continue;
+                if (playersOnly && !(entity instanceof Player)) continue;
                 if (selector.kind() == EntitySelector.Kind.ENTITIES
                         && !selector.matchesFilters(entity)) continue;
-                if (!selector.withinDistance(Math.sqrt(entity.squaredDistanceTo(player)))) continue;
+                if (!selector.withinDistance(Math.sqrt(entity.distanceToSqr(player)))) continue;
                 matches.add(entity);
             }
-            matches.sort(java.util.Comparator.comparingDouble(player::squaredDistanceTo));
+            matches.sort(java.util.Comparator.comparingDouble(player::distanceToSqr));
             Entity target = Indexed.select(matches, index);
             return target == null ? null : target.getBoundingBox().getCenter();
         }
 
-        private Vec3d blockTarget() {
+        private Vec3 blockTarget() {
             if (blockTarget != null && ticks % BLOCK_RESCAN_TICKS != 0
-                    && client.world.getBlockState(blockTarget).getBlock() == block) {
-                return Vec3d.ofCenter(blockTarget);
+                    && client.level.getBlockState(blockTarget).getBlock() == block) {
+                return Vec3.atCenterOf(blockTarget);
             }
-            BlockPos center = client.player.getBlockPos();
+            BlockPos center = client.player.blockPosition();
             java.util.List<BlockPos> matches = new java.util.ArrayList<>();
-            for (BlockPos pos : BlockPos.iterate(
-                    center.add(-BLOCK_SCAN_RADIUS, -BLOCK_SCAN_RADIUS, -BLOCK_SCAN_RADIUS),
-                    center.add(BLOCK_SCAN_RADIUS, BLOCK_SCAN_RADIUS, BLOCK_SCAN_RADIUS))) {
-                if (client.world.getBlockState(pos).getBlock() == block) {
-                    matches.add(pos.toImmutable());
+            for (BlockPos pos : BlockPos.betweenClosed(
+                    center.offset(-BLOCK_SCAN_RADIUS, -BLOCK_SCAN_RADIUS, -BLOCK_SCAN_RADIUS),
+                    center.offset(BLOCK_SCAN_RADIUS, BLOCK_SCAN_RADIUS, BLOCK_SCAN_RADIUS))) {
+                if (client.level.getBlockState(pos).getBlock() == block) {
+                    matches.add(pos.immutable());
                 }
             }
-            matches.sort(java.util.Comparator.comparingDouble(pos -> pos.getSquaredDistance(center)));
+            matches.sort(java.util.Comparator.comparingDouble(pos -> pos.distSqr(center)));
             blockTarget = Indexed.select(matches, index);
-            return blockTarget == null ? null : Vec3d.ofCenter(blockTarget);
+            return blockTarget == null ? null : Vec3.atCenterOf(blockTarget);
         }
 
         @Override public void onCompleted() {
             if (active == this) active = null;
-            if (client.player != null) client.player.sendMessage(
-                    Text.literal("§bTalos §7» §ftracking '" + description + "' ended"), true);
+            if (client.player != null) client.player.sendOverlayMessage(
+                    Component.literal("§bTalos §7» §ftracking '" + description + "' ended"));
         }
 
         @Override public Set<Object> getMutexKeys() { return Set.of("talos-aim"); }

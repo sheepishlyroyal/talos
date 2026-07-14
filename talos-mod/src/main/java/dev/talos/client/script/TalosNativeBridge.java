@@ -31,33 +31,33 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.client.option.GameOptions;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.ItemEntity;
-import net.minecraft.entity.mob.HostileEntity;
-import net.minecraft.recipe.NetworkRecipeId;
-import net.minecraft.recipe.RecipeDisplayEntry;
-import net.minecraft.recipe.RecipeFinder;
-import net.minecraft.recipe.display.SlotDisplayContexts;
-import net.minecraft.registry.Registries;
-import net.minecraft.screen.AbstractCraftingScreenHandler;
-import net.minecraft.util.Hand;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.EntityHitResult;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.Options;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.player.StackedItemContents;
+import net.minecraft.world.inventory.AbstractCraftingMenu;
+import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.display.RecipeDisplayEntry;
+import net.minecraft.world.item.crafting.display.RecipeDisplayId;
+import net.minecraft.world.item.crafting.display.SlotDisplayContext;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import dev.talos.client.command.RaycastMath;
-import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.screen.slot.Slot;
-import net.minecraft.item.ItemStack;
-import net.minecraft.entity.EquipmentSlot;
 import dev.talos.client.render.RenderQueue;
 import org.graalvm.polyglot.HostAccess;
 import org.slf4j.Logger;
@@ -103,13 +103,13 @@ public final class TalosNativeBridge {
     }
     @HostAccess.Export public String gotoBlockType(String blockId, int radius) {
         return await(game.submit(() -> dev.talos.client.pathing.talos.BlockGoalNavigator
-                        .navigate(MinecraftClient.getInstance(), blockId, radius))
+                        .navigate(Minecraft.getInstance(), blockId, radius))
                 .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath));
     }
     @HostAccess.Export public String follow(String selector, double distance) {
         return await(game.submit(() -> {
-                    MinecraftClient client = requireWorld();
-                    net.minecraft.entity.Entity target =
+                    Minecraft client = requireWorld();
+                    net.minecraft.world.entity.Entity target =
                             dev.talos.client.command.EntitySelectors.resolve(client, selector, true);
                     return dev.talos.client.pathing.talos.FollowTask.start(client, target, distance);
                 })
@@ -119,14 +119,14 @@ public final class TalosNativeBridge {
     /** talos.aio.goto_block: nearest matching block, blacklist-and-retry on unreachable. */
     @HostAccess.Export public FutureHandle submitGotoBlockType(String blockId, int radius) {
         return handle(game.submit(() -> dev.talos.client.pathing.talos.BlockGoalNavigator
-                        .navigate(MinecraftClient.getInstance(), blockId, radius))
+                        .navigate(Minecraft.getInstance(), blockId, radius))
                 .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath));
     }
     /** talos.aio.follow: selector/name/type resolved client-side; ends only when following ends. */
     @HostAccess.Export public FutureHandle submitFollow(String selector, double distance) {
         return handle(game.submit(() -> {
-                    MinecraftClient client = requireWorld();
-                    net.minecraft.entity.Entity target =
+                    Minecraft client = requireWorld();
+                    net.minecraft.world.entity.Entity target =
                             dev.talos.client.command.EntitySelectors.resolve(client, selector, true);
                     return dev.talos.client.pathing.talos.FollowTask.start(client, target, distance);
                 })
@@ -189,16 +189,16 @@ public final class TalosNativeBridge {
      */
     @HostAccess.Export public PlayerInfo[] players(double radius) {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
+            Minecraft client = requireWorld();
             checkListRadius(radius);
             double limit = radius * radius;
-            return client.world.getPlayers().stream()
+            return client.level.players().stream()
                     .filter(p -> p != client.player && p.isAlive()
-                            && client.player.squaredDistanceTo(p) <= limit)
-                    .sorted(Comparator.comparingDouble(client.player::squaredDistanceTo))
-                    .map(p -> new PlayerInfo(p.getGameProfile().name(), p.getUuidAsString(),
+                            && client.player.distanceToSqr(p) <= limit)
+                    .sorted(Comparator.comparingDouble(client.player::distanceToSqr))
+                    .map(p -> new PlayerInfo(p.getGameProfile().name(), p.getStringUUID(),
                             new Pos(p.getX(), p.getY(), p.getZ()),
-                            Math.sqrt(client.player.squaredDistanceTo(p))))
+                            Math.sqrt(client.player.distanceToSqr(p))))
                     .toArray(PlayerInfo[]::new);
         }));
     }
@@ -210,21 +210,21 @@ public final class TalosNativeBridge {
      */
     @HostAccess.Export public EntityInfo[] entities(String type, double radius) {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
+            Minecraft client = requireWorld();
             checkListRadius(radius);
             String wanted = type == null || type.isEmpty() ? null : type.toLowerCase(Locale.ROOT);
-            Box box = client.player.getBoundingBox().expand(radius);
+            AABB box = client.player.getBoundingBox().inflate(radius);
             double limit = radius * radius;
-            return client.world.getEntitiesByClass(Entity.class, box, entity ->
+            return client.level.getEntitiesOfClass(Entity.class, box, entity ->
                             entity.isAlive() && entity != client.player
-                                    && client.player.squaredDistanceTo(entity) <= limit
-                                    && (wanted == null || Registries.ENTITY_TYPE.getId(entity.getType())
+                                    && client.player.distanceToSqr(entity) <= limit
+                                    && (wanted == null || BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType())
                                             .toString().equals(wanted)))
-                    .stream().sorted(Comparator.comparingDouble(client.player::squaredDistanceTo))
-                    .map(entity -> new EntityInfo(entity.getUuidAsString(),
-                            Registries.ENTITY_TYPE.getId(entity.getType()).toString(),
+                    .stream().sorted(Comparator.comparingDouble(client.player::distanceToSqr))
+                    .map(entity -> new EntityInfo(entity.getStringUUID(),
+                            BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString(),
                             new Pos(entity.getX(), entity.getY(), entity.getZ()),
-                            Math.sqrt(client.player.squaredDistanceTo(entity))))
+                            Math.sqrt(client.player.distanceToSqr(entity))))
                     .toArray(EntityInfo[]::new);
         }));
     }
@@ -245,18 +245,18 @@ public final class TalosNativeBridge {
      */
     @HostAccess.Export public String placeLook() {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            HitResult hit = client.crosshairTarget;
+            Minecraft client = requireWorld();
+            HitResult hit = client.hitResult;
             if (!(hit instanceof BlockHitResult blockHit) || blockHit.getType() != HitResult.Type.BLOCK) {
                 throw new IllegalStateException("Not looking at a block");
             }
-            net.minecraft.util.ActionResult interaction =
-                    client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
-            client.player.swingHand(Hand.MAIN_HAND);
-            if (!interaction.isAccepted()) {
+            net.minecraft.world.InteractionResult interaction =
+                    client.gameMode.useItemOn(client.player, InteractionHand.MAIN_HAND, blockHit);
+            client.player.swing(InteractionHand.MAIN_HAND);
+            if (!interaction.consumesAction()) {
                 throw new IllegalStateException("Placement interaction was rejected");
             }
-            return "Placed block at " + blockHit.getBlockPos().offset(blockHit.getSide()).toShortString();
+            return "Placed block at " + blockHit.getBlockPos().relative(blockHit.getDirection()).toShortString();
         }));
     }
 
@@ -266,11 +266,11 @@ public final class TalosNativeBridge {
 
     private static PlaceBlockAction placeAsAction(int x, int y, int z, String blockId) {
         Identifier id = Identifier.tryParse(blockId);
-        if (id == null || !Registries.BLOCK.containsId(id)) throw new IllegalArgumentException("Unknown block: " + blockId);
-        net.minecraft.block.Block wanted = Registries.BLOCK.get(id);
-        java.util.function.Predicate<net.minecraft.item.ItemStack> selector = stack ->
-                stack.getItem() instanceof net.minecraft.item.BlockItem blockItem && blockItem.getBlock() == wanted;
-        return new PlaceBlockAction(new BlockPos(x, y, z), selector, net.minecraft.util.math.Direction.UP, null);
+        if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) throw new IllegalArgumentException("Unknown block: " + blockId);
+        net.minecraft.world.level.block.Block wanted = BuiltInRegistries.BLOCK.getValue(id);
+        java.util.function.Predicate<net.minecraft.world.item.ItemStack> selector = stack ->
+                stack.getItem() instanceof net.minecraft.world.item.BlockItem blockItem && blockItem.getBlock() == wanted;
+        return new PlaceBlockAction(new BlockPos(x, y, z), selector, net.minecraft.core.Direction.UP, null);
     }
     @HostAccess.Export public String breakBlock(int x, int y, int z) {
         return action(new BreakBlockAction(new BlockPos(x, y, z)), "break");
@@ -299,9 +299,9 @@ public final class TalosNativeBridge {
 
     @HostAccess.Export public int containerSlotCount() {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            return (int) client.player.currentScreenHandler.slots.stream()
-                    .filter(slot -> slot.inventory != client.player.getInventory()).count();
+            Minecraft client = requireWorld();
+            return (int) client.player.containerMenu.slots.stream()
+                    .filter(slot -> slot.container != client.player.getInventory()).count();
         }));
     }
 
@@ -321,12 +321,12 @@ public final class TalosNativeBridge {
      */
     @HostAccess.Export public SlotStack[] inventoryItems() {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
+            Minecraft client = requireWorld();
             List<SlotStack> stacks = new ArrayList<>();
             for (int i = 0; i < 36; i++) {
-                ItemStack stack = client.player.getInventory().getStack(i);
+                ItemStack stack = client.player.getInventory().getItem(i);
                 if (!stack.isEmpty()) stacks.add(new SlotStack(i,
-                        Registries.ITEM.getId(stack.getItem()).toString(), stack.getCount()));
+                        BuiltInRegistries.ITEM.getKey(stack.getItem()).toString(), stack.getCount()));
             }
             return stacks.toArray(SlotStack[]::new);
         }));
@@ -343,13 +343,13 @@ public final class TalosNativeBridge {
      */
     @HostAccess.Export public SlotStack[] containerItems() {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
+            Minecraft client = requireWorld();
             List<SlotStack> stacks = new ArrayList<>();
-            for (Slot slot : client.player.currentScreenHandler.slots) {
-                if (slot.inventory == client.player.getInventory() || !slot.hasStack()) continue;
-                ItemStack stack = slot.getStack();
-                stacks.add(new SlotStack(slot.id,
-                        Registries.ITEM.getId(stack.getItem()).toString(), stack.getCount()));
+            for (Slot slot : client.player.containerMenu.slots) {
+                if (slot.container == client.player.getInventory() || !slot.hasItem()) continue;
+                ItemStack stack = slot.getItem();
+                stacks.add(new SlotStack(slot.index,
+                        BuiltInRegistries.ITEM.getKey(stack.getItem()).toString(), stack.getCount()));
             }
             return stacks.toArray(SlotStack[]::new);
         }));
@@ -366,7 +366,7 @@ public final class TalosNativeBridge {
     }
 
     private int transfer(String itemId, int amount, boolean toContainer) {
-        net.minecraft.item.Item item = parseItem(itemId);
+        net.minecraft.world.item.Item item = parseItem(itemId);
         if (amount < 0) throw new IllegalArgumentException("amount must be >= 0");
         TransferTask task = new TransferTask(item, amount, toContainer);
         return await(game.submit(() -> {
@@ -376,45 +376,45 @@ public final class TalosNativeBridge {
         }).thenCompose(f -> f));
     }
 
-    private static net.minecraft.item.Item parseItem(String itemId) {
+    private static net.minecraft.world.item.Item parseItem(String itemId) {
         Identifier id = Identifier.tryParse(itemId);
-        if (id == null || !Registries.ITEM.containsId(id))
+        if (id == null || !BuiltInRegistries.ITEM.containsKey(id))
             throw new IllegalArgumentException("Unknown item: " + itemId);
-        return Registries.ITEM.get(id);
+        return BuiltInRegistries.ITEM.getValue(id);
     }
 
     /**
      * Craft {@code count} results of an OUTPUT item via the recipe book. 1.21.11 no longer
      * syncs recipe resource ids to the client (recipes arrive as anonymous
-     * {@link NetworkRecipeId}s plus displays), so lookup matches the recipe's RESULT item
+     * {@link RecipeDisplayId}s plus displays), so lookup matches the recipe's RESULT item
      * instead; a recipe whose ingredients are currently available is preferred. Requires a
      * crafting screen (player inventory 2x2 or crafting table) to be open.
      */
     @HostAccess.Export public String craft(String output, int count) {
         if (count < 1 || count > 1024) throw new IllegalArgumentException("count must be 1..1024");
-        net.minecraft.item.Item wanted = parseItem(output);
+        net.minecraft.world.item.Item wanted = parseItem(output);
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            if (!(client.player.currentScreenHandler instanceof AbstractCraftingScreenHandler crafting))
+            Minecraft client = requireWorld();
+            if (!(client.player.containerMenu instanceof AbstractCraftingMenu crafting))
                 throw new IllegalStateException(
                         "No crafting screen: open the inventory (2x2 recipes) or a crafting table first");
-            RecipeFinder finder = new RecipeFinder();
-            crafting.populateRecipeFinder(finder);
-            var parameters = SlotDisplayContexts.createParameters(client.world);
-            NetworkRecipeId match = null;
-            NetworkRecipeId fallback = null;
+            StackedItemContents finder = new StackedItemContents();
+            crafting.fillCraftSlotsStackedContents(finder);
+            var parameters = SlotDisplayContext.fromLevel(client.level);
+            RecipeDisplayId match = null;
+            RecipeDisplayId fallback = null;
             outer:
-            for (var collection : client.player.getRecipeBook().getOrderedResults()) {
-                for (RecipeDisplayEntry entry : collection.getAllRecipes()) {
-                    if (entry.getStacks(parameters).stream().noneMatch(stack -> stack.isOf(wanted))) continue;
+            for (var collection : client.player.getRecipeBook().getCollections()) {
+                for (RecipeDisplayEntry entry : collection.getRecipes()) {
+                    if (entry.resultItems(parameters).stream().noneMatch(stack -> stack.is(wanted))) continue;
                     if (fallback == null) fallback = entry.id();
-                    if (entry.isCraftable(finder)) { match = entry.id(); break outer; }
+                    if (entry.canCraft(finder)) { match = entry.id(); break outer; }
                 }
             }
-            NetworkRecipeId recipe = match != null ? match : fallback;
+            RecipeDisplayId recipe = match != null ? match : fallback;
             if (recipe == null) throw new IllegalStateException("No recipe book entry produces " + output);
             CraftTask task = new CraftTask(recipe, wanted, count, crafting,
-                    crafting.getOutputSlot().id, output);
+                    crafting.getResultSlot().index, output);
             addTaskWhenFree("script-craft", task, task.future);
             return task.future;
         }).thenCompose(f -> f));
@@ -428,26 +428,26 @@ public final class TalosNativeBridge {
      */
     @HostAccess.Export public String screenName() {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            if (client.currentScreen == null) return null;
-            if (client.currentScreen instanceof HandledScreen<?> handled) {
+            Minecraft client = requireWorld();
+            if (client.screen == null) return null;
+            if (client.screen instanceof AbstractContainerScreen<?> handled) {
                 try {
-                    return Registries.SCREEN_HANDLER.getId(handled.getScreenHandler().getType()).toString();
+                    return BuiltInRegistries.MENU.getKey(handled.getMenu().getType()).toString();
                 } catch (UnsupportedOperationException noType) {
                     return "minecraft:inventory"; // PlayerScreenHandler has no registered type
                 }
             }
-            String title = client.currentScreen.getTitle().getString();
-            return title.isEmpty() ? client.currentScreen.getClass().getSimpleName() : title;
+            String title = client.screen.getTitle().getString();
+            return title.isEmpty() ? client.screen.getClass().getSimpleName() : title;
         }));
     }
 
     /** Close whatever screen is open (container, inventory, ...); safe when none is. */
     @HostAccess.Export public void closeScreen() {
         await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            if (client.currentScreen instanceof HandledScreen<?>) client.player.closeHandledScreen();
-            else if (client.currentScreen != null) client.setScreen(null);
+            Minecraft client = requireWorld();
+            if (client.screen instanceof AbstractContainerScreen<?>) client.player.closeContainer();
+            else if (client.screen != null) client.setScreen(null);
             return null;
         }));
     }
@@ -499,8 +499,8 @@ public final class TalosNativeBridge {
 
     @HostAccess.Export public String armorItem(String armorSlot) {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            return Registries.ITEM.getId(client.player.getEquippedStack(parseArmorSlot(armorSlot)).getItem()).toString();
+            Minecraft client = requireWorld();
+            return BuiltInRegistries.ITEM.getKey(client.player.getItemBySlot(parseArmorSlot(armorSlot)).getItem()).toString();
         }));
     }
 
@@ -513,10 +513,10 @@ public final class TalosNativeBridge {
 
     private CompletableFuture<String> killFuture(double radius) {
         return game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            Entity nearest = client.world.getEntitiesByClass(HostileEntity.class,
-                            client.player.getBoundingBox().expand(radius), Entity::isAlive)
-                    .stream().min(Comparator.comparingDouble(client.player::squaredDistanceTo)).orElse(null);
+            Minecraft client = requireWorld();
+            Entity nearest = client.level.getEntitiesOfClass(Monster.class,
+                            client.player.getBoundingBox().inflate(radius), Entity::isAlive)
+                    .stream().min(Comparator.comparingDouble(client.player::distanceToSqr)).orElse(null);
             if (nearest == null) throw new IllegalStateException("No hostile entity within " + radius + " blocks");
             KillEntityAction action = new KillEntityAction(nearest);
             addTaskWhenFree("script-kill", action, action.future());
@@ -525,13 +525,13 @@ public final class TalosNativeBridge {
     }
 
     /**
-     * Hold or release one of the player's logical {@link KeyBinding}s (never raw key
+     * Hold or release one of the player's logical {@link KeyMapping}s (never raw key
      * codes, so rebound controls keep working — the same contract /talos key honors).
      * The key stays pressed until released; {@link #releaseKeys()} clears everything.
      */
     @HostAccess.Export public void setKey(String name, boolean pressed) {
         await(game.submit(() -> {
-            keyBinding(requireWorld().options, name).setPressed(pressed);
+            keyBinding(requireWorld().options, name).setDown(pressed);
             return null;
         }));
     }
@@ -545,7 +545,7 @@ public final class TalosNativeBridge {
      */
     @HostAccess.Export public String tapKey(String name) {
         return await(game.submit(() -> {
-            KeyBinding key = keyBinding(requireWorld().options, name);
+            KeyMapping key = keyBinding(requireWorld().options, name);
             TapKeyTask task = new TapKeyTask(key, name);
             // Empty mutex set: a tap never conflicts, so bypass the conflict scan.
             TalosClient.taskScheduler().forceAddTask("script-tap-" + name, task);
@@ -556,8 +556,8 @@ public final class TalosNativeBridge {
     /** Releases every key {@link #setKey} can press; safe to call unconditionally. */
     @HostAccess.Export public void releaseKeys() {
         await(game.submit(() -> {
-            GameOptions options = requireWorld().options;
-            for (KeyBinding key : scriptKeys(options)) key.setPressed(false);
+            Options options = requireWorld().options;
+            for (KeyMapping key : scriptKeys(options)) key.setDown(false);
             return null;
         }));
     }
@@ -565,75 +565,75 @@ public final class TalosNativeBridge {
     /** Set the view rotation to absolute yaw/pitch degrees (yaw also turns head and body). */
     @HostAccess.Export public void setLook(float yaw, float pitch) {
         await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            float clamped = net.minecraft.util.math.MathHelper.clamp(pitch, -90.0f, 90.0f);
-            client.player.setYaw(yaw);
-            client.player.setHeadYaw(yaw);
-            client.player.setBodyYaw(yaw);
-            client.player.setPitch(clamped);
+            Minecraft client = requireWorld();
+            float clamped = net.minecraft.util.Mth.clamp(pitch, -90.0f, 90.0f);
+            client.player.setYRot(yaw);
+            client.player.setYHeadRot(yaw);
+            client.player.setYBodyRot(yaw);
+            client.player.setXRot(clamped);
             return null;
         }));
     }
 
-    private static KeyBinding keyBinding(GameOptions options, String name) {
+    private static KeyMapping keyBinding(Options options, String name) {
         return switch (name.toLowerCase(Locale.ROOT)) {
-            case "forward" -> options.forwardKey;
-            case "back", "backward" -> options.backKey;
-            case "left" -> options.leftKey;
-            case "right" -> options.rightKey;
-            case "jump" -> options.jumpKey;
-            case "sneak" -> options.sneakKey;
-            case "sprint" -> options.sprintKey;
-            case "attack" -> options.attackKey;
-            case "use" -> options.useKey;
+            case "forward" -> options.keyUp;
+            case "back", "backward" -> options.keyDown;
+            case "left" -> options.keyLeft;
+            case "right" -> options.keyRight;
+            case "jump" -> options.keyJump;
+            case "sneak" -> options.keyShift;
+            case "sprint" -> options.keySprint;
+            case "attack" -> options.keyAttack;
+            case "use" -> options.keyUse;
             default -> throw new IllegalArgumentException(
                     "key must be forward/back/left/right/jump/sneak/sprint/attack/use");
         };
     }
 
-    private static KeyBinding[] scriptKeys(GameOptions options) {
-        return new KeyBinding[]{options.forwardKey, options.backKey, options.leftKey,
-                options.rightKey, options.jumpKey, options.sneakKey, options.sprintKey,
-                options.attackKey, options.useKey};
+    private static KeyMapping[] scriptKeys(Options options) {
+        return new KeyMapping[]{options.keyUp, options.keyDown, options.keyLeft,
+                options.keyRight, options.keyJump, options.keyShift, options.keySprint,
+                options.keyAttack, options.keyUse};
     }
 
     @HostAccess.Export public void lookAt(double x, double y, double z) {
         await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            float[] angles = RotationHumanizer.yawPitchTo(client.player.getEyePos(), new Vec3d(x, y, z));
-            client.player.setYaw(angles[0]);
-            client.player.setPitch(angles[1]);
+            Minecraft client = requireWorld();
+            float[] angles = RotationHumanizer.yawPitchTo(client.player.getEyePosition(), new Vec3(x, y, z));
+            client.player.setYRot(angles[0]);
+            client.player.setXRot(angles[1]);
             return null;
         }));
     }
     @HostAccess.Export public Pos playerPos() {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            Vec3d p = client.player.getEyePos();
+            Minecraft client = requireWorld();
+            Vec3 p = client.player.getEyePosition();
             return new Pos(p.x, p.y, p.z);
         }));
     }
     /** Feet/bottom-center position — the coordinate space blocks and hitboxes live in. */
     @HostAccess.Export public Pos playerFeet() {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
+            Minecraft client = requireWorld();
             return new Pos(client.player.getX(), client.player.getY(), client.player.getZ());
         }));
     }
     /** Current view rotation as [yaw, pitch] in degrees (yaw wrapped to -180..180). */
     @HostAccess.Export public double[] lookAngle() {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
+            Minecraft client = requireWorld();
             return new double[]{
-                    net.minecraft.util.math.MathHelper.wrapDegrees(client.player.getYaw()),
-                    client.player.getPitch()};
+                    net.minecraft.util.Mth.wrapDegrees(client.player.getYRot()),
+                    client.player.getXRot()};
         }));
     }
     /** Block cell the crosshair targets right now, or null (air, out of reach, entity). */
     @HostAccess.Export public Pos lookingAtBlock() {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            if (client.crosshairTarget instanceof BlockHitResult hit
+            Minecraft client = requireWorld();
+            if (client.hitResult instanceof BlockHitResult hit
                     && hit.getType() == HitResult.Type.BLOCK) {
                 BlockPos pos = hit.getBlockPos();
                 return new Pos(pos.getX(), pos.getY(), pos.getZ());
@@ -647,9 +647,9 @@ public final class TalosNativeBridge {
      */
     @HostAccess.Export public Pos localCoords(double left, double up, double forward) {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            Vec3d p = RaycastMath.local(client.player.getEyePos(),
-                    client.player.getYaw(), client.player.getPitch(), left, up, forward);
+            Minecraft client = requireWorld();
+            Vec3 p = RaycastMath.local(client.player.getEyePosition(),
+                    client.player.getYRot(), client.player.getXRot(), left, up, forward);
             return new Pos(p.x, p.y, p.z);
         }));
     }
@@ -660,8 +660,8 @@ public final class TalosNativeBridge {
      */
     @HostAccess.Export public HitInfo raycast(double maxDist) {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            RaycastMath.Hit hit = RaycastMath.cast(client.player, client.world, maxDist);
+            Minecraft client = requireWorld();
+            RaycastMath.Hit hit = RaycastMath.cast(client.player, client.level, maxDist);
             if (hit.isMiss()) {
                 return null;
             }
@@ -682,10 +682,10 @@ public final class TalosNativeBridge {
         checkValid();
         CompletableFuture<String> future = ScriptInputGate.request(prompt);
         game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            client.player.sendMessage(net.minecraft.text.Text.literal(
+            Minecraft client = requireWorld();
+            client.player.sendSystemMessage(net.minecraft.network.chat.Component.literal(
                     "§bTalos §7» §f" + prompt
-                            + " §7(answer in chat — the message stays local)"), false);
+                            + " §7(answer in chat — the message stays local)"));
             return null;
         });
         return future;
@@ -694,9 +694,9 @@ public final class TalosNativeBridge {
     /** Registry id of the block at a cell, e.g. "minecraft:stone" ("minecraft:air" if empty). */
     @HostAccess.Export public String blockAt(int x, int y, int z) {
         return await(game.submit(() -> {
-            MinecraftClient client = requireWorld();
-            return Registries.BLOCK.getId(
-                    client.world.getBlockState(new BlockPos(x, y, z)).getBlock()).toString();
+            Minecraft client = requireWorld();
+            return BuiltInRegistries.BLOCK.getKey(
+                    client.level.getBlockState(new BlockPos(x, y, z)).getBlock()).toString();
         }));
     }
     @HostAccess.Export public void log(String message) { LOGGER.info("[Python] {}", message); }
@@ -857,37 +857,37 @@ public final class TalosNativeBridge {
     }
 
     private CompletableFuture<Pos> scheduleBlockScan(String text, int radius) {
-        MinecraftClient client = requireWorld();
+        Minecraft client = requireWorld();
         if (radius < 1 || radius > 64) throw new IllegalArgumentException("radius must be 1..64");
         Identifier id = Identifier.tryParse(text);
-        if (id == null || !Registries.BLOCK.containsId(id)) throw new IllegalArgumentException("Unknown block: " + text);
+        if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) throw new IllegalArgumentException("Unknown block: " + text);
         ScriptBlockScanTask scan = new ScriptBlockScanTask(
-                client.player.getBlockPos(), radius, Registries.BLOCK.get(id));
+                client.player.blockPosition(), radius, BuiltInRegistries.BLOCK.getValue(id));
         addTaskWhenFree("script-find-block", scan, scan.future);
         return scan.future;
     }
 
     private EntityInfo findEntityOnGameThread(String name, double radius, boolean itemsOnly) {
-        MinecraftClient client = requireWorld();
+        Minecraft client = requireWorld();
         if (!Double.isFinite(radius) || radius <= 0 || radius > 128) throw new IllegalArgumentException("radius must be in (0,128]");
         String wanted = name.toLowerCase(Locale.ROOT);
-        Box box = client.player.getBoundingBox().expand(radius);
-        return client.world.getEntitiesByClass(Entity.class, box, entity -> {
+        AABB box = client.player.getBoundingBox().inflate(radius);
+        return client.level.getEntitiesOfClass(Entity.class, box, entity -> {
                     if (!entity.isAlive() || entity == client.player) return false;
                     if (itemsOnly) return entity instanceof ItemEntity item
-                            && Registries.ITEM.getId(item.getStack().getItem()).toString().equals(wanted);
-                    return Registries.ENTITY_TYPE.getId(entity.getType()).toString().equals(wanted);
-                }).stream().min(Comparator.comparingDouble(client.player::squaredDistanceTo))
-                .map(entity -> new EntityInfo(entity.getUuidAsString(),
-                        Registries.ENTITY_TYPE.getId(entity.getType()).toString(),
+                            && BuiltInRegistries.ITEM.getKey(item.getItem().getItem()).toString().equals(wanted);
+                    return BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString().equals(wanted);
+                }).stream().min(Comparator.comparingDouble(client.player::distanceToSqr))
+                .map(entity -> new EntityInfo(entity.getStringUUID(),
+                        BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).toString(),
                         new Pos(entity.getX(), entity.getY(), entity.getZ()),
-                        Math.sqrt(client.player.squaredDistanceTo(entity)))).orElse(null);
+                        Math.sqrt(client.player.distanceToSqr(entity)))).orElse(null);
     }
 
-    private MinecraftClient requireWorld() {
+    private Minecraft requireWorld() {
         checkValid();
-        MinecraftClient client = MinecraftClient.getInstance();
-        if (!client.isOnThread() || client.player == null || client.world == null)
+        Minecraft client = Minecraft.getInstance();
+        if (!client.isSameThread() || client.player == null || client.level == null)
             throw new IllegalStateException("No active client world/player");
         return client;
     }
@@ -956,22 +956,22 @@ public final class TalosNativeBridge {
 
     private static final class ScriptBlockScanTask extends SimpleTask {
         private final Iterator<BlockPos> positions;
-        private final net.minecraft.block.Block block;
+        private final net.minecraft.world.level.block.Block block;
         private final CompletableFuture<Pos> future = new CompletableFuture<>();
 
-        private ScriptBlockScanTask(BlockPos center, int radius, net.minecraft.block.Block block) {
-            this.positions = BlockPos.iterateOutwards(center, radius, radius, radius).iterator();
+        private ScriptBlockScanTask(BlockPos center, int radius, net.minecraft.world.level.block.Block block) {
+            this.positions = BlockPos.withinManhattan(center, radius, radius, radius).iterator();
             this.block = block;
         }
         @Override public void initialize() {}
         @Override public boolean condition() { return positions.hasNext() && !future.isDone(); }
         @Override protected void onTick() {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.world == null || !client.isOnThread()) { _break(); return; }
+            Minecraft client = Minecraft.getInstance();
+            if (client.level == null || !client.isSameThread()) { _break(); return; }
             while (positions.hasNext() && TalosClient.tickBudget().hasBudgetRemaining()) {
                 BlockPos pos = positions.next();
-                if (client.world.getBlockState(pos).isOf(block)) {
-                    RenderQueue.add("glow:" + pos.asLong(), new Box(pos).expand(0.002), 0x33FF66, 10 * 20);
+                if (client.level.getBlockState(pos).is(block)) {
+                    RenderQueue.add("glow:" + pos.asLong(), new AABB(pos).inflate(0.002), 0x33FF66, 10 * 20);
                     future.complete(new Pos(pos.getX(), pos.getY(), pos.getZ()));
                     _break();
                     return;
@@ -989,20 +989,20 @@ public final class TalosNativeBridge {
      * {@link #addTaskWhenFree}.
      */
     private static final class TapKeyTask extends SimpleTask {
-        private final KeyBinding key;
+        private final KeyMapping key;
         private final String name;
         private final CompletableFuture<String> future = new CompletableFuture<>();
         private boolean pressed;
-        private TapKeyTask(KeyBinding key, String name) { this.key = key; this.name = name; }
+        private TapKeyTask(KeyMapping key, String name) { this.key = key; this.name = name; }
         @Override public boolean condition() { return !future.isDone(); }
         @Override protected void onTick() {
-            if (!pressed) { key.setPressed(true); pressed = true; return; }
-            key.setPressed(false);
+            if (!pressed) { key.setDown(true); pressed = true; return; }
+            key.setDown(false);
             future.complete("Tapped " + name);
             _break();
         }
         @Override public void onCompleted() {
-            if (pressed) key.setPressed(false); // a cancelled tap must never leave the key held
+            if (pressed) key.setDown(false); // a cancelled tap must never leave the key held
             if (!future.isDone()) future.completeExceptionally(new IllegalStateException("Tap cancelled"));
         }
         @Override public java.util.Set<Object> getMutexKeys() { return java.util.Set.of(); }
@@ -1021,18 +1021,18 @@ public final class TalosNativeBridge {
         private final boolean right;
         private ClickTask(boolean right) { this.right = right; }
         @Override protected void onTick() {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.player == null || client.interactionManager == null) { fail("No active player"); return; }
-            HitResult hit = client.crosshairTarget;
+            Minecraft client = Minecraft.getInstance();
+            if (client.player == null || client.gameMode == null) { fail("No active player"); return; }
+            HitResult hit = client.hitResult;
             if (hit == null || hit.getType() == HitResult.Type.MISS) { fail("Crosshair did not hit anything"); return; }
             if (hit instanceof EntityHitResult entityHit) {
-                if (right) client.interactionManager.interactEntity(client.player, entityHit.getEntity(), Hand.MAIN_HAND);
-                else client.interactionManager.attackEntity(client.player, entityHit.getEntity());
+                if (right) client.gameMode.interact(client.player, entityHit.getEntity(), entityHit, InteractionHand.MAIN_HAND);
+                else client.gameMode.attack(client.player, entityHit.getEntity());
             } else if (hit instanceof BlockHitResult blockHit) {
-                if (right) client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
-                else client.interactionManager.attackBlock(blockHit.getBlockPos(), blockHit.getSide());
+                if (right) client.gameMode.useItemOn(client.player, InteractionHand.MAIN_HAND, blockHit);
+                else client.gameMode.startDestroyBlock(blockHit.getBlockPos(), blockHit.getDirection());
             }
-            client.player.swingHand(Hand.MAIN_HAND);
+            client.player.swing(InteractionHand.MAIN_HAND);
             finish(right ? "Right-clicked crosshair target" : "Left-clicked crosshair target");
         }
     }
@@ -1040,30 +1040,30 @@ public final class TalosNativeBridge {
     private static final class MineLookingTask extends BridgeTask {
         private BlockPos target;
         private Direction side;
-        private net.minecraft.block.BlockState original;
+        private net.minecraft.world.level.block.state.BlockState original;
         @Override protected void onTick() {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.player == null || client.world == null || client.interactionManager == null) { fail("No active player"); return; }
-            if (!(client.crosshairTarget instanceof BlockHitResult hit) || hit.getType() != HitResult.Type.BLOCK) {
+            Minecraft client = Minecraft.getInstance();
+            if (client.player == null || client.level == null || client.gameMode == null) { fail("No active player"); return; }
+            if (!(client.hitResult instanceof BlockHitResult hit) || hit.getType() != HitResult.Type.BLOCK) {
                 fail(target == null ? "Not looking at a block" : "Crosshair left the mining target"); return;
             }
             if (target == null) {
-                target = hit.getBlockPos().toImmutable(); side = hit.getSide(); original = client.world.getBlockState(target);
+                target = hit.getBlockPos().immutable(); side = hit.getDirection(); original = client.level.getBlockState(target);
                 int best = client.player.getInventory().getSelectedSlot();
-                float speed = client.player.getInventory().getStack(best).getMiningSpeedMultiplier(original);
+                float speed = client.player.getInventory().getItem(best).getDestroySpeed(original);
                 for (int i = 0; i < 9; i++) {
-                    float candidate = client.player.getInventory().getStack(i).getMiningSpeedMultiplier(original);
+                    float candidate = client.player.getInventory().getItem(i).getDestroySpeed(original);
                     if (candidate > speed) { best = i; speed = candidate; }
                 }
                 client.player.getInventory().setSelectedSlot(best);
-                client.interactionManager.attackBlock(target, side);
+                client.gameMode.startDestroyBlock(target, side);
             } else if (!target.equals(hit.getBlockPos())) { fail("Crosshair target changed while mining"); return; }
-            var state = client.world.getBlockState(target);
+            var state = client.level.getBlockState(target);
             if (state.isAir()) { finish("Broke " + target.toShortString()); return; }
             if (!state.equals(original)) { fail("Mining target changed unexpectedly"); return; }
             if (TalosClient.tickBudget().hasBudgetRemaining()) {
-                client.interactionManager.updateBlockBreakingProgress(target, side);
-                client.player.swingHand(Hand.MAIN_HAND);
+                client.gameMode.continueDestroyBlock(target, side);
+                client.player.swing(InteractionHand.MAIN_HAND);
             }
         }
     }
@@ -1072,11 +1072,11 @@ public final class TalosNativeBridge {
         private final int slot, button;
         private SlotClickTask(int slot, int button) { this.slot = slot; this.button = button; }
         @Override protected void onTick() {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.player == null || client.interactionManager == null) { fail("No active player"); return; }
-            var handler = client.player.currentScreenHandler;
+            Minecraft client = Minecraft.getInstance();
+            if (client.player == null || client.gameMode == null) { fail("No active player"); return; }
+            var handler = client.player.containerMenu;
             if (slot < 0 || slot >= handler.slots.size()) { fail("screen slot out of range: " + slot); return; }
-            client.interactionManager.clickSlot(handler.syncId, slot, button, SlotActionType.PICKUP, client.player);
+            client.gameMode.handleContainerInput(handler.containerId, slot, button, ContainerInput.PICKUP, client.player);
             finish("Clicked screen slot " + slot);
         }
     }
@@ -1085,13 +1085,13 @@ public final class TalosNativeBridge {
         final int from, to;
         private MoveStackTask(int from, int to) { this.from = from; this.to = to; }
         @Override protected void onTick() {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.player == null || client.interactionManager == null) { fail("No active player"); return; }
-            var handler = client.player.currentScreenHandler;
+            Minecraft client = Minecraft.getInstance();
+            if (client.player == null || client.gameMode == null) { fail("No active player"); return; }
+            var handler = client.player.containerMenu;
             if (from < 0 || to < 0 || from >= handler.slots.size() || to >= handler.slots.size()) { fail("screen slot out of range"); return; }
-            client.interactionManager.clickSlot(handler.syncId, from, 0, SlotActionType.PICKUP, client.player);
-            client.interactionManager.clickSlot(handler.syncId, to, 0, SlotActionType.PICKUP, client.player);
-            if (!handler.getCursorStack().isEmpty()) client.interactionManager.clickSlot(handler.syncId, from, 0, SlotActionType.PICKUP, client.player);
+            client.gameMode.handleContainerInput(handler.containerId, from, 0, ContainerInput.PICKUP, client.player);
+            client.gameMode.handleContainerInput(handler.containerId, to, 0, ContainerInput.PICKUP, client.player);
+            if (!handler.getCarried().isEmpty()) client.gameMode.handleContainerInput(handler.containerId, from, 0, ContainerInput.PICKUP, client.player);
             finish("Moved stack from " + from + " to " + to);
         }
     }
@@ -1104,12 +1104,12 @@ public final class TalosNativeBridge {
      * of items that actually moved (client-predicted stack deltas, 0 when nothing fit).
      */
     private static final class TransferTask extends SimpleTask {
-        private final net.minecraft.item.Item item;
+        private final net.minecraft.world.item.Item item;
         private final int amount;
         private final boolean toContainer;
         final CompletableFuture<Integer> future = new CompletableFuture<>();
 
-        private TransferTask(net.minecraft.item.Item item, int amount, boolean toContainer) {
+        private TransferTask(net.minecraft.world.item.Item item, int amount, boolean toContainer) {
             this.item = item;
             this.amount = amount;
             this.toContainer = toContainer;
@@ -1121,18 +1121,18 @@ public final class TalosNativeBridge {
         @Override public java.util.Set<Object> getMutexKeys() { return java.util.Set.of("talos-player-action"); }
 
         @Override protected void onTick() {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.player == null || client.interactionManager == null) {
+            Minecraft client = Minecraft.getInstance();
+            if (client.player == null || client.gameMode == null) {
                 future.completeExceptionally(new IllegalStateException("No active player"));
                 _break();
                 return;
             }
-            var handler = client.player.currentScreenHandler;
+            var handler = client.player.containerMenu;
             List<Slot> containerSlots = new ArrayList<>();
             List<Slot> playerSlots = new ArrayList<>();
             for (Slot slot : handler.slots) {
-                if (slot.inventory != client.player.getInventory()) containerSlots.add(slot);
-                else if (slot.getIndex() < 36) playerSlots.add(slot); // main 36 only; never armor/offhand
+                if (slot.container != client.player.getInventory()) containerSlots.add(slot);
+                else if (slot.getContainerSlot() < 36) playerSlots.add(slot); // main 36 only; never armor/offhand
             }
             if (containerSlots.isEmpty()) {
                 future.completeExceptionally(new IllegalStateException("No container screen is open"));
@@ -1144,14 +1144,14 @@ public final class TalosNativeBridge {
             int moved = 0;
             for (Slot source : sources) {
                 if (moved >= amount) break;
-                ItemStack stack = source.getStack();
-                if (stack.isEmpty() || !stack.isOf(item)) continue;
+                ItemStack stack = source.getItem();
+                if (stack.isEmpty() || !stack.is(item)) continue;
                 int want = amount - moved;
                 if (stack.getCount() <= want) {
                     int before = stack.getCount();
-                    client.interactionManager.clickSlot(handler.syncId, source.id, 0,
-                            SlotActionType.QUICK_MOVE, client.player);
-                    int after = source.getStack().isOf(item) ? source.getStack().getCount() : 0;
+                    client.gameMode.handleContainerInput(handler.containerId, source.index, 0,
+                            ContainerInput.QUICK_MOVE, client.player);
+                    int after = source.getItem().is(item) ? source.getItem().getCount() : 0;
                     if (after >= before) break; // destination side is full
                     moved += before - after;
                 } else {
@@ -1164,31 +1164,31 @@ public final class TalosNativeBridge {
         }
 
         /** Cursor-carries the source stack and right-click drops single items until `want` landed. */
-        private int placePartial(MinecraftClient client, net.minecraft.screen.ScreenHandler handler,
+        private int placePartial(Minecraft client, net.minecraft.world.inventory.AbstractContainerMenu handler,
                 Slot source, List<Slot> destinations, int want) {
-            client.interactionManager.clickSlot(handler.syncId, source.id, 0,
-                    SlotActionType.PICKUP, client.player);
+            client.gameMode.handleContainerInput(handler.containerId, source.index, 0,
+                    ContainerInput.PICKUP, client.player);
             int placed = 0;
-            while (placed < want && !handler.getCursorStack().isEmpty()) {
+            while (placed < want && !handler.getCarried().isEmpty()) {
                 Slot dest = pickDestination(destinations);
                 if (dest == null) break;
-                client.interactionManager.clickSlot(handler.syncId, dest.id, 1,
-                        SlotActionType.PICKUP, client.player);
+                client.gameMode.handleContainerInput(handler.containerId, dest.index, 1,
+                        ContainerInput.PICKUP, client.player);
                 placed++;
             }
-            if (!handler.getCursorStack().isEmpty())
-                client.interactionManager.clickSlot(handler.syncId, source.id, 0,
-                        SlotActionType.PICKUP, client.player);
+            if (!handler.getCarried().isEmpty())
+                client.gameMode.handleContainerInput(handler.containerId, source.index, 0,
+                        ContainerInput.PICKUP, client.player);
             return placed;
         }
 
         private Slot pickDestination(List<Slot> destinations) {
             Slot empty = null;
             for (Slot slot : destinations) {
-                ItemStack stack = slot.getStack();
+                ItemStack stack = slot.getItem();
                 if (stack.isEmpty()) {
                     if (empty == null) empty = slot;
-                } else if (stack.isOf(item) && stack.getCount() < slot.getMaxItemCount(stack)) {
+                } else if (stack.is(item) && stack.getCount() < slot.getMaxStackSize(stack)) {
                     return slot; // top up matching stacks before opening a fresh slot
                 }
             }
@@ -1203,9 +1203,9 @@ public final class TalosNativeBridge {
      * never appears — usually exhausted ingredients.
      */
     private static final class CraftTask extends BridgeTask {
-        private final NetworkRecipeId recipe;
-        private final net.minecraft.item.Item wanted;
-        private final AbstractCraftingScreenHandler handler;
+        private final RecipeDisplayId recipe;
+        private final net.minecraft.world.item.Item wanted;
+        private final AbstractCraftingMenu handler;
         private final int resultSlot;
         private final String outputName;
         private int remaining;
@@ -1213,8 +1213,8 @@ public final class TalosNativeBridge {
         private int waited;
         private boolean sent;
 
-        private CraftTask(NetworkRecipeId recipe, net.minecraft.item.Item wanted, int count,
-                AbstractCraftingScreenHandler handler, int resultSlot, String outputName) {
+        private CraftTask(RecipeDisplayId recipe, net.minecraft.world.item.Item wanted, int count,
+                AbstractCraftingMenu handler, int resultSlot, String outputName) {
             this.recipe = recipe;
             this.wanted = wanted;
             this.remaining = count;
@@ -1224,20 +1224,20 @@ public final class TalosNativeBridge {
         }
 
         @Override protected void onTick() {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.player == null || client.interactionManager == null) { fail("No active player"); return; }
-            if (client.player.currentScreenHandler != handler) { fail("The crafting screen was closed"); return; }
+            Minecraft client = Minecraft.getInstance();
+            if (client.player == null || client.gameMode == null) { fail("No active player"); return; }
+            if (client.player.containerMenu != handler) { fail("The crafting screen was closed"); return; }
             if (!sent) {
-                client.interactionManager.clickRecipe(handler.syncId, recipe, false);
+                client.gameMode.handlePlaceRecipe(handler.containerId, recipe, false);
                 sent = true;
                 waited = 0;
                 return;
             }
-            ItemStack out = handler.slots.get(resultSlot).getStack();
-            if (!out.isEmpty() && out.isOf(wanted)) {
+            ItemStack out = handler.slots.get(resultSlot).getItem();
+            if (!out.isEmpty() && out.is(wanted)) {
                 int produced = out.getCount();
-                client.interactionManager.clickSlot(handler.syncId, resultSlot, 0,
-                        SlotActionType.QUICK_MOVE, client.player);
+                client.gameMode.handleContainerInput(handler.containerId, resultSlot, 0,
+                        ContainerInput.QUICK_MOVE, client.player);
                 crafted += produced;
                 remaining--;
                 if (remaining <= 0) { finish("Crafted " + crafted + " x " + outputName); return; }
@@ -1257,20 +1257,20 @@ public final class TalosNativeBridge {
         private final EquipmentSlot armor;
         private EquipArmorTask(int from, EquipmentSlot armor) { this.from = from; this.armor = armor; }
         @Override protected void onTick() {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.player == null || client.interactionManager == null) { fail("No active player"); return; }
-            var handler = client.player.currentScreenHandler;
+            Minecraft client = Minecraft.getInstance();
+            if (client.player == null || client.gameMode == null) { fail("No active player"); return; }
+            var handler = client.player.containerMenu;
             int inventoryIndex = switch (armor) { case FEET -> 36; case LEGS -> 37; case CHEST -> 38; case HEAD -> 39; default -> -1; };
             int destination = -1;
             for (int i = 0; i < handler.slots.size(); i++) {
                 Slot slot = handler.slots.get(i);
-                if (slot.inventory == client.player.getInventory() && slot.getIndex() == inventoryIndex) { destination = i; break; }
+                if (slot.container == client.player.getInventory() && slot.getContainerSlot() == inventoryIndex) { destination = i; break; }
             }
             if (destination < 0) { fail("The open screen does not expose armor slots"); return; }
             if (from < 0 || from >= handler.slots.size()) { fail("screen slot out of range: " + from); return; }
-            client.interactionManager.clickSlot(handler.syncId, from, 0, SlotActionType.PICKUP, client.player);
-            client.interactionManager.clickSlot(handler.syncId, destination, 0, SlotActionType.PICKUP, client.player);
-            if (!handler.getCursorStack().isEmpty()) client.interactionManager.clickSlot(handler.syncId, from, 0, SlotActionType.PICKUP, client.player);
+            client.gameMode.handleContainerInput(handler.containerId, from, 0, ContainerInput.PICKUP, client.player);
+            client.gameMode.handleContainerInput(handler.containerId, destination, 0, ContainerInput.PICKUP, client.player);
+            if (!handler.getCarried().isEmpty()) client.gameMode.handleContainerInput(handler.containerId, from, 0, ContainerInput.PICKUP, client.player);
             finish("Equipped " + armor.getName());
         }
     }

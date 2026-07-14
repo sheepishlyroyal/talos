@@ -21,10 +21,10 @@ import java.util.Objects;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.phys.Vec3;
 import dev.talos.client.render.RenderQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,7 +81,7 @@ public final class TalosPathingEngine implements PathingEngine {
     private volatile NavigationRun activeRun;
     private volatile String lastPartialDetail = "";
     private volatile int nodeCount;
-    private volatile List<Vec3d> currentNodes = List.of();
+    private volatile List<Vec3> currentNodes = List.of();
 
     @Override public boolean isAvailable() { return true; }
 
@@ -90,19 +90,19 @@ public final class TalosPathingEngine implements PathingEngine {
         Objects.requireNonNull(goal, "goal");
         Objects.requireNonNull(options, "options");
         CompletableFuture<PathResult> future = new CompletableFuture<>();
-        MinecraftClient client = MinecraftClient.getInstance();
+        Minecraft client = Minecraft.getInstance();
         Runnable start = () -> startOnClientThread(client, goal, options, future);
-        if (client.isOnThread()) start.run(); else client.execute(start);
+        if (client.isSameThread()) start.run(); else client.execute(start);
         return future;
     }
 
-    private void startOnClientThread(MinecraftClient client, Goal goal, PathingOptions options,
+    private void startOnClientThread(Minecraft client, Goal goal, PathingOptions options,
                                      CompletableFuture<PathResult> future) {
         if (activeRun != null && activeRun.future.isDone()) activeRun = null;
         // A new goto supersedes the active one — the player changed their mind; refusing
         // with a task-conflict error forced a manual stop first.
         if (activeRun != null) releaseActiveRun("Superseded by a new goto");
-        if (client.world == null || client.player == null) {
+        if (client.level == null || client.player == null) {
             future.complete(new PathResult(false, "No client world or player is loaded"));
             return;
         }
@@ -129,9 +129,9 @@ public final class TalosPathingEngine implements PathingEngine {
     }
 
     private void launchSegment(NavigationRun run) {
-        MinecraftClient client = run.client;
+        Minecraft client = run.client;
         if (run.cancelled || run.future.isDone()) return;
-        if (client.world == null || client.player == null) {
+        if (client.level == null || client.player == null) {
             run.future.complete(new PathResult(false, "World unloaded while re-pathing"));
             return;
         }
@@ -143,13 +143,13 @@ public final class TalosPathingEngine implements PathingEngine {
         }
 
         AStarPathfinder pathfinder = new AStarPathfinder(
-                client.world, client.player, run.options.allowMining());
+                client.level, client.player, run.options.allowMining());
         AStarPathfinder.SearchResult result = pathfinder.find(
-                client.player.getBlockPos(), run.snapshot.test(), run.snapshot.target());
+                client.player.blockPosition(), run.snapshot.test(), run.snapshot.target());
         LOGGER.debug("Native path search attempt {}: {}", run.attempts, result.detail());
         if (result.path().isEmpty()) { scheduleReplan(run); return; }
 
-        double distance = squaredDistance(client.player.getBlockPos(), run.snapshot.target());
+        double distance = squaredDistance(client.player.blockPosition(), run.snapshot.target());
         if (distance + 0.25 < run.bestDistance) {
             run.bestDistance = distance;
             run.stalledAttempts = 0;
@@ -197,7 +197,7 @@ public final class TalosPathingEngine implements PathingEngine {
      * only with no follower (start of run, or a stuck restart) does the player wait for it.
      */
     private void launchSimSegment(NavigationRun run) {
-        MinecraftClient client = run.client;
+        Minecraft client = run.client;
         if (run.planner != null) return; // one background search at a time
         // Far run start (and stuck restarts before a corridor exists): sketch the global
         // corridor first. The player would be waiting on the deep plan anyway; the coarse
@@ -216,7 +216,7 @@ public final class TalosPathingEngine implements PathingEngine {
         MotionState start;
         if (base != null && !base.waypoints().isEmpty()) {
             PlannedRoute.Waypoint tail = base.waypoints().getLast();
-            start = new MotionState(tail.position(), Vec3d.ZERO, true, tail.pose());
+            start = new MotionState(tail.position(), Vec3.ZERO, true, tail.pose());
         } else {
             base = null;
             start = SimFollowTask.liveState(client.player);
@@ -228,10 +228,10 @@ public final class TalosPathingEngine implements PathingEngine {
         boolean edits = run.options.allowMining();
         // Mining edges are billed at the REAL break time for the best hotbar tool, so the
         // planner weighs a dig against a detour with the cost the player will actually pay.
-        java.util.List<net.minecraft.item.ItemStack> hotbar = new java.util.ArrayList<>(9);
+        java.util.List<net.minecraft.world.item.ItemStack> hotbar = new java.util.ArrayList<>(9);
         for (int slot = 0; slot < 9; slot++) {
             // Copies: the planner thread reads these while the live stacks keep mutating.
-            hotbar.add(client.player.getInventory().getStack(slot).copy());
+            hotbar.add(client.player.getInventory().getItem(slot).copy());
         }
         // SUB-GOAL FUNNELING: with a corridor in hand, aim this search at the corridor cell
         // ~48 ahead of where it starts rather than the far goal. Reaching the run's REAL
@@ -243,8 +243,8 @@ public final class TalosPathingEngine implements PathingEngine {
         int subGoalIndex = -1;
         List<BlockPos> corridor = run.corridor;
         if (corridor != null) {
-            Vec3d origin = start.position();
-            BlockPos from = BlockPos.ofFloored(origin.x, origin.y + 1.0E-4, origin.z);
+            Vec3 origin = start.position();
+            BlockPos from = BlockPos.containing(origin.x, origin.y + 1.0E-4, origin.z);
             int nearest = nearestCorridorIndex(corridor, from);
             int candidate = nearest + CORRIDOR_LOOKAHEAD_CELLS;
             // Corridor cells past the server's streamed chunks read back as pure air: a
@@ -254,7 +254,7 @@ public final class TalosPathingEngine implements PathingEngine {
             // "waiting for chunks" hold buys time for the frontier to advance.
             int frontier = Math.min(candidate, corridor.size() - 1);
             while (frontier > nearest
-                    && !client.world.isChunkLoaded(corridor.get(frontier))) {
+                    && !client.level.hasChunkAt(corridor.get(frontier))) {
                 frontier--;
             }
             candidate = frontier;
@@ -263,14 +263,14 @@ public final class TalosPathingEngine implements PathingEngine {
                 Predicate<BlockPos> realTest = run.snapshot.test();
                 deepGoal = sub;
                 deepTest = pos -> realTest.test(pos)
-                        || pos.getSquaredDistance(sub) <= SUB_GOAL_RADIUS_SQ;
+                        || pos.distSqr(sub) <= SUB_GOAL_RADIUS_SQ;
                 subGoalIndex = candidate;
             }
         }
         // Capture the immutable world snapshot the planner thread will search. The region
         // covers start→(sub-)goal inflated by SNAPSHOT_MARGIN, so detours stay inside it;
         // the copy is per-section memcpys — the client thread's whole cost for this plan.
-        Vec3d origin = start.position();
+        Vec3 origin = start.position();
         BlockPos snapMin = new BlockPos(
                 (int) Math.floor(Math.min(origin.x, deepGoal.getX())) - SNAPSHOT_MARGIN,
                 (int) Math.floor(Math.min(origin.y, deepGoal.getY())) - SNAPSHOT_MARGIN,
@@ -280,7 +280,7 @@ public final class TalosPathingEngine implements PathingEngine {
                 (int) Math.ceil(Math.max(origin.y, deepGoal.getY())) + SNAPSHOT_MARGIN,
                 (int) Math.ceil(Math.max(origin.z, deepGoal.getZ())) + SNAPSHOT_MARGIN);
         dev.talos.client.pathing.sim.SnapshotView snapshot =
-                dev.talos.client.pathing.sim.SnapshotView.capture(client.world, snapMin, snapMax);
+                dev.talos.client.pathing.sim.SnapshotView.capture(client.level, snapMin, snapMax);
         // Mining edges are billed at the REAL break time for the best hotbar tool; block
         // lookups go to the snapshot so the planner thread never touches the live world.
         java.util.function.ToIntFunction<BlockPos> breakTicks = pos ->
@@ -295,8 +295,8 @@ public final class TalosPathingEngine implements PathingEngine {
         PlanningTask task = new PlanningTask(run, search, subGoalIndex);
         run.planner = task;
         if (run.follower == null || !run.follower.isActive()) {
-            if (client.player != null) client.player.sendMessage(
-                    net.minecraft.text.Text.literal("§bTalos §7» §fplanning"), true);
+            if (client.player != null) client.player.sendOverlayMessage(
+                    net.minecraft.network.chat.Component.literal("§bTalos §7» §fplanning"));
         }
         task.start();
     }
@@ -308,7 +308,7 @@ public final class TalosPathingEngine implements PathingEngine {
         // its stale-origin route here would spawn a second follower next to the fresh one.
         if (planningTask.abandoned) return;
         if (run.cancelled || run.future.isDone()) return;
-        if (run.client.player == null || run.client.world == null) {
+        if (run.client.player == null || run.client.level == null) {
             run.future.complete(new PathResult(false, "World unloaded while re-pathing"));
             return;
         }
@@ -324,9 +324,9 @@ public final class TalosPathingEngine implements PathingEngine {
         if (!route.reachedGoal() && !cause.startsWith("cut early")
                 && !cause.startsWith("stitched: cut early") && !cause.equals(lastPartialDetail)) {
             lastPartialDetail = cause;
-            if (run.client.player != null) run.client.player.sendMessage(
-                    net.minecraft.text.Text.literal(
-                            "§6Talos §7» §fpartial plan: " + route.detail()), false);
+            if (run.client.player != null) run.client.player.sendSystemMessage(
+                    net.minecraft.network.chat.Component.literal(
+                            "§6Talos §7» §fpartial plan: " + route.detail()));
         }
         // CORRIDOR INVALIDATION: a funneled search that exhausted its frontier — or burned
         // its whole budget without even a useful partial — means the corridor lied about
@@ -348,14 +348,14 @@ public final class TalosPathingEngine implements PathingEngine {
             return;
         }
 
-        double distance = squaredDistance(run.client.player.getBlockPos(), run.snapshot.target());
+        double distance = squaredDistance(run.client.player.blockPosition(), run.snapshot.target());
         if (distance + 0.25 < run.bestDistance) {
             run.bestDistance = distance;
             run.stalledAttempts = 0;
         } else if (run.attempts > 1) {
             run.stalledAttempts++;
         }
-        List<Vec3d> waypoints = route.waypoints().stream()
+        List<Vec3> waypoints = route.waypoints().stream()
                 .map(PlannedRoute.Waypoint::position).toList();
         // Simulation routes are never sampled: steering and the blue renderer receive every
         // rollout endpoint, including long 100+ move cave routes.
@@ -442,9 +442,9 @@ public final class TalosPathingEngine implements PathingEngine {
             return resumeDeepPlan;
         }
         if (run.coarseFailed || run.corridor != null) return false;
-        MinecraftClient client = run.client;
-        if (client.player == null || client.world == null) return false;
-        BlockPos from = client.player.getBlockPos();
+        Minecraft client = run.client;
+        if (client.player == null || client.level == null) return false;
+        BlockPos from = client.player.blockPosition();
         BlockPos target = run.snapshot.target();
         if (squaredDistance(from, target) < COARSE_TRIGGER_DISTANCE_SQ) return false;
         // The exact goal cell may be unoccupiable (interaction targets, mid-air pillars);
@@ -453,13 +453,13 @@ public final class TalosPathingEngine implements PathingEngine {
         // The loaded predicate keeps the corridor off unloaded chunks EXPLICITLY (they read
         // as air, which walkability already rejects, but air over a real plain and air over
         // a void look identical — refusing unloaded cells outright is the honest contract).
-        CoarsePathfinder.Search search = CoarsePathfinder.begin(client.world, from, target,
-                pos -> realTest.test(pos) || pos.getSquaredDistance(target) <= SUB_GOAL_RADIUS_SQ,
-                run.corridorBlacklist, COARSE_TIME_BUDGET_NANOS, client.world::isChunkLoaded);
+        CoarsePathfinder.Search search = CoarsePathfinder.begin(client.level, from, target,
+                pos -> realTest.test(pos) || pos.distSqr(target) <= SUB_GOAL_RADIUS_SQ,
+                run.corridorBlacklist, COARSE_TIME_BUDGET_NANOS, client.level::hasChunkAt);
         CoarseTask task = new CoarseTask(run, search, resumeDeepPlan);
         run.coarsePlanner = task;
-        if (resumeDeepPlan && client.player != null) client.player.sendMessage(
-                net.minecraft.text.Text.literal("§bTalos §7» §fplanning"), true);
+        if (resumeDeepPlan && client.player != null) client.player.sendSystemMessage(
+                net.minecraft.network.chat.Component.literal("§bTalos §7» §fplanning"));
         try {
             TalosClient.taskScheduler().addTask("native-path-coarse", task);
         } catch (RuntimeException exception) {
@@ -502,7 +502,7 @@ public final class TalosPathingEngine implements PathingEngine {
         int best = 0;
         double bestDistance = Double.POSITIVE_INFINITY;
         for (int i = 0; i < corridor.size(); i++) {
-            double distance = corridor.get(i).getSquaredDistance(from);
+            double distance = corridor.get(i).distSqr(from);
             if (distance < bestDistance) {
                 bestDistance = distance;
                 best = i;
@@ -524,9 +524,9 @@ public final class TalosPathingEngine implements PathingEngine {
 
     @Override
     public void cancel() {
-        MinecraftClient client = MinecraftClient.getInstance();
+        Minecraft client = Minecraft.getInstance();
         Runnable cancel = () -> releaseActiveRun("Pathing cancelled");
-        if (client.isOnThread()) cancel.run(); else client.execute(cancel);
+        if (client.isSameThread()) cancel.run(); else client.execute(cancel);
     }
 
     /** Client-thread only: stop the active run/tasks and release their movement keys. */
@@ -559,8 +559,8 @@ public final class TalosPathingEngine implements PathingEngine {
     public boolean retarget(Goal goal) {
         NavigationRun run = activeRun;
         if (run == null || run.cancelled || run.future.isDone()) return false;
-        MinecraftClient client = run.client;
-        if (client.player == null || client.world == null) return false;
+        Minecraft client = run.client;
+        if (client.player == null || client.level == null) return false;
         GoalSnapshot fresh = snapshotGoal(goal, client);
         BlockPos previous = run.snapshot.target();
         if (fresh.target().equals(previous)) return true; // same cell: nothing to do
@@ -571,7 +571,7 @@ public final class TalosPathingEngine implements PathingEngine {
         // cells it actively funnels the wrong way. Drop it and let the next launch
         // re-sketch (or skip the coarse pass entirely at follow ranges).
         if (run.corridor != null
-                && fresh.target().getSquaredDistance(previous) > SUB_GOAL_RADIUS_SQ) {
+                && fresh.target().distSqr(previous) > SUB_GOAL_RADIUS_SQ) {
             run.corridor = null;
             run.coarseFailed = false;
             clearCorridorMarkers();
@@ -585,7 +585,7 @@ public final class TalosPathingEngine implements PathingEngine {
         nodeCount = count;
     }
 
-    @Override public List<Vec3d> getCurrentNodes() { return currentNodes; }
+    @Override public List<Vec3> getCurrentNodes() { return currentNodes; }
 
     public static List<BlockPos> createNodes(List<BlockPos> path, int requestedCount) {
         if (path.size() <= 2) return List.copyOf(path);
@@ -609,10 +609,10 @@ public final class TalosPathingEngine implements PathingEngine {
         return path.stream().filter(selected::contains).toList();
     }
 
-    private static void renderNodes(List<Vec3d> nodes) {
+    private static void renderNodes(List<Vec3> nodes) {
         final int waypointColor = 0x66CCFF; // Cyan; live SimFollowTask predictions are orange.
         for (int i = 0; i < nodes.size(); i++) {
-            Vec3d node = nodes.get(i);
+            Vec3 node = nodes.get(i);
             RenderQueue.add("talos-path-node:" + i,
                     MotionState.box(MotionState.Pose.STAND, node), waypointColor, 20 * 30);
         }
@@ -631,7 +631,7 @@ public final class TalosPathingEngine implements PathingEngine {
             BlockPos cell = corridor.get(i);
             RenderQueue.add("talos-corridor:" + drawn++,
                     MotionState.box(MotionState.Pose.STAND,
-                            new Vec3d(cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5)),
+                            new Vec3(cell.getX() + 0.5, cell.getY(), cell.getZ() + 0.5)),
                     corridorColor, 20 * 30);
         }
         for (int i = drawn; i < lastRenderedCorridorMarkers; i++) {
@@ -658,7 +658,7 @@ public final class TalosPathingEngine implements PathingEngine {
                 "stitched: " + extension.detail());
     }
 
-    private static GoalSnapshot snapshotGoal(Goal goal, MinecraftClient client) {
+    private static GoalSnapshot snapshotGoal(Goal goal, Minecraft client) {
         return switch (goal) {
             case GoalBlock block -> {
                 BlockPos target = new BlockPos(block.x(), block.y(), block.z());
@@ -668,12 +668,12 @@ public final class TalosPathingEngine implements PathingEngine {
                 // Floorless AIR cells stay exact: they are pillar/build destinations
                 // (goto ~ ~10 ~ must nerdpole straight up, not bridge to "nearby").
                 if (isOccupiable(client, target)) yield new GoalSnapshot(target::equals, target);
-                yield new GoalSnapshot(pos -> pos.getSquaredDistance(target) <= 4.0, target);
+                yield new GoalSnapshot(pos -> pos.distSqr(target) <= 4.0, target);
             }
             case GoalNear near -> {
                 BlockPos target = new BlockPos(near.x(), near.y(), near.z());
                 long radiusSquared = (long) near.radius() * near.radius();
-                yield new GoalSnapshot(pos -> pos.getSquaredDistance(target) <= radiusSquared, target);
+                yield new GoalSnapshot(pos -> pos.distSqr(target) <= radiusSquared, target);
             }
             case GoalXZ xz -> {
                 int targetY = client.player == null ? 0 : client.player.getBlockY();
@@ -681,21 +681,21 @@ public final class TalosPathingEngine implements PathingEngine {
                 yield new GoalSnapshot(pos -> pos.getX() == xz.x() && pos.getZ() == xz.z(), target);
             }
             case GoalEntity entityGoal -> {
-                Entity entity = client.world == null ? null : client.world.getEntity(entityGoal.entityId());
+                Entity entity = client.level == null ? null : client.level.getEntity(entityGoal.entityId());
                 if (entity == null) throw new IllegalArgumentException(
                         "Entity is not loaded: " + entityGoal.entityId());
-                BlockPos target = entity.getBlockPos().toImmutable();
-                yield new GoalSnapshot(pos -> pos.getSquaredDistance(target) <= 1, target);
+                BlockPos target = entity.blockPosition().immutable();
+                yield new GoalSnapshot(pos -> pos.distSqr(target) <= 1, target);
             }
         };
     }
 
     /** Feet and head cells passable — the player could occupy this cell (support or not). */
-    private static boolean isOccupiable(MinecraftClient client, BlockPos pos) {
-        var world = client.world;
+    private static boolean isOccupiable(Minecraft client, BlockPos pos) {
+        var world = client.level;
         if (world == null) return true;
         return world.getBlockState(pos).getCollisionShape(world, pos).isEmpty()
-                && world.getBlockState(pos.up()).getCollisionShape(world, pos.up()).isEmpty();
+                && world.getBlockState(pos.above()).getCollisionShape(world, pos.above()).isEmpty();
     }
 
     private record GoalSnapshot(Predicate<BlockPos> test, BlockPos target) { }
@@ -800,7 +800,7 @@ public final class TalosPathingEngine implements PathingEngine {
     }
 
     private static final class NavigationRun {
-        final MinecraftClient client;
+        final Minecraft client;
         /** Mutable: retarget() swaps in a fresh snapshot while the run keeps moving. */
         volatile GoalSnapshot snapshot;
         final PathingOptions options;
@@ -824,7 +824,7 @@ public final class TalosPathingEngine implements PathingEngine {
         PlanningTask planner;
         CoarseTask coarsePlanner;
 
-        NavigationRun(MinecraftClient client, GoalSnapshot snapshot, PathingOptions options,
+        NavigationRun(Minecraft client, GoalSnapshot snapshot, PathingOptions options,
                       CompletableFuture<PathResult> future) {
             this.client = client;
             this.snapshot = snapshot;

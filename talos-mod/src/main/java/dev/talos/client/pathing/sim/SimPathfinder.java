@@ -8,11 +8,10 @@ import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
-
-import net.minecraft.block.BlockState;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.CollisionView;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.CollisionGetter;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Bounded A* over controls rather than blocks. Every ordinary edge is accepted only after
@@ -59,7 +58,7 @@ public final class SimPathfinder {
      * Finds a route toward {@code goal}. The predicate decides success; {@code goal} remains the
      * heuristic anchor, allowing callers to accept a region while guiding toward its center.
      */
-    public static PlannedRoute find(CollisionView world, MotionState start, MovementProfile profile,
+    public static PlannedRoute find(CollisionGetter world, MotionState start, MovementProfile profile,
             BlockPos goal, Predicate<BlockPos> isGoal, Options opts) {
         Search search = begin(world, start, profile, goal, isGoal, opts);
         while (!search.isFinished()) search.advance(opts.timeBudgetNanos(), () -> true);
@@ -67,13 +66,13 @@ public final class SimPathfinder {
     }
 
     /** Creates resumable deterministic A*. Call {@link Search#advance} from successive ticks. */
-    public static Search begin(CollisionView world, MotionState start, MovementProfile profile,
+    public static Search begin(CollisionGetter world, MotionState start, MovementProfile profile,
             BlockPos goal, Predicate<BlockPos> isGoal, Options opts) {
         return new Search(world, start, profile, goal, isGoal, opts);
     }
 
     public static final class Search {
-        private final CollisionView world;
+        private final CollisionGetter world;
         private final MovementProfile profile;
         private final BlockPos goal;
         private final Predicate<BlockPos> isGoal;
@@ -89,7 +88,7 @@ public final class SimPathfinder {
         private int expanded;
         private String reason;
 
-        private Search(CollisionView world, MotionState start, MovementProfile profile, BlockPos goal,
+        private Search(CollisionGetter world, MotionState start, MovementProfile profile, BlockPos goal,
                 Predicate<BlockPos> isGoal, Options opts) {
             if (world == null || start == null || profile == null || goal == null
                     || isGoal == null || opts == null) {
@@ -180,7 +179,7 @@ public final class SimPathfinder {
         }
     }
 
-    private static List<Edge> edges(CollisionView world, Node node, MovementProfile profile,
+    private static List<Edge> edges(CollisionGetter world, Node node, MovementProfile profile,
             Options opts) {
         List<Edge> result = new ArrayList<>(48);
         for (int direction = 0; direction < DIRECTIONS.length; direction++) {
@@ -227,7 +226,7 @@ public final class SimPathfinder {
             // swimming/crawling state is allowed to continue across a shallow boundary.
             boolean continuingCompactPose = node.state().pose() == MotionState.Pose.SWIM
                     || node.state().pose() == MotionState.Pose.CRAWL;
-            if (continuingCompactPose || deepWater(world, node.cell().add(dx, 0, dz))) {
+            if (continuingCompactPose || deepWater(world, node.cell().offset(dx, 0, dz))) {
                 add(result, rollout(world, node.withState(fluidStart), profile, opts,
                         Primitive.SWIM, direction,
                         new Input(1.0F, 0.0F, true, false, false, yaw), false, true));
@@ -260,7 +259,7 @@ public final class SimPathfinder {
     }
 
     /** Roll until a new stable cell is reached, an arc lands, or swimming enters a new cell. */
-    private static Edge rollout(CollisionView world, Node node, MovementProfile profile, Options opts,
+    private static Edge rollout(CollisionGetter world, Node node, MovementProfile profile, Options opts,
             Primitive primitive, int direction, Input input, boolean arc, boolean swimming) {
         MotionState state = node.state();
         BlockPos origin = cell(state.position());
@@ -304,10 +303,10 @@ public final class SimPathfinder {
     }
 
     /** A cell 2–4 ahead in this direction with neither floor nor body support = a lip. */
-    private static boolean gapAhead(CollisionView world, BlockPos cell, int dx, int dz) {
+    private static boolean gapAhead(CollisionGetter world, BlockPos cell, int dx, int dz) {
         for (int k = 2; k <= 4; k++) {
-            BlockPos ahead = cell.add(dx * k, 0, dz * k);
-            if (empty(world, ahead) && empty(world, ahead.down())) return true;
+            BlockPos ahead = cell.offset(dx * k, 0, dz * k);
+            if (empty(world, ahead) && empty(world, ahead.below())) return true;
         }
         return false;
     }
@@ -320,7 +319,7 @@ public final class SimPathfinder {
      * approach tick costs a peek step, but the edge is only attempted where plain
      * sprinting already failed (a lip), so the extra simulation stays rare.
      */
-    private static Edge runUpArc(CollisionView world, Node node, MovementProfile profile,
+    private static Edge runUpArc(CollisionGetter world, Node node, MovementProfile profile,
             Options opts, int direction, float yaw) {
         MotionState state = node.state();
         if (!state.onGround()) return null;
@@ -360,9 +359,9 @@ public final class SimPathfinder {
     }
 
     /** A full-block rise is an actual held-jump rollout, never a topology teleport. */
-    private static Edge stepUp(CollisionView world, Node node, MovementProfile profile, Options opts,
+    private static Edge stepUp(CollisionGetter world, Node node, MovementProfile profile, Options opts,
             int dx, int dz, int direction, float yaw) {
-        BlockPos target = node.cell().add(dx, 1, dz);
+        BlockPos target = node.cell().offset(dx, 1, dz);
         if (!standable(world, target, MotionState.Pose.STAND)) return null;
         MotionState state = node.state();
         int bumps = 0;
@@ -382,9 +381,9 @@ public final class SimPathfinder {
         return null;
     }
 
-    private static Edge drop(CollisionView world, Node node, MovementProfile profile, Options opts,
+    private static Edge drop(CollisionGetter world, Node node, MovementProfile profile, Options opts,
             int dx, int dz, int direction, float yaw) {
-        BlockPos adjacent = node.cell().add(dx, 0, dz);
+        BlockPos adjacent = node.cell().offset(dx, 0, dz);
         if (standable(world, adjacent, MotionState.Pose.STAND)) return null;
         Edge edge = rollout(world, node, profile, opts, Primitive.DROP, direction,
                 new Input(1.0F, 0.0F, false, false, false, yaw), false, false);
@@ -397,16 +396,16 @@ public final class SimPathfinder {
      * cell, so successive MINE edges chain a tunnel through walls of any thickness. Each
      * blocked slot of the 1x2 doorway pays a full edit penalty.
      */
-    private static Edge mine(CollisionView world, Node node, int dx, int dz, int direction,
+    private static Edge mine(CollisionGetter world, Node node, int dx, int dz, int direction,
             Options opts) {
-        BlockPos wall = node.cell().add(dx, 0, dz);
-        BlockPos wallHead = wall.up();
+        BlockPos wall = node.cell().offset(dx, 0, dz);
+        BlockPos wallHead = wall.above();
         boolean feetBlocked = !empty(world, wall);
         boolean headBlocked = !empty(world, wallHead);
         if (!feetBlocked && !headBlocked) return null; // plain movement already handles it
         if (feetBlocked && !mineable(world, wall)) return null;
         if (headBlocked && !mineable(world, wallHead)) return null;
-        if (empty(world, wall.down())) return null;    // the dug doorway needs a floor
+        if (empty(world, wall.below())) return null;    // the dug doorway needs a floor
         if (PlayerMotion.isLava(world.getFluidState(wall))
                 || PlayerMotion.isLava(world.getFluidState(wallHead))) return null;
         int blocks = (feetBlocked ? 1 : 0) + (headBlocked ? 1 : 0);
@@ -415,21 +414,21 @@ public final class SimPathfinder {
         // weighs mining against detours with the cost the player will actually pay.
         int digTicks = clampTicks((feetBlocked ? opts.breakTicks().applyAsInt(wall) : 0)
                 + (headBlocked ? opts.breakTicks().applyAsInt(wallHead) : 0));
-        MotionState state = new MotionState(bottomCenter(wall), Vec3d.ZERO, true,
+        MotionState state = new MotionState(bottomCenter(wall), Vec3.ZERO, true,
                 MotionState.Pose.STAND);
         return new Edge(state, Primitive.MINE, digTicks,
                 digTicks + (double) EDIT_PENALTY * blocks, direction);
     }
 
     /** Dig straight down one cell; chains for a vertical shaft. Never digs into a void drop. */
-    private static Edge mineDown(CollisionView world, Node node, Options opts) {
+    private static Edge mineDown(CollisionGetter world, Node node, Options opts) {
         if (!node.state().onGround()) return null;
-        BlockPos below = node.cell().down();
+        BlockPos below = node.cell().below();
         if (!mineable(world, below)) return null;
-        if (empty(world, below.down())) return null;   // land on something solid
-        if (PlayerMotion.isLava(world.getFluidState(below.down()))) return null;
+        if (empty(world, below.below())) return null;   // land on something solid
+        if (PlayerMotion.isLava(world.getFluidState(below.below()))) return null;
         int digTicks = clampTicks(opts.breakTicks().applyAsInt(below));
-        MotionState state = new MotionState(bottomCenter(below), Vec3d.ZERO, true,
+        MotionState state = new MotionState(bottomCenter(below), Vec3.ZERO, true,
                 MotionState.Pose.STAND);
         return new Edge(state, Primitive.MINE, digTicks, digTicks + EDIT_PENALTY,
                 node.heading());
@@ -441,40 +440,40 @@ public final class SimPathfinder {
     }
 
     /** Nerdpole: jump and place under your own feet. Requires head clearance two above. */
-    private static Edge placeUp(CollisionView world, Node node) {
+    private static Edge placeUp(CollisionGetter world, Node node) {
         if (!node.state().onGround()) return null;
-        if (!empty(world, node.cell().up(2))) return null;
+        if (!empty(world, node.cell().above(2))) return null;
         // The anchor face below may be real, or the block this chain just virtually placed —
         // planner edges never mutate the world, so demanding a real block capped every
         // planned pillar at exactly one block tall ("nodes ended" on goto ~ ~10 ~).
-        if (empty(world, node.cell().down()) && node.via() != Primitive.PLACE) return null;
-        MotionState state = new MotionState(bottomCenter(node.cell().up()), Vec3d.ZERO, true,
+        if (empty(world, node.cell().below()) && node.via() != Primitive.PLACE) return null;
+        MotionState state = new MotionState(bottomCenter(node.cell().above()), Vec3.ZERO, true,
                 MotionState.Pose.STAND);
         // Nerdpoling is reliable and fast in practice; billed near its real tick cost (no
         // full edit surcharge) so pillaring straight up beats a long detour over hills.
         return new Edge(state, Primitive.PLACE, 12, 14.0, node.heading());
     }
 
-    private static boolean standable(CollisionView world, BlockPos feet, MotionState.Pose pose) {
-        Vec3d position = bottomCenter(feet);
+    private static boolean standable(CollisionGetter world, BlockPos feet, MotionState.Pose pose) {
+        Vec3 position = bottomCenter(feet);
         return PlayerMotion.hitboxFits(world, pose, position)
-                && !world.getBlockState(feet.down()).getCollisionShape(world, feet.down()).isEmpty()
+                && !world.getBlockState(feet.below()).getCollisionShape(world, feet.below()).isEmpty()
                 && !PlayerMotion.isLava(world.getFluidState(feet));
     }
 
-    private static boolean mineable(CollisionView world, BlockPos pos) {
+    private static boolean mineable(CollisionGetter world, BlockPos pos) {
         BlockState state = world.getBlockState(pos);
         return !state.isAir() && !state.getCollisionShape(world, pos).isEmpty()
-                && state.getHardness(world, pos) >= 0.0F;
+                && state.getDestroySpeed(world, pos) >= 0.0F;
     }
 
-    private static boolean empty(CollisionView world, BlockPos pos) {
+    private static boolean empty(CollisionGetter world, BlockPos pos) {
         return world.getBlockState(pos).getCollisionShape(world, pos).isEmpty();
     }
 
-    private static boolean deepWater(CollisionView world, BlockPos feet) {
+    private static boolean deepWater(CollisionGetter world, BlockPos feet) {
         return PlayerMotion.isWater(world.getFluidState(feet))
-                && PlayerMotion.isWater(world.getFluidState(feet.up()));
+                && PlayerMotion.isWater(world.getFluidState(feet.above()));
     }
 
     private static MotionState withPose(MotionState state, MotionState.Pose pose) {
@@ -534,17 +533,17 @@ public final class SimPathfinder {
      * state-space growth bounded while preserving exactly the distinction the arc rollouts
      * care about.
      */
-    private static int speedBucket(Vec3d velocity) {
-        double speed = velocity.horizontalLength();
+    private static int speedBucket(Vec3 velocity) {
+        double speed = velocity.horizontalDistance();
         return speed < 0.15 ? 0 : speed < 0.24 ? 1 : 2;
     }
 
-    private static BlockPos cell(Vec3d position) {
-        return BlockPos.ofFloored(position.x, position.y + 1.0E-4, position.z);
+    private static BlockPos cell(Vec3 position) {
+        return BlockPos.containing(position.x, position.y + 1.0E-4, position.z);
     }
 
-    private static Vec3d bottomCenter(BlockPos pos) {
-        return new Vec3d(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
+    private static Vec3 bottomCenter(BlockPos pos) {
+        return new Vec3(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
     }
 
     private static float yaw(int dx, int dz) {
@@ -557,8 +556,8 @@ public final class SimPathfinder {
         return Math.min(difference, 8 - difference);
     }
 
-    private static int heading(Vec3d velocity, int fallback) {
-        if (velocity.horizontalLengthSquared() < 1.0E-4) return fallback;
+    private static int heading(Vec3 velocity, int fallback) {
+        if (velocity.horizontalDistanceSqr() < 1.0E-4) return fallback;
         double angle = Math.atan2(velocity.x, velocity.z);
         return Math.floorMod((int) Math.round(angle / (Math.PI / 4.0)), 8);
     }

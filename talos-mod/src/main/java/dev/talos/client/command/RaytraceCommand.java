@@ -4,15 +4,15 @@ import com.mojang.brigadier.context.CommandContext;
 import dev.talos.client.command.LocalCoordinateArgumentType.Axis;
 import java.util.Locale;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * {@code /talos raytrace} — look-relative coordinate and raycast queries.
@@ -40,31 +40,31 @@ final class RaytraceCommand {
      * forms) reports the exact point to 3 decimals.
      */
     static int get(CommandContext<FabricClientCommandSource> context, boolean simple) {
-        ClientPlayerEntity player = context.getSource().getPlayer();
+        LocalPlayer player = context.getSource().getPlayer();
         Axis ax = context.getArgument("x", Axis.class);
         Axis ay = context.getArgument("y", Axis.class);
         Axis az = context.getArgument("z", Axis.class);
 
-        Vec3d point;
+        Vec3 point;
         try {
             point = resolve(player, ax, ay, az);
         } catch (IllegalArgumentException mixed) {
-            context.getSource().sendError(Text.literal(mixed.getMessage()));
+            context.getSource().sendError(Component.literal(mixed.getMessage()));
             return 0;
         }
 
-        BlockPos cell = BlockPos.ofFloored(point);
+        BlockPos cell = BlockPos.containing(point);
         String block = "unloaded";
-        ClientWorld world = context.getSource().getClient().world;
+        ClientLevel world = context.getSource().getClient().level;
         if (world != null) {
-            block = Registries.BLOCK.getId(world.getBlockState(cell).getBlock()).toString();
+            block = BuiltInRegistries.BLOCK.getKey(world.getBlockState(cell).getBlock()).toString();
         }
         if (simple) {
-            context.getSource().sendFeedback(Text.literal(String.format(Locale.ROOT,
+            context.getSource().sendFeedback(Component.literal(String.format(Locale.ROOT,
                     "§bblock§f = %d %d %d §7(%s)",
                     cell.getX(), cell.getY(), cell.getZ(), block)));
         } else {
-            context.getSource().sendFeedback(Text.literal(String.format(Locale.ROOT,
+            context.getSource().sendFeedback(Component.literal(String.format(Locale.ROOT,
                     "§bpoint§f = %.3f %.3f %.3f §7(block: %s)",
                     point.x, point.y, point.z, block)));
         }
@@ -78,7 +78,7 @@ final class RaytraceCommand {
      * are read as local offsets too — {@code ^ ^ 5} IS {@code ^ ^ ^5}, five blocks along the
      * gaze. Only mixing {@code ^} with {@code ~} stays illegal (two different origins).
      */
-    static Vec3d resolve(ClientPlayerEntity player, Axis ax, Axis ay, Axis az) {
+    static Vec3 resolve(LocalPlayer player, Axis ax, Axis ay, Axis az) {
         boolean anyLocal = ax.type() == LocalCoordinateArgumentType.Type.LOCAL
                 || ay.type() == LocalCoordinateArgumentType.Type.LOCAL
                 || az.type() == LocalCoordinateArgumentType.Type.LOCAL;
@@ -90,11 +90,11 @@ final class RaytraceCommand {
                         "Cannot mix ^ (local) with ~ (relative) axes — pick one frame");
             }
             // Caret order is ^left ^up ^forward; origin is the eyes.
-            return RaycastMath.local(player.getEyePos(), player.getYaw(), player.getPitch(),
+            return RaycastMath.local(player.getEyePosition(), player.getYRot(), player.getXRot(),
                     ax.value(), ay.value(), az.value());
         }
-        Vec3d eye = player.getEyePos();
-        return new Vec3d(axis(ax, eye.x), axis(ay, eye.y), axis(az, eye.z));
+        Vec3 eye = player.getEyePosition();
+        return new Vec3(axis(ax, eye.x), axis(ay, eye.y), axis(az, eye.z));
     }
 
     private static double axis(Axis a, double base) {
@@ -104,20 +104,20 @@ final class RaytraceCommand {
     // ---- where -----------------------------------------------------------------------------
 
     static int where(CommandContext<FabricClientCommandSource> context, double maxDist) {
-        ClientPlayerEntity player = context.getSource().getPlayer();
-        ClientWorld world = context.getSource().getClient().world;
+        LocalPlayer player = context.getSource().getPlayer();
+        ClientLevel world = context.getSource().getClient().level;
         if (world == null) {
-            context.getSource().sendError(Text.literal("No world is loaded"));
+            context.getSource().sendError(Component.literal("No world is loaded"));
             return 0;
         }
         RaycastMath.Hit hit = RaycastMath.cast(player, world, maxDist);
         if (hit.isMiss()) {
-            context.getSource().sendFeedback(Text.literal(String.format(Locale.ROOT,
+            context.getSource().sendFeedback(Component.literal(String.format(Locale.ROOT,
                     "§7Nothing within %.1fm along the look", maxDist)));
             return 0;
         }
         String kind = hit.type() == RaycastMath.HitType.ENTITY ? "entity" : "block";
-        context.getSource().sendFeedback(Text.literal(String.format(Locale.ROOT,
+        context.getSource().sendFeedback(Component.literal(String.format(Locale.ROOT,
                 "§bray §f→ %s §b%s§f at %.3f %.3f %.3f §7(%.2fm)",
                 kind, hit.id(), hit.point().x, hit.point().y, hit.point().z, hit.distance())));
         return 1;
@@ -127,20 +127,20 @@ final class RaytraceCommand {
 
     static int ifBlock(CommandContext<FabricClientCommandSource> context, String blockId,
                        double maxDist) {
-        ClientPlayerEntity player = context.getSource().getPlayer();
-        ClientWorld world = context.getSource().getClient().world;
+        LocalPlayer player = context.getSource().getPlayer();
+        ClientLevel world = context.getSource().getClient().level;
         if (world == null) {
-            context.getSource().sendError(Text.literal("No world is loaded"));
+            context.getSource().sendError(Component.literal("No world is loaded"));
             return 0;
         }
         Identifier id = Identifier.tryParse(blockId.contains(":") ? blockId : "minecraft:" + blockId);
-        if (id == null || !Registries.BLOCK.containsId(id)) {
-            context.getSource().sendError(Text.literal("Unknown block: " + blockId));
+        if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) {
+            context.getSource().sendError(Component.literal("Unknown block: " + blockId));
             return 0;
         }
         RaycastMath.Hit hit = RaycastMath.cast(player, world, maxDist);
         boolean match = hit.type() == RaycastMath.HitType.BLOCK && id.toString().equals(hit.id());
-        context.getSource().sendFeedback(Text.literal(match
+        context.getSource().sendFeedback(Component.literal(match
                 ? "§apass§f: looking at " + id
                 : "§cfail§f: first hit is " + describe(hit)));
         return match ? 1 : 0;
@@ -148,22 +148,22 @@ final class RaytraceCommand {
 
     static int ifEntity(CommandContext<FabricClientCommandSource> context, String selectorToken,
                         double maxDist) {
-        ClientPlayerEntity player = context.getSource().getPlayer();
-        ClientWorld world = context.getSource().getClient().world;
+        LocalPlayer player = context.getSource().getPlayer();
+        ClientLevel world = context.getSource().getClient().level;
         if (world == null) {
-            context.getSource().sendError(Text.literal("No world is loaded"));
+            context.getSource().sendError(Component.literal("No world is loaded"));
             return 0;
         }
         String[] error = new String[1];
         EntitySelector selector = EntitySelector.parse(selectorToken, error);
         if (selector == null) {
-            context.getSource().sendError(Text.literal(error[0]));
+            context.getSource().sendError(Component.literal(error[0]));
             return 0;
         }
         RaycastMath.Hit hit = RaycastMath.cast(player, world, maxDist);
         boolean match = hit.type() == RaycastMath.HitType.ENTITY
                 && selectorMatches(selector, hit.entity(), player);
-        context.getSource().sendFeedback(Text.literal(match
+        context.getSource().sendFeedback(Component.literal(match
                 ? "§apass§f: looking at " + hit.id()
                 : "§cfail§f: first hit is " + describe(hit)));
         return match ? 1 : 0;
@@ -171,10 +171,10 @@ final class RaytraceCommand {
 
     /** Whether one already-identified entity satisfies a selector's kind and filters. */
     private static boolean selectorMatches(EntitySelector selector, Entity entity,
-                                           ClientPlayerEntity player) {
+                                           LocalPlayer player) {
         return switch (selector.kind()) {
             case SELF -> entity == player;
-            case PLAYERS_ALL, PLAYER_NEAREST -> entity instanceof PlayerEntity;
+            case PLAYERS_ALL, PLAYER_NEAREST -> entity instanceof Player;
             case ENTITIES -> selector.matchesFilters(entity);
         };
     }

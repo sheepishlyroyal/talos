@@ -2,7 +2,7 @@ package dev.talos.client.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.phys.Vec3;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -11,10 +11,10 @@ import org.junit.jupiter.api.Test;
  * faces -X (west); pitch is positive downward.
  */
 class RaycastMathTest {
-    private static final Vec3d ORIGIN = new Vec3d(0, 0, 0);
+    private static final Vec3 ORIGIN = new Vec3(0, 0, 0);
     private static final double EPS = 1.0E-6;
 
-    private static void assertVec(Vec3d actual, double x, double y, double z) {
+    private static void assertVec(Vec3 actual, double x, double y, double z) {
         assertEquals(x, actual.x, EPS, "x");
         assertEquals(y, actual.y, EPS, "y");
         assertEquals(z, actual.z, EPS, "z");
@@ -57,7 +57,7 @@ class RaycastMathTest {
 
     @Test
     void originOffsetIsAdded() {
-        Vec3d eye = new Vec3d(10, 64, -20);
+        Vec3 eye = new Vec3(10, 64, -20);
         assertVec(RaycastMath.local(eye, 0f, 0f, 0, 0, 5), 10, 64, -15);
     }
 }

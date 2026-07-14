@@ -7,18 +7,18 @@ import dev.talos.client.TalosClient;
 import dev.talos.client.task.TalosTask;
 import java.util.Locale;
 import java.util.Set;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.option.GameOptions;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.Vec3d;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.Options;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Direct input automation: {@code /talos walk} and {@code /talos key}. Everything presses the
- * player's logical {@link KeyBinding}s (never raw key codes), so rebound controls keep working —
+ * player's logical {@link KeyMapping}s (never raw key codes), so rebound controls keep working —
  * the same contract the pathing followers already honor.
  */
 public final class InputCommand {
@@ -30,23 +30,23 @@ public final class InputCommand {
     private InputCommand() {}
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> walkNode() {
-        LiteralArgumentBuilder<FabricClientCommandSource> walk = ClientCommandManager.literal("walk");
+        LiteralArgumentBuilder<FabricClientCommandSource> walk = ClientCommands.literal("walk");
         for (String direction : new String[] {"w", "a", "s", "d"}) {
-            walk.then(ClientCommandManager.literal(direction)
-                    .then(ClientCommandManager.literal("tap")
+            walk.then(ClientCommands.literal(direction)
+                    .then(ClientCommands.literal("tap")
                             .executes(context -> startKeyTask(context.getSource(), direction, 1)))
-                    .then(ClientCommandManager.literal("hold")
-                            .then(ClientCommandManager.argument("seconds", DoubleArgumentType.doubleArg(0.05, 600.0))
+                    .then(ClientCommands.literal("hold")
+                            .then(ClientCommands.argument("seconds", DoubleArgumentType.doubleArg(0.05, 600.0))
                                     .executes(context -> startKeyTask(context.getSource(), direction,
                                             (int) Math.ceil(DoubleArgumentType.getDouble(context, "seconds") * 20.0)))))
-                    .then(ClientCommandManager.literal("blocks")
-                            .then(ClientCommandManager.argument("count", IntegerArgumentType.integer(1, 1000))
+                    .then(ClientCommands.literal("blocks")
+                            .then(ClientCommands.argument("count", IntegerArgumentType.integer(1, 1000))
                                     .executes(context -> startWalkBlocks(context.getSource(), direction,
                                             IntegerArgumentType.getInteger(context, "count"), WalkTask.Align.CENTER))
-                                    .then(ClientCommandManager.literal("center")
+                                    .then(ClientCommands.literal("center")
                                             .executes(context -> startWalkBlocks(context.getSource(), direction,
                                                     IntegerArgumentType.getInteger(context, "count"), WalkTask.Align.CENTER)))
-                                    .then(ClientCommandManager.literal("touch")
+                                    .then(ClientCommands.literal("touch")
                                             .executes(context -> startWalkBlocks(context.getSource(), direction,
                                                     IntegerArgumentType.getInteger(context, "count"), WalkTask.Align.TOUCH))))));
         }
@@ -54,18 +54,18 @@ public final class InputCommand {
     }
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> keyNode() {
-        LiteralArgumentBuilder<FabricClientCommandSource> key = ClientCommandManager.literal("key");
-        key.then(ClientCommandManager.literal("list").executes(context -> {
-            context.getSource().sendFeedback(Text.literal(
+        LiteralArgumentBuilder<FabricClientCommandSource> key = ClientCommands.literal("key");
+        key.then(ClientCommands.literal("list").executes(context -> {
+            context.getSource().sendFeedback(Component.literal(
                     "Keys: " + String.join(", ", KEY_NAMES) + " (w/a/s/d aliases: forward/left/back/right)"));
             return 1;
         }));
         for (String name : KEY_NAMES) {
-            key.then(ClientCommandManager.literal(name)
-                    .then(ClientCommandManager.literal("tap")
+            key.then(ClientCommands.literal(name)
+                    .then(ClientCommands.literal("tap")
                             .executes(context -> startKeyTask(context.getSource(), name, 1)))
-                    .then(ClientCommandManager.literal("hold")
-                            .then(ClientCommandManager.argument("seconds", DoubleArgumentType.doubleArg(0.05, 600.0))
+                    .then(ClientCommands.literal("hold")
+                            .then(ClientCommands.argument("seconds", DoubleArgumentType.doubleArg(0.05, 600.0))
                                     .executes(context -> startKeyTask(context.getSource(), name,
                                             (int) Math.ceil(DoubleArgumentType.getDouble(context, "seconds") * 20.0))))));
         }
@@ -73,19 +73,19 @@ public final class InputCommand {
     }
 
     private static int startKeyTask(FabricClientCommandSource source, String name, int ticks) {
-        MinecraftClient client = source.getClient();
-        KeyBinding binding = resolve(client.options, name);
+        Minecraft client = source.getClient();
+        KeyMapping binding = resolve(client.options, name);
         if (binding == null) {
-            source.sendError(Text.literal("Unknown key: " + name));
+            source.sendError(Component.literal("Unknown key: " + name));
             return 0;
         }
         try {
             TalosClient.taskScheduler().addTask("talos-key-" + name, new KeyHoldTask(client, binding, name, ticks));
         } catch (RuntimeException exception) {
-            source.sendError(Text.literal(exception.getMessage()));
+            source.sendError(Component.literal(exception.getMessage()));
             return 0;
         }
-        source.sendFeedback(Text.literal(ticks <= 1
+        source.sendFeedback(Component.literal(ticks <= 1
                 ? "Tapped " + name
                 : "Holding " + name + " for " + String.format(Locale.ROOT, "%.2f", ticks / 20.0) + "s"));
         return 1;
@@ -93,62 +93,62 @@ public final class InputCommand {
 
     private static int startWalkBlocks(FabricClientCommandSource source, String direction, int blocks,
             WalkTask.Align align) {
-        MinecraftClient client = source.getClient();
+        Minecraft client = source.getClient();
         if (client.player == null) {
-            source.sendError(Text.literal("No player is loaded"));
+            source.sendError(Component.literal("No player is loaded"));
             return 0;
         }
-        KeyBinding binding = resolve(client.options, direction);
+        KeyMapping binding = resolve(client.options, direction);
         try {
             TalosClient.taskScheduler().addTask("talos-walk",
                     new WalkTask(client, binding, direction, blocks, align));
         } catch (RuntimeException exception) {
-            source.sendError(Text.literal(exception.getMessage()));
+            source.sendError(Component.literal(exception.getMessage()));
             return 0;
         }
-        source.sendFeedback(Text.literal("Walking " + direction.toUpperCase(Locale.ROOT) + " for "
+        source.sendFeedback(Component.literal("Walking " + direction.toUpperCase(Locale.ROOT) + " for "
                 + blocks + " block" + (blocks == 1 ? "" : "s") + " (" + align.name().toLowerCase(Locale.ROOT) + ")"));
         return 1;
     }
 
     /** Resolves a friendly name to the player's live binding; remaps are honored implicitly. */
-    static KeyBinding resolve(GameOptions options, String name) {
+    static KeyMapping resolve(Options options, String name) {
         return switch (name.toLowerCase(Locale.ROOT)) {
-            case "w", "forward" -> options.forwardKey;
-            case "s", "back" -> options.backKey;
-            case "a", "left" -> options.leftKey;
-            case "d", "right" -> options.rightKey;
-            case "jump", "space" -> options.jumpKey;
-            case "sneak", "shift" -> options.sneakKey;
-            case "sprint", "ctrl" -> options.sprintKey;
-            case "attack" -> options.attackKey;
-            case "use" -> options.useKey;
-            case "drop" -> options.dropKey;
-            case "swap", "offhand" -> options.swapHandsKey;
-            case "inventory" -> options.inventoryKey;
+            case "w", "forward" -> options.keyUp;
+            case "s", "back" -> options.keyDown;
+            case "a", "left" -> options.keyLeft;
+            case "d", "right" -> options.keyRight;
+            case "jump", "space" -> options.keyJump;
+            case "sneak", "shift" -> options.keyShift;
+            case "sprint", "ctrl" -> options.keySprint;
+            case "attack" -> options.keyAttack;
+            case "use" -> options.keyUse;
+            case "drop" -> options.keyDrop;
+            case "swap", "offhand" -> options.keySwapOffhand;
+            case "inventory" -> options.keyInventory;
             case "1", "2", "3", "4", "5", "6", "7", "8", "9" ->
-                    options.hotbarKeys[Integer.parseInt(name) - 1];
+                    options.keyHotbarSlots[Integer.parseInt(name) - 1];
             default -> null;
         };
     }
 
-    private static boolean movementKey(GameOptions options, KeyBinding binding) {
-        return binding == options.forwardKey || binding == options.backKey
-                || binding == options.leftKey || binding == options.rightKey
-                || binding == options.jumpKey || binding == options.sneakKey
-                || binding == options.sprintKey;
+    private static boolean movementKey(Options options, KeyMapping binding) {
+        return binding == options.keyUp || binding == options.keyDown
+                || binding == options.keyLeft || binding == options.keyRight
+                || binding == options.keyJump || binding == options.keyShift
+                || binding == options.keySprint;
     }
 
     /** Presses one binding for a fixed number of ticks. A 1-tick hold is a tap. */
     private static final class KeyHoldTask extends TalosTask {
-        private final MinecraftClient client;
-        private final KeyBinding binding;
+        private final Minecraft client;
+        private final KeyMapping binding;
         private final String name;
         private final int holdTicks;
         private int ticks;
         private boolean done;
 
-        KeyHoldTask(MinecraftClient client, KeyBinding binding, String name, int holdTicks) {
+        KeyHoldTask(Minecraft client, KeyMapping binding, String name, int holdTicks) {
             this.client = client;
             this.binding = binding;
             this.name = name;
@@ -158,20 +158,20 @@ public final class InputCommand {
         @Override public void initialize() {
             // Registering an actual press event (not just held state) makes single taps of
             // attack/use/drop/hotbar behave exactly like a physical key stroke.
-            KeyBinding.onKeyPressed(KeyBindingHelper.getBoundKeyOf(binding));
+            KeyMapping.click(KeyMappingHelper.getBoundKeyOf(binding));
         }
         @Override public boolean condition() { return !done && client.player != null; }
         @Override public void increment() { ticks++; }
         @Override public void body() {
             if (ticks >= holdTicks) {
-                binding.setPressed(false);
+                binding.setDown(false);
                 done = true;
                 return;
             }
-            binding.setPressed(true);
+            binding.setDown(true);
             scheduleDelay();
         }
-        @Override public void onCompleted() { binding.setPressed(false); }
+        @Override public void onCompleted() { binding.setDown(false); }
         @Override public Set<Object> getMutexKeys() {
             return movementKey(client.options, binding)
                     ? Set.of("talos-player-movement") : Set.of("talos-key-" + name);
@@ -190,13 +190,13 @@ public final class InputCommand {
         private static final int STALL_TICKS = 40;
         private static final int MAX_TICKS = 20 * 120;
 
-        private final MinecraftClient client;
-        private final KeyBinding binding;
+        private final Minecraft client;
+        private final KeyMapping binding;
         private final String directionName;
         private final int blocks;
         private final Align align;
-        private Vec3d start;
-        private Vec3d direction;
+        private Vec3 start;
+        private Vec3 direction;
         private double targetDistance;
         private double bestDisplacement;
         private int lastProgressTick;
@@ -204,7 +204,7 @@ public final class InputCommand {
         private boolean released;
         private boolean done;
 
-        WalkTask(MinecraftClient client, KeyBinding binding, String directionName, int blocks, Align align) {
+        WalkTask(Minecraft client, KeyMapping binding, String directionName, int blocks, Align align) {
             this.client = client;
             this.binding = binding;
             this.directionName = directionName;
@@ -214,25 +214,25 @@ public final class InputCommand {
 
         @Override public void initialize() {
             var player = client.player;
-            start = new Vec3d(player.getX(), player.getY(), player.getZ());
-            double radians = Math.toRadians(player.getYaw());
-            Vec3d forward = new Vec3d(-Math.sin(radians), 0.0, Math.cos(radians));
+            start = new Vec3(player.getX(), player.getY(), player.getZ());
+            double radians = Math.toRadians(player.getYRot());
+            Vec3 forward = new Vec3(-Math.sin(radians), 0.0, Math.cos(radians));
             direction = switch (directionName) {
-                case "s" -> forward.multiply(-1.0);
-                case "a" -> new Vec3d(forward.z, 0.0, -forward.x);
-                case "d" -> new Vec3d(-forward.z, 0.0, forward.x);
+                case "s" -> forward.scale(-1.0);
+                case "a" -> new Vec3(forward.z, 0.0, -forward.x);
+                case "d" -> new Vec3(-forward.z, 0.0, forward.x);
                 default -> forward;
             };
             if (align == Align.CENTER) {
                 // Destination is the center of the block column n blocks along the walk line.
-                Vec3d raw = start.add(direction.multiply(blocks));
-                Vec3d snapped = new Vec3d(Math.floor(raw.x) + 0.5, raw.y, Math.floor(raw.z) + 0.5);
+                Vec3 raw = start.add(direction.scale(blocks));
+                Vec3 snapped = new Vec3(Math.floor(raw.x) + 0.5, raw.y, Math.floor(raw.z) + 0.5);
                 targetDistance = project(snapped.subtract(start));
             } else {
                 // Stop when the hitbox touches the near face of the destination block.
-                Vec3d raw = start.add(direction.multiply(blocks));
-                Vec3d center = new Vec3d(Math.floor(raw.x) + 0.5, raw.y, Math.floor(raw.z) + 0.5);
-                Vec3d face = center.subtract(direction.multiply(0.5));
+                Vec3 raw = start.add(direction.scale(blocks));
+                Vec3 center = new Vec3(Math.floor(raw.x) + 0.5, raw.y, Math.floor(raw.z) + 0.5);
+                Vec3 face = center.subtract(direction.scale(0.5));
                 targetDistance = project(face.subtract(start)) - 0.3;
             }
             targetDistance = Math.max(0.0, targetDistance);
@@ -243,10 +243,10 @@ public final class InputCommand {
 
         @Override public void body() {
             var player = client.player;
-            if (player == null || client.world == null) { finish("world unloaded"); return; }
-            Vec3d position = new Vec3d(player.getX(), player.getY(), player.getZ());
+            if (player == null || client.level == null) { finish("world unloaded"); return; }
+            Vec3 position = new Vec3(player.getX(), player.getY(), player.getZ());
             double displacement = project(position.subtract(start));
-            double speed = project(player.getVelocity());
+            double speed = project(player.getDeltaMovement());
             double remaining = targetDistance - displacement;
 
             if (displacement > bestDisplacement + 0.01) {
@@ -263,22 +263,22 @@ public final class InputCommand {
             // Same stopping-distance envelope the route follower uses: v/(1-d) with d=.6*.91.
             double stoppingDistance = Math.max(0.0, speed) / (1.0 - GROUND_DRAG);
             released = remaining <= stoppingDistance + 0.02;
-            binding.setPressed(!released);
+            binding.setDown(!released);
             scheduleDelay();
         }
 
-        private double project(Vec3d delta) {
+        private double project(Vec3 delta) {
             return delta.x * direction.x + delta.z * direction.z;
         }
 
         private void finish(String detail) {
             done = true;
-            binding.setPressed(false);
-            if (client.player != null) client.player.sendMessage(
-                    Text.literal("§bTalos §7» §fwalk " + directionName + ": " + detail), true);
+            binding.setDown(false);
+            if (client.player != null) client.player.sendOverlayMessage(
+                    Component.literal("§bTalos §7» §fwalk " + directionName + ": " + detail));
         }
 
-        @Override public void onCompleted() { binding.setPressed(false); }
+        @Override public void onCompleted() { binding.setDown(false); }
         @Override public Set<Object> getMutexKeys() { return Set.of("talos-player-movement"); }
     }
 }

@@ -1,14 +1,14 @@
 package dev.talos.client.pathing.sim;
 
-import net.minecraft.enchantment.Enchantment;
-import net.minecraft.enchantment.EnchantmentHelper;
-import net.minecraft.enchantment.Enchantments;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.attribute.EntityAttributes;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.entity.effect.StatusEffects;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.registry.entry.RegistryEntry;
+import net.minecraft.core.Holder;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.item.enchantment.Enchantments;
 
 /** Immutable snapshot of the live movement modifiers used by planner rollouts. */
 public record MovementProfile(
@@ -43,7 +43,7 @@ public record MovementProfile(
     public static MovementProfile capture(LivingEntity player) {
         if (player == null) return vanilla();
 
-        double movementSpeed = attribute(player, EntityAttributes.MOVEMENT_SPEED,
+        double movementSpeed = attribute(player, Attributes.MOVEMENT_SPEED,
                 BASE_MOVEMENT_SPEED);
         // Vanilla setSprinting() installs a MULTIPLY_TOTAL 0.3 modifier on MOVEMENT_SPEED,
         // so a mid-sprint capture already contains the sprint boost. The simulator applies
@@ -52,29 +52,29 @@ public record MovementProfile(
         if (player.isSprinting()) movementSpeed /= 1.3;
         // Players expose JUMP_STRENGTH in 1.21.11. Jump Boost is additive AFTER the block
         // jump multiplier (vanilla: base * multiplier + boost), so it is carried separately.
-        double jumpVelocity = attribute(player, EntityAttributes.JUMP_STRENGTH,
+        double jumpVelocity = attribute(player, Attributes.JUMP_STRENGTH,
                 BASE_JUMP_VELOCITY);
-        StatusEffectInstance jumpBoostEffect = player.getStatusEffect(StatusEffects.JUMP_BOOST);
+        MobEffectInstance jumpBoostEffect = player.getEffect(MobEffects.JUMP_BOOST);
         double jumpBoost = jumpBoostEffect == null ? 0.0
                 : 0.1 * (jumpBoostEffect.getAmplifier() + 1);
 
-        double gravity = attribute(player, EntityAttributes.GRAVITY, BASE_GRAVITY);
-        boolean slowFalling = player.getStatusEffect(StatusEffects.SLOW_FALLING) != null;
-        StatusEffectInstance levitation = player.getStatusEffect(StatusEffects.LEVITATION);
+        double gravity = attribute(player, Attributes.GRAVITY, BASE_GRAVITY);
+        boolean slowFalling = player.getEffect(MobEffects.SLOW_FALLING) != null;
+        MobEffectInstance levitation = player.getEffect(MobEffects.LEVITATION);
         int levitationLevel = levitation == null ? 0 : levitation.getAmplifier() + 1;
 
         int depthStrider = equipmentLevel(player, Enchantments.DEPTH_STRIDER);
         int soulSpeed = equipmentLevel(player, Enchantments.SOUL_SPEED);
         double depthFraction = Math.min(depthStrider, 3) / 3.0;
         double waterDrag = BASE_WATER_DRAG + (1.0 - BASE_WATER_DRAG) * depthFraction;
-        double waterEfficiency = attribute(player, EntityAttributes.WATER_MOVEMENT_EFFICIENCY, 0.0);
+        double waterEfficiency = attribute(player, Attributes.WATER_MOVEMENT_EFFICIENCY, 0.0);
         waterDrag += (1.0 - waterDrag) * clamp01(waterEfficiency);
-        if (player.getStatusEffect(StatusEffects.DOLPHINS_GRACE) != null) {
+        if (player.getEffect(MobEffects.DOLPHINS_GRACE) != null) {
             waterDrag = Math.max(waterDrag, 0.96);
         }
 
-        double sneakFactor = attribute(player, EntityAttributes.SNEAKING_SPEED, 0.3);
-        double stepHeight = attribute(player, EntityAttributes.STEP_HEIGHT, 0.6);
+        double sneakFactor = attribute(player, Attributes.SNEAKING_SPEED, 0.3);
+        double stepHeight = attribute(player, Attributes.STEP_HEIGHT, 0.6);
         return new MovementProfile(movementSpeed, jumpVelocity, jumpBoost, gravity, waterDrag,
                 BASE_LAVA_DRAG, soulSpeed, slowFalling, levitationLevel,
                 sneakFactor, stepHeight);
@@ -88,18 +88,18 @@ public record MovementProfile(
     }
 
     private static double attribute(LivingEntity player,
-            RegistryEntry<net.minecraft.entity.attribute.EntityAttribute> attribute,
+            Holder<net.minecraft.world.entity.ai.attributes.Attribute> attribute,
             double fallback) {
         return player.getAttributes().hasAttribute(attribute)
                 ? player.getAttributeValue(attribute) : fallback;
     }
 
     private static int equipmentLevel(LivingEntity player,
-            net.minecraft.registry.RegistryKey<Enchantment> enchantment) {
+            net.minecraft.resources.ResourceKey<Enchantment> enchantment) {
         try {
-            RegistryEntry<Enchantment> entry = player.getRegistryManager()
-                    .getOrThrow(RegistryKeys.ENCHANTMENT).getOrThrow(enchantment);
-            return EnchantmentHelper.getEquipmentLevel(entry, player);
+            Holder<Enchantment> entry = player.registryAccess()
+                    .lookupOrThrow(Registries.ENCHANTMENT).getOrThrow(enchantment);
+            return EnchantmentHelper.getEnchantmentLevel(entry, player);
         } catch (IllegalStateException exception) {
             // A partially initialized client registry should not disable the whole simulator.
             return 0;

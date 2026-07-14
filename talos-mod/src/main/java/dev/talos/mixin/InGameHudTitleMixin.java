@@ -1,23 +1,23 @@
 package dev.talos.mixin;
 
 import dev.talos.client.rules.EventRuleEngine;
-import net.minecraft.client.gui.hud.InGameHud;
-import net.minecraft.text.Text;
+import net.minecraft.client.gui.Gui;
+import net.minecraft.network.chat.Component;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /** Feeds title/subtitle packets into the event-rule engine; vanilla has no callback for them. */
-@Mixin(InGameHud.class)
+@Mixin(Gui.class)
 public abstract class InGameHudTitleMixin {
-    @Inject(method = "setTitle", at = @At("HEAD"))
-    private void talos$onTitle(Text title, CallbackInfo ci) {
+    @Inject(method = "setTitle(Lnet/minecraft/network/chat/Component;)V", at = @At("HEAD"))
+    private void talos$onTitle(Component title, CallbackInfo ci) {
         EventRuleEngine.onTitle(title);
     }
 
-    @Inject(method = "setSubtitle", at = @At("HEAD"))
-    private void talos$onSubtitle(Text subtitle, CallbackInfo ci) {
+    @Inject(method = "setSubtitle(Lnet/minecraft/network/chat/Component;)V", at = @At("HEAD"))
+    private void talos$onSubtitle(Component subtitle, CallbackInfo ci) {
         EventRuleEngine.onSubtitle(subtitle);
     }
 }

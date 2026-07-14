@@ -1,20 +1,21 @@
 package dev.talos.client.ui.pipeline;
 
 import com.mojang.blaze3d.pipeline.BlendFunction;
+import com.mojang.blaze3d.pipeline.ColorTargetState;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.platform.DepthTestFunction;
+import com.mojang.blaze3d.shaders.UniformType;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
-import net.minecraft.client.gl.UniformType;
-import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.render.RenderLayers;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.resources.Identifier;
+import java.util.Optional;
 
 /**
  * Single choke point for every render layer / pipeline choice Talos makes.
  *
  * <p>All drawing — in-world wireframes and the P4 UI overlay — must obtain its
- * {@link RenderLayer} or {@link RenderPipeline} here so that swapping the underlying
+ * {@link RenderType} or {@link RenderPipeline} here so that swapping the underlying
  * pipeline — custom shaders, no-depth X-ray variants, translucent fills — is a
  * one-file change.
  *
@@ -72,14 +73,14 @@ public final class TalosRenderPipelines {
      * assuming quads. We draw quads anyway, but wiring it keeps the intent explicit.
      */
     public static final RenderPipeline UI_ROUNDED_RECT = RenderPipeline.builder()
-            .withLocation(Identifier.of("talos", "pipeline/ui_rounded_rect"))
-            .withVertexShader(Identifier.of("talos", "core/ui_rounded_rect"))
-            .withFragmentShader(Identifier.of("talos", "core/ui_rounded_rect"))
+            .withLocation(Identifier.fromNamespaceAndPath("talos", "pipeline/ui_rounded_rect"))
+            .withVertexShader(Identifier.fromNamespaceAndPath("talos", "core/ui_rounded_rect"))
+            .withFragmentShader(Identifier.fromNamespaceAndPath("talos", "core/ui_rounded_rect"))
             .withUniform("DynamicTransforms", UniformType.UNIFORM_BUFFER)
             .withUniform("Projection", UniformType.UNIFORM_BUFFER)
-            .withBlend(BlendFunction.TRANSLUCENT)
-            .withDepthTestFunction(DepthTestFunction.NO_DEPTH_TEST)
-            .withVertexFormat(UI_ROUNDED_RECT_FORMAT, VertexFormat.DrawMode.QUADS)
+            .withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
+            .withDepthStencilState(Optional.empty())
+            .withVertexFormat(UI_ROUNDED_RECT_FORMAT, VertexFormat.Mode.QUADS)
             .withUsePipelineDrawModeForGui(true)
             .build();
 
@@ -92,7 +93,7 @@ public final class TalosRenderPipelines {
     //     .withDepthTestFunction(com.mojang.blaze3d.platform.DepthTestFunction.NO_DEPTH_TEST)
     // wrapped in a RenderLayer, and return it here. For P3 the vanilla depth-tested
     // lines layer is all we need.
-    public static RenderLayer wireframeLines() {
-        return RenderLayers.lines();
+    public static RenderType wireframeLines() {
+        return RenderTypes.lines();
     }
 }

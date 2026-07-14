@@ -9,10 +9,10 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.phys.Vec3;
 
 /** Legitimate, keybinding-driven follower for a native A* path. */
 public final class PathFollowTask extends TalosTask {
@@ -20,7 +20,7 @@ public final class PathFollowTask extends TalosTask {
     private static final int STUCK_TICKS = 40;
     private static final double NODE_DISTANCE_SQUARED = 0.6 * 0.6;
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final CompletableFuture<PathResult> future;
     private final Predicate<BlockPos> isGoal;
     private final Function<BlockPos, AStarPathfinder.SearchResult> recompute;
@@ -32,9 +32,9 @@ public final class PathFollowTask extends TalosTask {
     private int ticks;
     private int stillTicks;
     private boolean recomputed;
-    private Vec3d lastPosition;
+    private Vec3 lastPosition;
 
-    public PathFollowTask(MinecraftClient client, List<BlockPos> path, boolean pathReachesGoal,
+    public PathFollowTask(Minecraft client, List<BlockPos> path, boolean pathReachesGoal,
                           String pathDetail, Predicate<BlockPos> isGoal,
                           Function<BlockPos, AStarPathfinder.SearchResult> recompute,
                           CompletableFuture<PathResult> future) {
@@ -60,12 +60,12 @@ public final class PathFollowTask extends TalosTask {
 
     @Override
     public void body() {
-        ClientPlayerEntity player = client.player;
-        if (player == null || client.world == null) {
+        LocalPlayer player = client.player;
+        if (player == null || client.level == null) {
             finish(false, "World unloaded while following path");
             return;
         }
-        if (isGoal.test(player.getBlockPos())) {
+        if (isGoal.test(player.blockPosition())) {
             finish(true, "Arrived");
             return;
         }
@@ -77,7 +77,7 @@ public final class PathFollowTask extends TalosTask {
         updateStuckState(player);
         if (stillTicks >= STUCK_TICKS) {
             if (!recomputed) {
-                AStarPathfinder.SearchResult replacement = recompute.apply(player.getBlockPos());
+                AStarPathfinder.SearchResult replacement = recompute.apply(player.blockPosition());
                 recomputed = true;
                 stillTicks = 0;
                 if (!replacement.path().isEmpty()) {
@@ -102,15 +102,15 @@ public final class PathFollowTask extends TalosTask {
         }
 
         BlockPos node = path.get(index);
-        aim.aimAt(new Vec3d(node.getX() + 0.5, player.getEyeY(), node.getZ() + 0.5));
+        aim.aimAt(new Vec3(node.getX() + 0.5, player.getEyeY(), node.getZ() + 0.5));
         aim.tick();
         pressMovement(player, node);
         scheduleDelay();
     }
 
-    private void updateStuckState(ClientPlayerEntity player) {
-        Vec3d position = positionOf(player);
-        if (lastPosition != null && position.squaredDistanceTo(lastPosition) < 0.01 * 0.01) {
+    private void updateStuckState(LocalPlayer player) {
+        Vec3 position = positionOf(player);
+        if (lastPosition != null && position.distanceToSqr(lastPosition) < 0.01 * 0.01) {
             stillTicks++;
         } else {
             stillTicks = 0;
@@ -118,7 +118,7 @@ public final class PathFollowTask extends TalosTask {
         }
     }
 
-    private void advanceReachedNodes(ClientPlayerEntity player) {
+    private void advanceReachedNodes(LocalPlayer player) {
         while (index < path.size()) {
             BlockPos node = path.get(index);
             double dx = player.getX() - (node.getX() + 0.5);
@@ -131,12 +131,12 @@ public final class PathFollowTask extends TalosTask {
         }
     }
 
-    private void pressMovement(ClientPlayerEntity player, BlockPos node) {
+    private void pressMovement(LocalPlayer player, BlockPos node) {
         releaseInputs();
-        client.options.forwardKey.setPressed(true);
+        client.options.keyUp.setDown(true);
         int rise = node.getY() - player.getBlockY();
-        if (rise > 0 && player.isOnGround()) client.options.jumpKey.setPressed(true);
-        if (isLongFlatStraight()) client.options.sprintKey.setPressed(true);
+        if (rise > 0 && player.onGround()) client.options.keyJump.setDown(true);
+        if (isLongFlatStraight()) client.options.keySprint.setDown(true);
     }
 
     private boolean isLongFlatStraight() {
@@ -149,8 +149,8 @@ public final class PathFollowTask extends TalosTask {
                 && b.getZ() - a.getZ() == c.getZ() - b.getZ();
     }
 
-    private static Vec3d positionOf(ClientPlayerEntity player) {
-        return new Vec3d(player.getX(), player.getY(), player.getZ());
+    private static Vec3 positionOf(LocalPlayer player) {
+        return new Vec3(player.getX(), player.getY(), player.getZ());
     }
 
     public void cancel() {
@@ -164,13 +164,13 @@ public final class PathFollowTask extends TalosTask {
     }
 
     private void releaseInputs() {
-        client.options.forwardKey.setPressed(false);
-        client.options.backKey.setPressed(false);
-        client.options.leftKey.setPressed(false);
-        client.options.rightKey.setPressed(false);
-        client.options.jumpKey.setPressed(false);
-        client.options.sprintKey.setPressed(false);
-        client.options.sneakKey.setPressed(false);
+        client.options.keyUp.setDown(false);
+        client.options.keyDown.setDown(false);
+        client.options.keyLeft.setDown(false);
+        client.options.keyRight.setDown(false);
+        client.options.keyJump.setDown(false);
+        client.options.keySprint.setDown(false);
+        client.options.keyShift.setDown(false);
     }
 
     @Override

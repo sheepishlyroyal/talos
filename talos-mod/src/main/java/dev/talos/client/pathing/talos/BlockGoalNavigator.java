@@ -10,10 +10,10 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import net.minecraft.block.Block;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.level.block.Block;
 
 /**
  * Drives {@code /talos goto block <id>}: scan outward for the nearest matching block, path
@@ -28,29 +28,29 @@ public final class BlockGoalNavigator {
     private BlockGoalNavigator() {}
 
     /** Call on the client thread. The future completes with the final attempt's result. */
-    public static CompletableFuture<PathResult> navigate(MinecraftClient client, String blockId,
+    public static CompletableFuture<PathResult> navigate(Minecraft client, String blockId,
                                                          int radius) {
         CompletableFuture<PathResult> outcome = new CompletableFuture<>();
-        net.minecraft.util.Identifier id = net.minecraft.util.Identifier.tryParse(blockId);
-        if (client.player == null || client.world == null) {
+        net.minecraft.resources.Identifier id = net.minecraft.resources.Identifier.tryParse(blockId);
+        if (client.player == null || client.level == null) {
             outcome.complete(new PathResult(false, "No client world or player is loaded"));
-        } else if (id == null || !Registries.BLOCK.containsId(id)) {
+        } else if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) {
             outcome.complete(new PathResult(false, "Unknown block: " + blockId));
         } else {
-            attempt(client, Registries.BLOCK.get(id), blockId, radius, new HashSet<>(), 1, outcome);
+            attempt(client, BuiltInRegistries.BLOCK.getValue(id), blockId, radius, new HashSet<>(), 1, outcome);
         }
         return outcome;
     }
 
-    private static void attempt(MinecraftClient client, Block block, String blockId, int radius,
+    private static void attempt(Minecraft client, Block block, String blockId, int radius,
                                 Set<BlockPos> tried, int attemptNo,
                                 CompletableFuture<PathResult> outcome) {
-        if (client.player == null || client.world == null) {
+        if (client.player == null || client.level == null) {
             outcome.complete(new PathResult(false, "World unloaded"));
             return;
         }
         NearestBlockScan scan = new NearestBlockScan(
-                client.player.getBlockPos(), radius, block, tried);
+                client.player.blockPosition(), radius, block, tried);
         TalosClient.taskScheduler().forceAddTask("goto-block-scan", scan);
         scan.future.whenComplete((pos, scanError) -> client.execute(() -> {
             if (scanError != null) {
@@ -93,7 +93,7 @@ public final class BlockGoalNavigator {
         final CompletableFuture<BlockPos> future = new CompletableFuture<>();
 
         private NearestBlockScan(BlockPos center, int radius, Block block, Set<BlockPos> excluded) {
-            this.positions = BlockPos.iterateOutwards(center, radius, radius, radius).iterator();
+            this.positions = BlockPos.withinManhattan(center, radius, radius, radius).iterator();
             this.block = block;
             this.excluded = excluded;
         }
@@ -103,12 +103,12 @@ public final class BlockGoalNavigator {
 
         @Override
         protected void onTick() {
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.world == null || !client.isOnThread()) { _break(); return; }
+            Minecraft client = Minecraft.getInstance();
+            if (client.level == null || !client.isSameThread()) { _break(); return; }
             while (positions.hasNext() && TalosClient.tickBudget().hasBudgetRemaining()) {
                 BlockPos pos = positions.next();
-                if (client.world.getBlockState(pos).isOf(block) && !excluded.contains(pos)) {
-                    future.complete(pos.toImmutable());
+                if (client.level.getBlockState(pos).is(block) && !excluded.contains(pos)) {
+                    future.complete(pos.immutable());
                     _break();
                     return;
                 }

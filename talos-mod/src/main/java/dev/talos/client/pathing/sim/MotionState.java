@@ -1,12 +1,12 @@
 package dev.talos.client.pathing.sim;
 
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 /** Immutable input/output snapshot for one invocation of {@link PlayerMotion#step}. */
 public record MotionState(
-        Vec3d position,
-        Vec3d velocity,
+        Vec3 position,
+        Vec3 velocity,
         boolean onGround,
         Pose pose,
         Fluid fluid,
@@ -21,7 +21,7 @@ public record MotionState(
     }
 
     /** Convenience constructor for a state before any simulated collision outcome exists. */
-    public MotionState(Vec3d position, Vec3d velocity, boolean onGround, Pose pose) {
+    public MotionState(Vec3 position, Vec3 velocity, boolean onGround, Pose pose) {
         this(position, velocity, onGround, pose, Fluid.NONE, false, 0);
     }
 
@@ -29,7 +29,7 @@ public record MotionState(
      * Cooldown-free constructor kept for callers snapshotting the live player, whose vanilla
      * jumpingCooldown is not readable client-side; starting at 0 errs one hop early at most.
      */
-    public MotionState(Vec3d position, Vec3d velocity, boolean onGround, Pose pose,
+    public MotionState(Vec3 position, Vec3 velocity, boolean onGround, Pose pose,
             Fluid fluid, boolean bumpedHorizontally) {
         this(position, velocity, onGround, pose, fluid, bumpedHorizontally, 0);
     }
@@ -39,15 +39,15 @@ public record MotionState(
     }
 
     /** The exact player collision box, with {@code pos} interpreted as feet/bottom-center. */
-    public Box box(Vec3d pos) {
+    public AABB box(Vec3 pos) {
         return box(pose, pos);
     }
 
-    public static Box box(Pose pose, Vec3d pos) {
+    public static AABB box(Pose pose, Vec3 pos) {
         // PlayerEntity dimensions are deliberately hardcoded: Stage A exposes only these poses.
         double height = pose == Pose.STAND ? 1.8 : 0.6;
-        return new Box(pos.x - 0.3, pos.y, pos.z - 0.3,
-                pos.x + 0.3, pos.y + height, pos.z + 0.3);
+        return new AABB(pos.x() - 0.3, pos.y, pos.z() - 0.3,
+                pos.x() + 0.3, pos.y + height, pos.z() + 0.3);
     }
 
     public enum Pose {

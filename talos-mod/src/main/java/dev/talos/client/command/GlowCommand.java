@@ -3,9 +3,9 @@ package dev.talos.client.command;
 import com.mojang.brigadier.context.CommandContext;
 import dev.talos.client.render.RenderQueue;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.phys.AABB;
 
 /** {@code /talos glow <x> <y> <z> [seconds]} — wireframe-highlight a block position. */
 final class GlowCommand {
@@ -20,13 +20,13 @@ final class GlowCommand {
 
     static int execute(CommandContext<FabricClientCommandSource> context, BlockPos pos, int seconds) {
         highlight(pos, seconds * 20);
-        context.getSource().sendFeedback(Text.literal("Glowing %d %d %d for %ds"
+        context.getSource().sendFeedback(Component.literal("Glowing %d %d %d for %ds"
                 .formatted(pos.getX(), pos.getY(), pos.getZ(), seconds)));
         return 1;
     }
 
     /** Adds a glow box keyed by position, replacing any previous glow at the same spot. */
     static void highlight(BlockPos pos, int lifeTicks) {
-        RenderQueue.add("glow:" + pos.asLong(), new Box(pos).expand(BOX_INFLATION), GLOW_COLOR, lifeTicks);
+        RenderQueue.add("glow:" + pos.asLong(), new AABB(pos).inflate(BOX_INFLATION), GLOW_COLOR, lifeTicks);
     }
 }

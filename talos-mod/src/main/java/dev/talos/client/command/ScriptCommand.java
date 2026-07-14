@@ -2,10 +2,10 @@ package dev.talos.client.command;
 
 import com.mojang.brigadier.CommandDispatcher;
 import dev.talos.client.ui.screen.PythonEditorScreen;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.command.CommandRegistryAccess;
+import net.minecraft.commands.CommandBuildContext;
 
 /**
  * Registers {@code /talos script editor}, opening the in-game Python editor screen.
@@ -25,15 +25,15 @@ public final class ScriptCommand {
     }
 
     private static void registerCommands(
-            CommandDispatcher<FabricClientCommandSource> dispatcher, CommandRegistryAccess registryAccess) {
-        dispatcher.register(ClientCommandManager.literal("talos")
-                .then(ClientCommandManager.literal("script")
-                        .then(ClientCommandManager.literal("editor")
+            CommandDispatcher<FabricClientCommandSource> dispatcher, CommandBuildContext registryAccess) {
+        dispatcher.register(ClientCommands.literal("talos")
+                .then(ClientCommands.literal("script")
+                        .then(ClientCommands.literal("editor")
                                 .executes(context -> {
                                     var client = context.getSource().getClient();
                                     // Chat closes after command dispatch, so defer opening
                                     // by one client task (same trick as /talos editor).
-                                    client.send(() -> client.setScreen(new PythonEditorScreen()));
+                                    client.execute(() -> client.setScreen(new PythonEditorScreen()));
                                     return 1;
                                 }))));
     }

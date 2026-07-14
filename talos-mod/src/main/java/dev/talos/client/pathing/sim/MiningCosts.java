@@ -1,10 +1,10 @@
 package dev.talos.client.pathing.sim;
 
 import java.util.List;
-import net.minecraft.block.BlockState;
-import net.minecraft.item.ItemStack;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.BlockView;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Vanilla block-breaking time from hardness and the best available tool. Vanilla's per-tick
@@ -18,18 +18,18 @@ public final class MiningCosts {
     private MiningCosts() {}
 
     /** Ticks to break {@code state} with the fastest of {@code tools} (bare hand included). */
-    public static int breakTicks(BlockState state, BlockView world, BlockPos pos,
+    public static int breakTicks(BlockState state, BlockGetter world, BlockPos pos,
             List<ItemStack> tools) {
-        float hardness = state.getHardness(world, pos);
+        float hardness = state.getDestroySpeed(world, pos);
         if (hardness < 0.0F) return UNBREAKABLE_TICKS;          // bedrock-class
         if (hardness == 0.0F) return 1;                          // insta-break
-        boolean toolRequired = state.isToolRequired();
+        boolean toolRequired = state.requiresCorrectToolForDrops();
         double bestPerTick = 1.0 / hardness / (toolRequired ? 100.0 : 30.0); // bare hand
         if (tools != null) {
             for (ItemStack stack : tools) {
                 if (stack == null || stack.isEmpty()) continue;
-                float speed = stack.getMiningSpeedMultiplier(state);
-                boolean suitable = !toolRequired || stack.isSuitableFor(state);
+                float speed = stack.getDestroySpeed(state);
+                boolean suitable = !toolRequired || stack.isCorrectToolForDrops(state);
                 double perTick = speed / hardness / (suitable ? 30.0 : 100.0);
                 if (perTick > bestPerTick) bestPerTick = perTick;
             }

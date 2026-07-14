@@ -21,14 +21,14 @@ import java.util.List;
 import java.util.Map;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.command.CommandSource;
-import net.minecraft.command.argument.IdentifierArgumentType;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.Vec3d;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.minecraft.commands.CommandBuildContext;
+import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.commands.arguments.IdentifierArgument;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.phys.Vec3;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
-import net.minecraft.command.CommandRegistryAccess;
 
 public final class TalosCommands {
     private TalosCommands() {
@@ -54,16 +54,16 @@ public final class TalosCommands {
                 } catch (IOException ignored) {
                     // no scripts directory yet — suggest nothing
                 }
-                return CommandSource.suggestMatching(names, builder);
+                return SharedSuggestionProvider.suggest(names, builder);
             };
 
     /** Tab-completes {@code /talos cmd <name>} with the currently registered script commands. */
     private static final SuggestionProvider<FabricClientCommandSource> SCRIPT_COMMAND_NAMES =
-            (context, builder) -> CommandSource.suggestMatching(ScriptCommandRegistry.names(), builder);
+            (context, builder) -> SharedSuggestionProvider.suggest(ScriptCommandRegistry.names(), builder);
 
     /** Tab-completes {@code /talos example <name>} with the embedded reference scripts. */
     private static final SuggestionProvider<FabricClientCommandSource> EXAMPLE_NAMES =
-            (context, builder) -> CommandSource.suggestMatching(TalosCommands.EXAMPLES.keySet(), builder);
+            (context, builder) -> SharedSuggestionProvider.suggest(TalosCommands.EXAMPLES.keySet(), builder);
 
     public static void register() {
         ClientCommandRegistrationCallback.EVENT.register(TalosCommands::registerCommands);
@@ -71,39 +71,39 @@ public final class TalosCommands {
 
     private static void registerCommands(
             com.mojang.brigadier.CommandDispatcher<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> dispatcher,
-            CommandRegistryAccess registryAccess) {
-        var talosRoot = dispatcher.register(ClientCommandManager.literal("talos")
-                .then(ClientCommandManager.literal("find")
-                        .then(ClientCommandManager.literal("block")
-                                .then(ClientCommandManager.argument(
+            CommandBuildContext registryAccess) {
+        var talosRoot = dispatcher.register(ClientCommands.literal("talos")
+                .then(ClientCommands.literal("find")
+                        .then(ClientCommands.literal("block")
+                                .then(ClientCommands.argument(
                                                 "blockPredicate", BlockStatePredicate.argument(registryAccess))
                                         .executes(context -> FindCommand.execute(
                                                 context,
-                                                context.getSource().getClient().options.getViewDistance().getValue()))
-                                        .then(ClientCommandManager.argument(
+                                                context.getSource().getClient().options.renderDistance().get()))
+                                        .then(ClientCommands.argument(
                                                         "radius", IntegerArgumentType.integer(1, 64))
                                                 .executes(context -> FindCommand.execute(
                                                         context,
                                                         IntegerArgumentType.getInteger(context, "radius")))))))
-                .then(ClientCommandManager.literal("goto")
+                .then(ClientCommands.literal("goto")
                         // `/talos goto block <id> [radius]` — nearest matching block, with
                         // blacklist-and-retry when a specific candidate proves unreachable.
-                        .then(ClientCommandManager.literal("block")
-                                .then(ClientCommandManager.argument("blockId", IdArgumentType.blockId())
+                        .then(ClientCommands.literal("block")
+                                .then(ClientCommands.argument("blockId", IdArgumentType.blockId())
                                         .executes(context -> scriptOverride(context, "goto") ? 1
                                                 : GotoBlockCommand.execute(context,
                                                 StringArgumentType.getString(context, "blockId"), 64))
-                                        .then(ClientCommandManager.argument(
+                                        .then(ClientCommands.argument(
                                                         "radius", IntegerArgumentType.integer(1, 64))
                                                 .executes(context -> scriptOverride(context, "goto") ? 1
                                                         : GotoBlockCommand.execute(context,
                                                         StringArgumentType.getString(context, "blockId"),
                                                         IntegerArgumentType.getInteger(context, "radius"))))))
-                        .then(ClientCommandManager.literal("near")
+                        .then(ClientCommands.literal("near")
                                 .then(coordinate("x")
                                         .then(coordinate("y")
                                                 .then(coordinate("z")
-                                                        .then(ClientCommandManager.argument(
+                                                        .then(ClientCommands.argument(
                                                                         "range", IntegerArgumentType.integer(0))
                                                                 .executes(context -> scriptOverride(context, "goto") ? 1
                                                                         : GotoCommand.execute(
@@ -119,7 +119,7 @@ public final class TalosCommands {
                         // respectively) so the 2nd token's meaning is unambiguous per branch —
                         // chaining a shared node here would silently swap Y and Z. The "xyz"
                         // literal keeps raw coordinates from colliding with the named modes.
-                        .then(ClientCommandManager.literal("xyz")
+                        .then(ClientCommands.literal("xyz")
                                 .then(coordinate("x")
                                         .then(coordinate("z")
                                                 .executes(context -> scriptOverride(context, "goto") ? 1
@@ -135,104 +135,104 @@ public final class TalosCommands {
                                                                         coordValue(context, "z", eyePos(context).z)))))))))
                 // Back-compat alias: `/talos xz <x> <z>` delegates to the same XZ handler as
                 // `/talos goto <x> <z>`.
-                .then(ClientCommandManager.literal("xz")
+                .then(ClientCommands.literal("xz")
                         .then(coordinate("x")
                                 .then(coordinate("z")
                                         .executes(context -> GotoCommand.execute(
                                                 context, xzGoal(context))))))
                 .then(lookNode(registryAccess))
                 // `/talos human [on|off]` — toggle session-arc fatigue (see SessionArc).
-                .then(ClientCommandManager.literal("human")
+                .then(ClientCommands.literal("human")
                         .executes(context -> setHuman(context,
                                 !dev.talos.client.TalosClient.humanizer().humanMode()))
-                        .then(ClientCommandManager.literal("on")
+                        .then(ClientCommands.literal("on")
                                 .executes(context -> setHuman(context, true)))
-                        .then(ClientCommandManager.literal("off")
+                        .then(ClientCommands.literal("off")
                                 .executes(context -> setHuman(context, false))))
-                .then(ClientCommandManager.literal("glow")
+                .then(ClientCommands.literal("glow")
                         .then(coordinate("x")
                                 .then(coordinate("y")
                                         .then(coordinate("z")
                                                 .executes(context -> GlowCommand.execute(
                                                         context, blockPos(context), GlowCommand.DEFAULT_SECONDS))
-                                                .then(ClientCommandManager.argument(
+                                                .then(ClientCommands.argument(
                                                                 "seconds", IntegerArgumentType.integer(1, 3600))
                                                         .executes(context -> GlowCommand.execute(
                                                                 context,
                                                                 blockPos(context),
                                                                 value(context, "seconds"))))))))
-                .then(ClientCommandManager.literal("mine")
+                .then(ClientCommands.literal("mine")
                         .then(coordinates((context, pos) -> scriptOverride(context, "mine") ? 1
                                 : ActionCommand.mine(context, pos)))
-                        .then(ClientCommandManager.literal("direction")
+                        .then(ClientCommands.literal("direction")
                                 .then(directionNode((context, pos) -> scriptOverride(context, "mine") ? 1
                                         : ActionCommand.mine(context, pos))))
-                        .then(ClientCommandManager.literal("block")
-                                .then(ClientCommandManager.argument(
+                        .then(ClientCommands.literal("block")
+                                .then(ClientCommands.argument(
                                                 "blockPredicate", BlockStatePredicate.argument(registryAccess))
                                         .executes(context -> scriptOverride(context, "mine") ? 1
                                                 : ActionCommand.mineBlock(context, 0))
                                         .then(indexArgument(n -> scriptOverride(n.context(), "mine") ? 1
                                                 : ActionCommand.mineBlock(n.context(), n.n()))))))
-                .then(ClientCommandManager.literal("place")
+                .then(ClientCommands.literal("place")
                         .then(coordinates((context, pos) -> scriptOverride(context, "place") ? 1
                                 : ActionCommand.place(context, pos))))
-                .then(ClientCommandManager.literal("coords")
-                        .then(ClientCommandManager.literal("direction")
+                .then(ClientCommands.literal("coords")
+                        .then(ClientCommands.literal("direction")
                                 .then(directionNode(CoordsCommand::executeDirection))))
                 .then(raytraceNode())
-                .then(ClientCommandManager.literal("ui")
+                .then(ClientCommands.literal("ui")
                         .executes(UiCommand::execute))
-                .then(ClientCommandManager.literal("script")
-                        .then(ClientCommandManager.literal("run")
-                                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                .then(ClientCommands.literal("script")
+                        .then(ClientCommands.literal("run")
+                                .then(ClientCommands.argument("name", StringArgumentType.word())
                                         .suggests(SCRIPT_NAMES)
                                         .executes(context -> runScript(context, ""))
                                         // `/talos script run <name> <args...>` — whitespace-split
                                         // into the list the script reads as talos.args.
-                                        .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
+                                        .then(ClientCommands.argument("args", StringArgumentType.greedyString())
                                                 .executes(context -> runScript(context,
                                                         StringArgumentType.getString(context, "args"))))))
-                        .then(ClientCommandManager.literal("stop")
+                        .then(ClientCommands.literal("stop")
                                 .executes(context -> {
                                     ScriptEngine.instance().stop();
-                                    context.getSource().sendFeedback(Text.literal("Stopped script engine"));
+                                    context.getSource().sendFeedback(Component.literal("Stopped script engine"));
                                     return 1;
                                 }))
                         // `/talos script profile` — toggle per-event dispatch profiling;
                         // toggling OFF prints the aggregated report.
-                        .then(ClientCommandManager.literal("profile")
+                        .then(ClientCommands.literal("profile")
                                 .executes(TalosCommands::toggleProfile)))
                 // `/talos py <code>` — run a Python one-liner. Semicolons separate
                 // statements; a trailing expression echoes its repr to chat. Shares the
                 // running script's globals when a session is live, otherwise runs (and
                 // discards) an ephemeral session. Python only ever runs on the worker.
-                .then(ClientCommandManager.literal("py")
-                        .then(ClientCommandManager.argument("code", StringArgumentType.greedyString())
+                .then(ClientCommands.literal("py")
+                        .then(ClientCommands.argument("code", StringArgumentType.greedyString())
                                 .executes(TalosCommands::runPySnippet)))
-                .then(ClientCommandManager.literal("bridge")
-                        .then(ClientCommandManager.literal("allow")
+                .then(ClientCommands.literal("bridge")
+                        .then(ClientCommands.literal("allow")
                                 .executes(context -> {
                                     int result = TalosBridge.allowSession();
-                                    if (result == 0) context.getSource().sendError(Text.literal("Talos bridge is not running"));
-                                    else context.getSource().sendFeedback(Text.literal("VS Code bridge allowed for this session"));
+                                    if (result == 0) context.getSource().sendError(Component.literal("Talos bridge is not running"));
+                                    else context.getSource().sendFeedback(Component.literal("VS Code bridge allowed for this session"));
                                     return result;
                                 }))
-                        .then(ClientCommandManager.literal("status")
+                        .then(ClientCommands.literal("status")
                                 .executes(context -> {
-                                    context.getSource().sendFeedback(Text.literal(TalosBridge.statusText()));
+                                    context.getSource().sendFeedback(Component.literal(TalosBridge.statusText()));
                                     return 1;
                                 })))
-                .then(ClientCommandManager.literal("stop")
+                .then(ClientCommands.literal("stop")
                         .executes(StopCommand::execute)
-                        .then(ClientCommandManager.literal("all")
+                        .then(ClientCommands.literal("all")
                                 .executes(StopCommand::execute)))
                 // `/talos follow <target> [keeping <distance>]` — target is a player name,
                 // an entity type, or a selector (@e[type=cow,distance=..20]); greedy so
                 // selectors with spaces survive. Script-overridable like goto/mine/kill.
-                .then(ClientCommandManager.literal("follow")
-                        .then(ClientCommandManager.argument("target", StringArgumentType.greedyString())
-                                .suggests((context, builder) -> CommandSource.suggestMatching(
+                .then(ClientCommands.literal("follow")
+                        .then(ClientCommands.argument("target", StringArgumentType.greedyString())
+                                .suggests((context, builder) -> SharedSuggestionProvider.suggest(
                                         followSuggestions(context.getSource()), builder))
                                 .executes(context -> scriptOverride(context, "follow") ? 1
                                         : FollowCommand.execute(context, followTarget(context),
@@ -248,41 +248,41 @@ public final class TalosCommands {
                 .then(GetCommand.node())
                 // Merged into the same /talos get literal by brigadier: block id at explicit
                 // (~-relative) coordinates, or along a (^-relative) look direction.
-                .then(ClientCommandManager.literal("get")
-                        .then(ClientCommandManager.literal("block")
+                .then(ClientCommands.literal("get")
+                        .then(ClientCommands.literal("block")
                                 .then(coordinates(GetCommand::blockAtPos))
-                                .then(ClientCommandManager.literal("direction")
+                                .then(ClientCommands.literal("direction")
                                         .then(directionNode(GetCommand::blockAtPos)))))
                 .then(TrackCommand.node())
-                .then(ClientCommandManager.literal("kill")
-                        .then(ClientCommandManager.literal("nearest")
+                .then(ClientCommands.literal("kill")
+                        .then(ClientCommands.literal("nearest")
                                 .executes(context -> scriptOverride(context, "kill") ? 1
                                         : ActionCommand.killNearest(context, 6.0))
-                                .then(ClientCommandManager.argument(
+                                .then(ClientCommands.argument(
                                                 "radius", DoubleArgumentType.doubleArg(1.0, 64.0))
                                         .executes(context -> scriptOverride(context, "kill") ? 1
                                                 : ActionCommand.killNearest(context,
                                                 DoubleArgumentType.getDouble(context, "radius"))))))
                 // `/talos cmd <name> [args]` — invoke a script-registered command whose name
                 // doesn't collide with (or shadow) a built-in subcommand's argument shape.
-                .then(ClientCommandManager.literal("cmd")
-                        .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                .then(ClientCommands.literal("cmd")
+                        .then(ClientCommands.argument("name", StringArgumentType.word())
                                 .suggests(SCRIPT_COMMAND_NAMES)
                                 .executes(context -> runScriptCommand(context, ""))
-                                .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
+                                .then(ClientCommands.argument("args", StringArgumentType.greedyString())
                                         .executes(context -> runScriptCommand(
                                                 context, StringArgumentType.getString(context, "args"))))))
                 // `/talos example <name>` — write a commented reference script to
                 // talos/scripts/example_<name>.py (overwriting: they are reference material).
-                .then(ClientCommandManager.literal("example")
+                .then(ClientCommands.literal("example")
                         // Bare `/talos example` lists everything available.
                         .executes(context -> {
-                            context.getSource().sendFeedback(Text.literal("Available examples: "
+                            context.getSource().sendFeedback(Component.literal("Available examples: "
                                     + String.join(", ", EXAMPLES.keySet().stream().sorted().toList())
                                     + " — write one with /talos example <name>"));
                             return 1;
                         })
-                        .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                        .then(ClientCommands.argument("name", StringArgumentType.word())
                                 .suggests(EXAMPLE_NAMES)
                                 .executes(TalosCommands::writeExample)))
                 // Fallback: `/talos <name> [args]` for script-registered commands. Brigadier
@@ -290,10 +290,10 @@ public final class TalosCommands {
                 // first token lands here and is dispatched to @talos.command handlers —
                 // making `/talos pygoto 0 64 0` work exactly as the examples advertise
                 // (`/talos cmd <name>` remains for names that shadow a built-in).
-                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                .then(ClientCommands.argument("name", StringArgumentType.word())
                         .suggests(SCRIPT_COMMAND_NAMES)
                         .executes(context -> runScriptCommand(context, ""))
-                        .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
+                        .then(ClientCommands.argument("args", StringArgumentType.greedyString())
                                 .executes(context -> runScriptCommand(
                                         context, StringArgumentType.getString(context, "args"))))));
     }
@@ -304,11 +304,11 @@ public final class TalosCommands {
             boolean enabled) {
         dev.talos.client.TalosClient.humanizer().setHumanMode(enabled);
         if (enabled) {
-            context.getSource().sendFeedback(Text.literal(
+            context.getSource().sendFeedback(Component.literal(
                     "§bTalos §7» §fHuman mode §aON§f — fatigue drifts reactions, aim and timing "
                     + "over the session, with idle micro-breaks. Best-effort, not undetectable."));
         } else {
-            context.getSource().sendFeedback(Text.literal(
+            context.getSource().sendFeedback(Component.literal(
                     "§bTalos §7» §fHuman mode §cOFF§f — stationary "
                     + dev.talos.client.TalosClient.humanizer().baseProfile().name() + " profile."));
         }
@@ -321,7 +321,7 @@ public final class TalosCommands {
         String code = StringArgumentType.getString(context, "code");
         ScriptEngine engine = ScriptEngine.instance();
         if (engine.snippetSharesSession()) {
-            context.getSource().sendFeedback(Text.literal(
+            context.getSource().sendFeedback(Component.literal(
                     "py » evaluating in the running script's session (shared globals)"));
         }
         // Output and errors stream back through the default chat sink; the evaluator
@@ -335,14 +335,14 @@ public final class TalosCommands {
             com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
         var source = context.getSource();
         if (dev.talos.client.script.ScriptProfiler.toggle()) {
-            source.sendFeedback(Text.literal(
+            source.sendFeedback(Component.literal(
                     "Script profiling ON — run /talos script profile again for the report"));
             return 1;
         }
         List<String> report = dev.talos.client.script.ScriptProfiler.report();
-        source.sendFeedback(Text.literal("Script profiling OFF"
+        source.sendFeedback(Component.literal("Script profiling OFF"
                 + (report.isEmpty() ? " — nothing was dispatched while profiling" : ":")));
-        for (String line : report) source.sendFeedback(Text.literal("  " + line));
+        for (String line : report) source.sendFeedback(Component.literal("  " + line));
         return 1;
     }
 
@@ -394,8 +394,8 @@ public final class TalosCommands {
     private static List<String> followSuggestions(FabricClientCommandSource source) {
         List<String> names = new java.util.ArrayList<>(List.of("@p", "@a", "@r", "@n", "@e[type="));
         var client = source.getClient();
-        if (client.getNetworkHandler() != null) {
-            for (var entry : client.getNetworkHandler().getPlayerList()) {
+        if (client.getConnection() != null) {
+            for (var entry : client.getConnection().getOnlinePlayers()) {
                 String name = entry.getProfile().name();
                 if (client.player == null || !name.equals(client.player.getGameProfile().name()))
                     names.add(name);
@@ -412,10 +412,10 @@ public final class TalosCommands {
         List<String> args = argsLine.isBlank() ? List.of() : List.of(argsLine.trim().split("\\s+"));
         ScriptEngine.instance().run(name, args, ScriptEngine.CHAT).whenComplete((ignored, error) ->
                 source.getClient().execute(() -> {
-                    if (error == null) source.sendFeedback(Text.literal("Script finished: " + name));
-                    else source.sendError(Text.literal("Script failed: " + error.getMessage()));
+                    if (error == null) source.sendFeedback(Component.literal("Script finished: " + name));
+                    else source.sendError(Component.literal("Script failed: " + error.getMessage()));
                 }));
-        source.sendFeedback(Text.literal("Started script: " + name
+        source.sendFeedback(Component.literal("Started script: " + name
                 + (args.isEmpty() ? "" : " " + String.join(" ", args))));
         return 1;
     }
@@ -425,7 +425,7 @@ public final class TalosCommands {
             com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context, String args) {
         String name = StringArgumentType.getString(context, "name");
         if (!ScriptCommandRegistry.dispatch(name, args)) {
-            context.getSource().sendError(Text.literal("No script command '" + name
+            context.getSource().sendError(Component.literal("No script command '" + name
                     + "' is registered — a running script must declare @talos.command(\"" + name + "\")"));
             return 0;
         }
@@ -650,8 +650,8 @@ public final class TalosCommands {
                             await talos.aio.wait(1.0, 2.0)
                             continue
                         if entity.distance > 4.0:
-                            await talos.aio.goto_near(int(entity.pos.x), int(entity.pos.y),
-                                                      int(entity.pos.z), 2)
+                            await talos.aio.goto_near(int(entity.pos.x()), int(entity.pos.y),
+                                                      int(entity.pos.z()), 2)
                         await talos.aio.wait(0.3, 0.6)
 
                 return loop()
@@ -674,7 +674,7 @@ public final class TalosCommands {
         String name = StringArgumentType.getString(context, "name");
         String body = EXAMPLES.get(name);
         if (body == null) {
-            context.getSource().sendError(Text.literal("No example '" + name + "' — available: "
+            context.getSource().sendError(Component.literal("No example '" + name + "' — available: "
                     + String.join(", ", EXAMPLES.keySet().stream().sorted().toList())));
             return 0;
         }
@@ -684,10 +684,10 @@ public final class TalosCommands {
             Files.createDirectories(scripts);
             Files.writeString(file, body);
         } catch (IOException error) {
-            context.getSource().sendError(Text.literal("Could not write example: " + error.getMessage()));
+            context.getSource().sendError(Component.literal("Could not write example: " + error.getMessage()));
             return 0;
         }
-        context.getSource().sendFeedback(Text.literal("Wrote talos/scripts/example_" + name
+        context.getSource().sendFeedback(Component.literal("Wrote talos/scripts/example_" + name
                 + ".py — run it with /talos script run example_" + name));
         return 1;
     }
@@ -710,38 +710,38 @@ public final class TalosCommands {
      *       {@link EntitySelector} for the supported bracket arguments.</li>
      * </ul>
      */
-    private static LiteralArgumentBuilder<FabricClientCommandSource> lookNode(CommandRegistryAccess registryAccess) {
-        return ClientCommandManager.literal("look")
-                .then(ClientCommandManager.argument("yaw", RelativeAngleArgumentType.angle())
-                        .then(ClientCommandManager.argument("pitch", RelativeAngleArgumentType.angle())
+    private static LiteralArgumentBuilder<FabricClientCommandSource> lookNode(CommandBuildContext registryAccess) {
+        return ClientCommands.literal("look")
+                .then(ClientCommands.argument("yaw", RelativeAngleArgumentType.angle())
+                        .then(ClientCommands.argument("pitch", RelativeAngleArgumentType.angle())
                                 .executes(LookCommand::execute)))
-                .then(ClientCommandManager.literal("block")
-                        .then(ClientCommandManager.argument(
+                .then(ClientCommands.literal("block")
+                        .then(ClientCommands.argument(
                                         "blockPredicate", BlockStatePredicate.argument(registryAccess))
                                 .executes(context -> LookCommand.executeBlock(context, 0))
                                 .then(indexArgument(n -> LookCommand.executeBlock(n.context(), n.n())))))
-                .then(ClientCommandManager.literal("coords")
+                .then(ClientCommands.literal("coords")
                         .then(coordinates((context, pos) -> LookCommand.executeCoords(context, pos))))
-                .then(ClientCommandManager.literal("direction")
+                .then(ClientCommands.literal("direction")
                         .then(directionNode((context, pos) -> LookCommand.executeDirection(context, pos))))
-                .then(ClientCommandManager.argument("selector", SelectorArgumentType.selector())
+                .then(ClientCommands.argument("selector", SelectorArgumentType.selector())
                         .executes(context -> LookCommand.executeSelector(context, selectorArg(context), 0))
                         .then(indexArgument(n -> LookCommand.executeSelector(
                                 n.context(), selectorArg(n.context()), n.n()))))
-                .then(ClientCommandManager.literal("entity")
-                        .then(ClientCommandManager.literal("type")
-                                .then(ClientCommandManager.argument("entityType", IdentifierArgumentType.identifier())
+                .then(ClientCommands.literal("entity")
+                        .then(ClientCommands.literal("type")
+                                .then(ClientCommands.argument("entityType", IdentifierArgument.id())
                                         .executes(context -> LookCommand.executeEntity(context, entityTypeArg(context), null, 0))
                                         .then(indexArgument(n -> LookCommand.executeEntity(
                                                 n.context(), entityTypeArg(n.context()), null, n.n())))
-                                        .then(ClientCommandManager.literal("tag")
-                                                .then(ClientCommandManager.argument("tag", StringArgumentType.word())
+                                        .then(ClientCommands.literal("tag")
+                                                .then(ClientCommands.argument("tag", StringArgumentType.word())
                                                         .executes(context -> LookCommand.executeEntity(
                                                                 context, entityTypeArg(context), tagArg(context), 0))
                                                         .then(indexArgument(n -> LookCommand.executeEntity(
                                                                 n.context(), entityTypeArg(n.context()), tagArg(n.context()), n.n())))))))
-                        .then(ClientCommandManager.literal("tag")
-                                .then(ClientCommandManager.argument("tag", StringArgumentType.word())
+                        .then(ClientCommands.literal("tag")
+                                .then(ClientCommands.argument("tag", StringArgumentType.word())
                                         .executes(context -> LookCommand.executeEntity(context, null, tagArg(context), 0))
                                         .then(indexArgument(n -> LookCommand.executeEntity(
                                                 n.context(), null, tagArg(n.context()), n.n()))))));
@@ -759,13 +759,13 @@ public final class TalosCommands {
     /** 0-based, negative-friendly source index: 0 = nearest, -1 = furthest. */
     private static RequiredArgumentBuilder<FabricClientCommandSource, Integer> indexArgument(
             NArgExecutor executor) {
-        return ClientCommandManager.argument("index", IntegerArgumentType.integer())
+        return ClientCommands.argument("index", IntegerArgumentType.integer())
                 .executes(context -> executor.execute(new NArg(context, value(context, "index"))));
     }
 
     private static RequiredArgumentBuilder<FabricClientCommandSource, Integer> nArgument(
             NArgExecutor executor) {
-        return ClientCommandManager.argument("n", IntegerArgumentType.integer(1))
+        return ClientCommands.argument("n", IntegerArgumentType.integer(1))
                 .executes(context -> executor.execute(new NArg(context, value(context, "n"))));
     }
 
@@ -786,20 +786,20 @@ public final class TalosCommands {
      * Builds the {@code direction <yaw> <pitch>} sub-node shared by {@code /talos mine} and
      * {@code /talos coords}: {@code ^}/{@code ^n}-relative angles (via
      * {@link RelativeAngleArgumentType}) that raycast from the player's eyes to a {@link
-     * net.minecraft.util.math.BlockPos} via {@link DirectionRaycast}.
+     * net.minecraft.core.BlockPos} via {@link DirectionRaycast}.
      */
     private static com.mojang.brigadier.builder.RequiredArgumentBuilder<FabricClientCommandSource,
             RelativeAngleArgumentType.Angle> directionNode(DirectionExecutor executor) {
-        return ClientCommandManager.argument("yaw", RelativeAngleArgumentType.angle())
-                .then(ClientCommandManager.argument("pitch", RelativeAngleArgumentType.angle())
+        return ClientCommands.argument("yaw", RelativeAngleArgumentType.angle())
+                .then(ClientCommands.argument("pitch", RelativeAngleArgumentType.angle())
                         .executes(context -> {
                             var source = context.getSource();
                             var player = source.getPlayer();
-                            float yaw = RelativeAngleArgumentType.resolve(context, "yaw", player.getYaw());
-                            float pitch = RelativeAngleArgumentType.resolve(context, "pitch", player.getPitch());
+                            float yaw = RelativeAngleArgumentType.resolve(context, "yaw", player.getYRot());
+                            float pitch = RelativeAngleArgumentType.resolve(context, "pitch", player.getXRot());
                             var pos = DirectionRaycast.blockAt(player, yaw, pitch);
                             if (pos == null) {
-                                source.sendError(Text.literal("No block in range along yaw %.2f, pitch %.2f"
+                                source.sendError(Component.literal("No block in range along yaw %.2f, pitch %.2f"
                                         .formatted(yaw, pitch)));
                                 return 0;
                             }
@@ -810,13 +810,13 @@ public final class TalosCommands {
     @FunctionalInterface
     private interface DirectionExecutor {
         int execute(com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context,
-                    net.minecraft.util.math.BlockPos pos);
+                    net.minecraft.core.BlockPos pos);
     }
 
     private static GoalXZ xzGoal(
             com.mojang.brigadier.context.CommandContext<
                             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context) {
-        Vec3d eye = eyePos(context);
+        Vec3 eye = eyePos(context);
         return new GoalXZ(coordValue(context, "x", eye.x), coordValue(context, "z", eye.z));
     }
 
@@ -832,7 +832,7 @@ public final class TalosCommands {
     private interface CoordinateExecutor {
         int execute(com.mojang.brigadier.context.CommandContext<
                             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context,
-                    net.minecraft.util.math.BlockPos pos);
+                    net.minecraft.core.BlockPos pos);
     }
 
     /**
@@ -842,7 +842,7 @@ public final class TalosCommands {
     private static com.mojang.brigadier.builder.RequiredArgumentBuilder<
             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource,
             RelativeCoordinateArgumentType.Coordinate> coordinate(String name) {
-        return ClientCommandManager.argument(name, RelativeCoordinateArgumentType.coordinate());
+        return ClientCommands.argument(name, RelativeCoordinateArgumentType.coordinate());
     }
 
     /** Default look-ray reach for {@code /talos raytrace where|if} when no distance is given. */
@@ -851,7 +851,7 @@ public final class TalosCommands {
     /** One caret-capable axis ({@code ^}/{@code ~}/absolute) for {@code /talos raytrace get}. */
     private static com.mojang.brigadier.builder.RequiredArgumentBuilder<FabricClientCommandSource,
             LocalCoordinateArgumentType.Axis> localCoord(String name) {
-        return ClientCommandManager.argument(name, LocalCoordinateArgumentType.localCoordinate());
+        return ClientCommands.argument(name, LocalCoordinateArgumentType.localCoordinate());
     }
 
     /**
@@ -861,49 +861,49 @@ public final class TalosCommands {
     private static com.mojang.brigadier.builder.LiteralArgumentBuilder<FabricClientCommandSource>
             raytraceNode() {
         com.mojang.brigadier.builder.LiteralArgumentBuilder<FabricClientCommandSource> raytrace =
-                ClientCommandManager.literal("raytrace");
+                ClientCommands.literal("raytrace");
 
         // get / bare form: resolve a coordinate triple to a world point. Bare and plain
         // `get` report the exact point (advanced); the `simple`/`advanced` mode literals
         // choose between the floored block cell (ints) and the exact 3dp point.
         raytrace.then(localCoord("x").then(localCoord("y").then(localCoord("z")
                 .executes(context -> RaytraceCommand.get(context, false)))));
-        raytrace.then(ClientCommandManager.literal("get")
+        raytrace.then(ClientCommands.literal("get")
                 .then(localCoord("x").then(localCoord("y").then(localCoord("z")
                         .executes(context -> RaytraceCommand.get(context, false))))));
-        raytrace.then(ClientCommandManager.literal("simple")
-                .then(ClientCommandManager.literal("get")
+        raytrace.then(ClientCommands.literal("simple")
+                .then(ClientCommands.literal("get")
                         .then(localCoord("x").then(localCoord("y").then(localCoord("z")
                                 .executes(context -> RaytraceCommand.get(context, true)))))));
-        raytrace.then(ClientCommandManager.literal("advanced")
-                .then(ClientCommandManager.literal("get")
+        raytrace.then(ClientCommands.literal("advanced")
+                .then(ClientCommands.literal("get")
                         .then(localCoord("x").then(localCoord("y").then(localCoord("z")
                                 .executes(context -> RaytraceCommand.get(context, false)))))));
 
         // where [maxDist]: first block/entity hit along the look.
-        raytrace.then(ClientCommandManager.literal("where")
+        raytrace.then(ClientCommands.literal("where")
                 .executes(context -> RaytraceCommand.where(context, DEFAULT_RAY_DIST))
-                .then(ClientCommandManager.argument("maxDist",
+                .then(ClientCommands.argument("maxDist",
                                 DoubleArgumentType.doubleArg(0.1, 256.0))
                         .executes(context -> RaytraceCommand.where(context,
                                 DoubleArgumentType.getDouble(context, "maxDist")))));
 
         // if block <id> [maxDist] | if entity <selector> [maxDist]: predicate on the first hit.
-        raytrace.then(ClientCommandManager.literal("if")
-                .then(ClientCommandManager.literal("block")
-                        .then(ClientCommandManager.argument("blockId", IdArgumentType.blockId())
+        raytrace.then(ClientCommands.literal("if")
+                .then(ClientCommands.literal("block")
+                        .then(ClientCommands.argument("blockId", IdArgumentType.blockId())
                                 .executes(context -> RaytraceCommand.ifBlock(context,
                                         StringArgumentType.getString(context, "blockId"), DEFAULT_RAY_DIST))
-                                .then(ClientCommandManager.argument("maxDist",
+                                .then(ClientCommands.argument("maxDist",
                                                 DoubleArgumentType.doubleArg(0.1, 256.0))
                                         .executes(context -> RaytraceCommand.ifBlock(context,
                                                 StringArgumentType.getString(context, "blockId"),
                                                 DoubleArgumentType.getDouble(context, "maxDist"))))))
-                .then(ClientCommandManager.literal("entity")
-                        .then(ClientCommandManager.argument("selector", SelectorArgumentType.selector())
+                .then(ClientCommands.literal("entity")
+                        .then(ClientCommands.argument("selector", SelectorArgumentType.selector())
                                 .executes(context -> RaytraceCommand.ifEntity(context,
                                         selectorArg(context), DEFAULT_RAY_DIST))
-                                .then(ClientCommandManager.argument("maxDist",
+                                .then(ClientCommands.argument("maxDist",
                                                 DoubleArgumentType.doubleArg(0.1, 256.0))
                                         .executes(context -> RaytraceCommand.ifEntity(context,
                                                 selectorArg(context),
@@ -912,17 +912,17 @@ public final class TalosCommands {
     }
 
     /** The player's current eye position, used as the base for {@code ~}-relative coordinate args. */
-    private static Vec3d eyePos(
+    private static Vec3 eyePos(
             com.mojang.brigadier.context.CommandContext<
                             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context) {
-        return context.getSource().getPlayer().getEyePos();
+        return context.getSource().getPlayer().getEyePosition();
     }
 
-    private static net.minecraft.util.math.BlockPos blockPos(
+    private static net.minecraft.core.BlockPos blockPos(
             com.mojang.brigadier.context.CommandContext<
                             net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> context) {
-        Vec3d eye = eyePos(context);
-        return new net.minecraft.util.math.BlockPos(
+        Vec3 eye = eyePos(context);
+        return new net.minecraft.core.BlockPos(
                 coordValue(context, "x", eye.x),
                 coordValue(context, "y", eye.y),
                 coordValue(context, "z", eye.z));

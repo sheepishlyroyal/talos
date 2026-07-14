@@ -10,9 +10,9 @@ import dev.talos.client.rules.EventRuleEngine;
 import dev.talos.client.rules.EventRuleEngine.Rule;
 import dev.talos.client.rules.EventRuleEngine.Trigger;
 import java.util.function.BiConsumer;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.text.Text;
+import net.minecraft.network.chat.Component;
 
 /**
  * {@code /talos on <event> ... run <command>}, {@code /talos rules ...},
@@ -45,8 +45,8 @@ public final class RulesCommand {
             Trigger.EGG_THROWN, Trigger.EGG_HIT, Trigger.ITEM_FRAME_CHANGED);
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> onNode() {
-        LiteralArgumentBuilder<FabricClientCommandSource> on = ClientCommandManager.literal("on");
-        on.then(ClientCommandManager.literal("list").executes(context -> {
+        LiteralArgumentBuilder<FabricClientCommandSource> on = ClientCommands.literal("on");
+        on.then(ClientCommands.literal("list").executes(context -> {
             StringBuilder names = new StringBuilder();
             for (Trigger trigger : Trigger.values()) {
                 names.append(names.isEmpty() ? "" : ", ").append(trigger.id())
@@ -63,8 +63,8 @@ public final class RulesCommand {
                             case NONE -> "";
                         });
             }
-            context.getSource().sendFeedback(Text.literal("Events: " + names));
-            context.getSource().sendFeedback(Text.literal(
+            context.getSource().sendFeedback(Component.literal("Events: " + names));
+            context.getSource().sendFeedback(Component.literal(
                     "Placeholders: {value} {health} {hunger} {air} {x} {y} {z}; "
                             + "prefix 'chat ' to send chat instead of a command"));
             return 1;
@@ -72,18 +72,18 @@ public final class RulesCommand {
 
         for (Trigger trigger : Trigger.values()) {
             LiteralArgumentBuilder<FabricClientCommandSource> node =
-                    ClientCommandManager.literal(trigger.id());
+                    ClientCommands.literal(trigger.id());
             switch (trigger.kind) {
                 case NONE -> node.then(run(trigger, (context, rule) -> { }));
                 case NUMBER -> node.then(
-                        ClientCommandManager.argument("value", DoubleArgumentType.doubleArg())
+                        ClientCommands.argument("value", DoubleArgumentType.doubleArg())
                                 .then(run(trigger, (context, rule) ->
                                         rule.threshold = DoubleArgumentType.getDouble(context, "value"))));
                 case TEXT -> {
                     node.then(run(trigger, (context, rule) -> { }));
                     node.then(countTail(trigger, (context, rule) -> { }));
-                    node.then(ClientCommandManager.literal("matching")
-                            .then(ClientCommandManager.argument("filter", StringArgumentType.string())
+                    node.then(ClientCommands.literal("matching")
+                            .then(ClientCommands.argument("filter", StringArgumentType.string())
                                     .then(run(trigger, (context, rule) ->
                                             rule.filter = StringArgumentType.getString(context, "filter")))
                                     .then(countTail(trigger, (context, rule) ->
@@ -91,42 +91,42 @@ public final class RulesCommand {
                 }
                 case COMPARE -> attachComparisons(node, trigger, (context, rule) -> { });
                 case ENTITY_COUNT -> node.then(
-                        ClientCommandManager.argument("selector", SelectorArgumentType.selector())
-                                .then(ClientCommandManager.literal("radius")
+                        ClientCommands.argument("selector", SelectorArgumentType.selector())
+                                .then(ClientCommands.literal("radius")
                                         .then(attachComparisons(
-                                                ClientCommandManager.argument("radius",
+                                                ClientCommands.argument("radius",
                                                         DoubleArgumentType.doubleArg(-1.0, 512.0)),
                                                 trigger, RulesCommand::readEntityArgs))));
                 case ENTITY_PRESENCE -> node.then(
-                        ClientCommandManager.argument("selector", SelectorArgumentType.selector())
-                                .then(ClientCommandManager.literal("radius")
-                                        .then(ClientCommandManager.argument("radius",
+                        ClientCommands.argument("selector", SelectorArgumentType.selector())
+                                .then(ClientCommands.literal("radius")
+                                        .then(ClientCommands.argument("radius",
                                                         DoubleArgumentType.doubleArg(-1.0, 512.0))
                                                 .then(run(trigger, RulesCommand::readEntityArgs)))));
                 case BLOCK_COUNT -> node.then(
-                        ClientCommandManager.argument("block", IdArgumentType.blockId())
-                                .then(ClientCommandManager.literal("radius")
+                        ClientCommands.argument("block", IdArgumentType.blockId())
+                                .then(ClientCommands.literal("radius")
                                         .then(attachComparisons(
-                                                ClientCommandManager.argument("radius",
+                                                ClientCommands.argument("radius",
                                                         IntegerArgumentType.integer(1, EventRuleEngine.MAX_BLOCK_RADIUS)),
                                                 trigger, RulesCommand::readBlockArgs))));
                 case BLOCK_PRESENCE -> node.then(
-                        ClientCommandManager.argument("block", IdArgumentType.blockId())
-                                .then(ClientCommandManager.literal("radius")
-                                        .then(ClientCommandManager.argument("radius",
+                        ClientCommands.argument("block", IdArgumentType.blockId())
+                                .then(ClientCommands.literal("radius")
+                                        .then(ClientCommands.argument("radius",
                                                         IntegerArgumentType.integer(1, EventRuleEngine.MAX_BLOCK_RADIUS))
                                                 .then(run(trigger, RulesCommand::readBlockArgs)))));
                 case ITEM_COUNT -> node.then(attachComparisons(
-                        ClientCommandManager.argument("item", IdArgumentType.itemId()),
+                        ClientCommands.argument("item", IdArgumentType.itemId()),
                         trigger, (context, rule) ->
                                 rule.block = StringArgumentType.getString(context, "item")));
                 case REGION -> node.then(
-                        ClientCommandManager.argument("x1", IntegerArgumentType.integer())
-                                .then(ClientCommandManager.argument("y1", IntegerArgumentType.integer())
-                                        .then(ClientCommandManager.argument("z1", IntegerArgumentType.integer())
-                                                .then(ClientCommandManager.argument("x2", IntegerArgumentType.integer())
-                                                        .then(ClientCommandManager.argument("y2", IntegerArgumentType.integer())
-                                                                .then(ClientCommandManager.argument("z2", IntegerArgumentType.integer())
+                        ClientCommands.argument("x1", IntegerArgumentType.integer())
+                                .then(ClientCommands.argument("y1", IntegerArgumentType.integer())
+                                        .then(ClientCommands.argument("z1", IntegerArgumentType.integer())
+                                                .then(ClientCommands.argument("x2", IntegerArgumentType.integer())
+                                                        .then(ClientCommands.argument("y2", IntegerArgumentType.integer())
+                                                                .then(ClientCommands.argument("z2", IntegerArgumentType.integer())
                                                                         .then(run(trigger, (context, rule) ->
                                                                                 rule.region = new double[] {
                                                                                         IntegerArgumentType.getInteger(context, "x1"),
@@ -139,11 +139,11 @@ public final class RulesCommand {
             // Subject-entity triggers: 'on potion_drank @e[type=player] run ...' — the
             // selector is tested against the event's entity, composable with 'matching'.
             if (ENTITY_SUBJECT.contains(trigger)) {
-                node.then(ClientCommandManager.argument("selector", SelectorArgumentType.selector())
+                node.then(ClientCommands.argument("selector", SelectorArgumentType.selector())
                         .then(run(trigger, (context, rule) ->
                                 rule.selector = StringArgumentType.getString(context, "selector")))
-                        .then(ClientCommandManager.literal("matching")
-                                .then(ClientCommandManager.argument("filter", StringArgumentType.string())
+                        .then(ClientCommands.literal("matching")
+                                .then(ClientCommands.argument("filter", StringArgumentType.string())
                                         .then(run(trigger, (context, rule) -> {
                                             rule.selector = StringArgumentType.getString(context, "selector");
                                             rule.filter = StringArgumentType.getString(context, "filter");
@@ -177,12 +177,12 @@ public final class RulesCommand {
                 rule.compare = op;
                 rule.amount = DoubleArgumentType.getDouble(context, "amount");
             };
-            parent.then(ClientCommandManager.literal(op)
-                    .then(ClientCommandManager.argument("amount", DoubleArgumentType.doubleArg())
+            parent.then(ClientCommands.literal(op)
+                    .then(ClientCommands.argument("amount", DoubleArgumentType.doubleArg())
                             .then(run(trigger, base))
                             // sustained: the comparison must hold for the whole window
-                            .then(ClientCommandManager.literal("for")
-                                    .then(ClientCommandManager.argument("seconds",
+                            .then(ClientCommands.literal("for")
+                                    .then(ClientCommands.argument("seconds",
                                                     DoubleArgumentType.doubleArg(0.05, 3600.0))
                                             .then(run(trigger, (context, rule) -> {
                                                 base.accept(context, rule);
@@ -193,12 +193,12 @@ public final class RulesCommand {
         if (trigger.kind == EventRuleEngine.Kind.COMPARE) {
             // windowed net change: 'health changes below -4 within 2' = burst damage
             LiteralArgumentBuilder<FabricClientCommandSource> changes =
-                    ClientCommandManager.literal("changes");
+                    ClientCommands.literal("changes");
             for (String op : new String[] {"above", "below", "equals"}) {
-                changes.then(ClientCommandManager.literal(op)
-                        .then(ClientCommandManager.argument("amount", DoubleArgumentType.doubleArg())
-                                .then(ClientCommandManager.literal("within")
-                                        .then(ClientCommandManager.argument("seconds",
+                changes.then(ClientCommands.literal(op)
+                        .then(ClientCommands.argument("amount", DoubleArgumentType.doubleArg())
+                                .then(ClientCommands.literal("within")
+                                        .then(ClientCommands.argument("seconds",
                                                         DoubleArgumentType.doubleArg(0.05, 3600.0))
                                                 .then(run(trigger, (context, rule) -> {
                                                     reader.accept(context, rule);
@@ -216,11 +216,11 @@ public final class RulesCommand {
     /** count above <n> within <seconds> run — event-frequency tail for TEXT triggers. */
     private static LiteralArgumentBuilder<FabricClientCommandSource> countTail(Trigger trigger,
             BiConsumer<CommandContext<FabricClientCommandSource>, Rule> reader) {
-        return ClientCommandManager.literal("count")
-                .then(ClientCommandManager.literal("above")
-                        .then(ClientCommandManager.argument("n", IntegerArgumentType.integer(1))
-                                .then(ClientCommandManager.literal("within")
-                                        .then(ClientCommandManager.argument("seconds",
+        return ClientCommands.literal("count")
+                .then(ClientCommands.literal("above")
+                        .then(ClientCommands.argument("n", IntegerArgumentType.integer(1))
+                                .then(ClientCommands.literal("within")
+                                        .then(ClientCommands.argument("seconds",
                                                         DoubleArgumentType.doubleArg(0.05, 3600.0))
                                                 .then(run(trigger, (context, rule) -> {
                                                     reader.accept(context, rule);
@@ -232,15 +232,15 @@ public final class RulesCommand {
 
     private static LiteralArgumentBuilder<FabricClientCommandSource> run(Trigger trigger,
             BiConsumer<CommandContext<FabricClientCommandSource>, Rule> reader) {
-        return ClientCommandManager.literal("run")
-                .then(ClientCommandManager.argument("command", StringArgumentType.greedyString())
+        return ClientCommands.literal("run")
+                .then(ClientCommands.argument("command", StringArgumentType.greedyString())
                         .executes(context -> {
                             Rule rule = new Rule();
                             rule.trigger = trigger.id();
                             rule.command = StringArgumentType.getString(context, "command");
                             reader.accept(context, rule);
                             int id = EventRuleEngine.addRule(rule);
-                            context.getSource().sendFeedback(Text.literal(
+                            context.getSource().sendFeedback(Component.literal(
                                     "Rule armed: " + EventRuleEngine.describe(
                                             EventRuleEngine.rules().stream()
                                                     .filter(saved -> saved.id == id)
@@ -250,38 +250,38 @@ public final class RulesCommand {
     }
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> rulesNode() {
-        return ClientCommandManager.literal("rules")
-                .then(ClientCommandManager.literal("list").executes(context -> {
+        return ClientCommands.literal("rules")
+                .then(ClientCommands.literal("list").executes(context -> {
                     var rules = EventRuleEngine.rules();
                     var schedules = EventRuleEngine.schedules();
                     if (rules.isEmpty() && schedules.isEmpty()) {
-                        context.getSource().sendFeedback(Text.literal("No rules or schedules"));
+                        context.getSource().sendFeedback(Component.literal("No rules or schedules"));
                         return 1;
                     }
                     for (var rule : rules) {
                         context.getSource().sendFeedback(
-                                Text.literal(EventRuleEngine.describe(rule)));
+                                Component.literal(EventRuleEngine.describe(rule)));
                     }
                     for (var schedule : schedules) {
                         context.getSource().sendFeedback(
-                                Text.literal(EventRuleEngine.describe(schedule)));
+                                Component.literal(EventRuleEngine.describe(schedule)));
                     }
                     return 1;
                 }))
-                .then(ClientCommandManager.literal("remove")
-                        .then(ClientCommandManager.argument("id", IntegerArgumentType.integer(1))
+                .then(ClientCommands.literal("remove")
+                        .then(ClientCommands.argument("id", IntegerArgumentType.integer(1))
                                 .executes(context -> {
                                     int id = IntegerArgumentType.getInteger(context, "id");
                                     boolean removed = EventRuleEngine.remove(id);
                                     if (removed) context.getSource().sendFeedback(
-                                            Text.literal("Removed #" + id));
+                                            Component.literal("Removed #" + id));
                                     else context.getSource().sendError(
-                                            Text.literal("No rule or schedule #" + id));
+                                            Component.literal("No rule or schedule #" + id));
                                     return removed ? 1 : 0;
                                 })))
-                .then(ClientCommandManager.literal("clear").executes(context -> {
+                .then(ClientCommands.literal("clear").executes(context -> {
                     EventRuleEngine.clear();
-                    context.getSource().sendFeedback(Text.literal("Cleared all rules and schedules"));
+                    context.getSource().sendFeedback(Component.literal("Cleared all rules and schedules"));
                     return 1;
                 }));
     }
@@ -296,17 +296,17 @@ public final class RulesCommand {
 
     private static LiteralArgumentBuilder<FabricClientCommandSource> schedule(String literal,
             boolean repeating) {
-        return ClientCommandManager.literal(literal)
-                .then(ClientCommandManager.argument("seconds", DoubleArgumentType.doubleArg(0.05, 86_400.0))
-                        .then(ClientCommandManager.literal("run")
-                                .then(ClientCommandManager.argument("command", StringArgumentType.greedyString())
+        return ClientCommands.literal(literal)
+                .then(ClientCommands.argument("seconds", DoubleArgumentType.doubleArg(0.05, 86_400.0))
+                        .then(ClientCommands.literal("run")
+                                .then(ClientCommands.argument("command", StringArgumentType.greedyString())
                                         .executes(context -> {
                                             double seconds = DoubleArgumentType.getDouble(context, "seconds");
                                             String command = StringArgumentType.getString(context, "command");
                                             int ticks = Math.max(1, (int) Math.round(seconds * 20.0));
                                             int id = EventRuleEngine.addSchedule(command,
                                                     repeating ? ticks : 0, ticks);
-                                            context.getSource().sendFeedback(Text.literal(
+                                            context.getSource().sendFeedback(Component.literal(
                                                     "Schedule #" + id + ": " + (repeating ? "every " : "after ")
                                                             + seconds + "s run " + command
                                                             + (repeating ? " (persists)" : " (this session)")));

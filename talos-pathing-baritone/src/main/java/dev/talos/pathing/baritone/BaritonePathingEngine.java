@@ -16,9 +16,9 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.Entity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,12 +86,12 @@ public final class BaritonePathingEngine implements PathingEngine {
             case GoalNear near -> Api.newGoalNear(new BlockPos(near.x(), near.y(), near.z()), near.radius());
             case GoalXZ xz -> Api.newGoalXZ(xz.x(), xz.z());
             case GoalEntity entityGoal -> {
-                MinecraftClient client = MinecraftClient.getInstance();
-                Entity entity = client.world == null ? null : client.world.getEntity(entityGoal.entityId());
+                Minecraft client = Minecraft.getInstance();
+                Entity entity = client.level == null ? null : client.level.getEntity(entityGoal.entityId());
                 if (entity == null) {
                     throw new IllegalArgumentException("Entity is not loaded: " + entityGoal.entityId());
                 }
-                yield Api.newGoalNear(entity.getBlockPos(), 1);
+                yield Api.newGoalNear(entity.blockPosition(), 1);
             }
         };
     }
@@ -125,9 +125,9 @@ public final class BaritonePathingEngine implements PathingEngine {
                 boolean active = Api.isActiveOrPathing();
                 seenActive |= active;
 
-                MinecraftClient client = MinecraftClient.getInstance();
+                Minecraft client = Minecraft.getInstance();
                 if (client.player != null) {
-                    BlockPos playerPos = client.player.getBlockPos();
+                    BlockPos playerPos = client.player.blockPosition();
                     if (Api.isInGoal(goal, playerPos.getX(), playerPos.getY(), playerPos.getZ())) {
                         future.complete(new PathResult(true, "Arrived"));
                         return;

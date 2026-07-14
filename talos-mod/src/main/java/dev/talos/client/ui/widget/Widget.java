@@ -1,9 +1,9 @@
 package dev.talos.client.ui.widget;
 
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.sound.PositionedSoundInstance;
-import net.minecraft.sound.SoundEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
+import net.minecraft.sounds.SoundEvents;
 
 /**
  * Minimal widget base for the Talos UI toolkit. Deliberately not a
@@ -52,12 +52,12 @@ public abstract class Widget {
         return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
     }
 
-    public final void render(DrawContext ctx, int mouseX, int mouseY, float deltaTicks) {
+    public final void render(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float deltaTicks) {
         this.hovered = isMouseOver(mouseX, mouseY);
         renderWidget(ctx, mouseX, mouseY, deltaTicks);
     }
 
-    protected abstract void renderWidget(DrawContext ctx, int mouseX, int mouseY, float deltaTicks);
+    protected abstract void renderWidget(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float deltaTicks);
 
     /** @return true if this widget consumed the click (stops the screen from checking siblings). */
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
@@ -66,7 +66,7 @@ public abstract class Widget {
 
     /** Vanilla's standard UI click blip, positioned at the listener (non-spatial). */
     protected static void playClickSound() {
-        MinecraftClient client = MinecraftClient.getInstance();
-        client.getSoundManager().play(PositionedSoundInstance.ui(SoundEvents.UI_BUTTON_CLICK, 1.0f));
+        Minecraft client = Minecraft.getInstance();
+        client.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0f));
     }
 }

@@ -1,6 +1,6 @@
 package dev.talos.client.script;
 
-import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.Minecraft;
 
 /**
  * Client-thread watcher that turns local-player game state into script events
@@ -15,7 +15,7 @@ public final class ScriptGameEvents {
     private ScriptGameEvents() {}
 
     /** Called once per client tick (from the same hook that fires the script tick event). */
-    public static void tick(MinecraftClient client) {
+    public static void tick(Minecraft client) {
         if (client.player == null) {
             // World left / respawn screen gone: forget the baseline so the next join
             // doesn't fire a spurious health change.

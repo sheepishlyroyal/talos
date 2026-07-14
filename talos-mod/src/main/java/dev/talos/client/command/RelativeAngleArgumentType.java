@@ -7,7 +7,7 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import java.util.List;
-import net.minecraft.text.Text;
+import net.minecraft.network.chat.Component;
 
 /**
  * Brigadier argument type for a look angle (yaw or pitch) that supports Minecraft's
@@ -19,9 +19,9 @@ final class RelativeAngleArgumentType implements ArgumentType<RelativeAngleArgum
     private static final RelativeAngleArgumentType INSTANCE = new RelativeAngleArgumentType();
 
     private static final SimpleCommandExceptionType MISSING_VALUE = new SimpleCommandExceptionType(
-            Text.literal("Expected an angle, e.g. 90, -45.5, ^ or ^10"));
+            Component.literal("Expected an angle, e.g. 90, -45.5, ^ or ^10"));
     private static final DynamicCommandExceptionType INVALID_NUMBER = new DynamicCommandExceptionType(
-            value -> Text.literal("Invalid angle value: " + value));
+            value -> Component.literal("Invalid angle value: " + value));
 
     private RelativeAngleArgumentType() {
     }

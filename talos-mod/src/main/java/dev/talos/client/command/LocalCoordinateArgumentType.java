@@ -6,7 +6,7 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import java.util.List;
-import net.minecraft.text.Text;
+import net.minecraft.network.chat.Component;
 
 /**
  * Brigadier argument type for one coordinate axis that accepts all three Minecraft coordinate
@@ -19,9 +19,9 @@ final class LocalCoordinateArgumentType implements ArgumentType<LocalCoordinateA
     private static final LocalCoordinateArgumentType INSTANCE = new LocalCoordinateArgumentType();
 
     private static final SimpleCommandExceptionType MISSING_VALUE = new SimpleCommandExceptionType(
-            Text.literal("Expected a coordinate, e.g. 12, ~5 (relative) or ^5 (forward/local)"));
+            Component.literal("Expected a coordinate, e.g. 12, ~5 (relative) or ^5 (forward/local)"));
     private static final DynamicCommandExceptionType INVALID_NUMBER = new DynamicCommandExceptionType(
-            value -> Text.literal("Invalid coordinate value: " + value));
+            value -> Component.literal("Invalid coordinate value: " + value));
 
     private LocalCoordinateArgumentType() {
     }

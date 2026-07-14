@@ -1,8 +1,8 @@
 package dev.talos.client.pathing;
 
 import java.util.concurrent.CompletableFuture;
+import net.minecraft.world.phys.Vec3;
 import java.util.List;
-import net.minecraft.util.math.Vec3d;
 
 public interface PathingEngine {
     boolean isAvailable();
@@ -18,5 +18,5 @@ public interface PathingEngine {
      * callers then fall back to issuing a new goto.
      */
     default boolean retarget(Goal goal) { return false; }
-    default List<Vec3d> getCurrentNodes() { return List.of(); }
+    default List<Vec3> getCurrentNodes() { return List.of(); }
 }

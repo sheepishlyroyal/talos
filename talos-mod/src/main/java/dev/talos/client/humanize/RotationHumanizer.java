@@ -1,20 +1,19 @@
 package dev.talos.client.humanize;
 
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
 
 /** Pure, seed-deterministic rotation trajectory planning. */
 public final class RotationHumanizer {
     private static final double EPSILON = 1.0e-5;
 
-    public static float[] yawPitchTo(Vec3d eye, Vec3d target) {
-        double dx = target.getX() - eye.getX();
-        double dy = target.getY() - eye.getY();
-        double dz = target.getZ() - eye.getZ();
+    public static float[] yawPitchTo(Vec3 eye, Vec3 target) {
+        double dx = target.x() - eye.x();
+        double dy = target.y() - eye.y();
+        double dz = target.z() - eye.z();
         double horizontal = Math.hypot(dx, dz);
         float yaw = wrapYaw((float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0f);
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, horizontal));
@@ -140,7 +139,7 @@ public final class RotationHumanizer {
 
     /** Converts MathHelper's [-180, 180) result to the documented (-180, 180] convention. */
     private static float wrapYaw(float degrees) {
-        float wrapped = MathHelper.wrapDegrees(degrees);
+        float wrapped = Mth.wrapDegrees(degrees);
         return wrapped == -180.0f ? 180.0f : wrapped;
     }
 

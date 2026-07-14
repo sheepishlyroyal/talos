@@ -1,13 +1,13 @@
 package dev.talos.client.command;
 
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.RaycastContext;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Converts a look direction (yaw/pitch, in degrees) into the {@link BlockPos} it points at, by
@@ -25,22 +25,22 @@ final class DirectionRaycast {
      * block-interaction range. Returns the hit {@link BlockPos}, or {@code null} if the ray hits
      * nothing (or hits fluid only, which is excluded).
      */
-    static BlockPos blockAt(ClientPlayerEntity player, float yaw, float pitch) {
-        ClientWorld world = MinecraftClient.getInstance().world;
+    static BlockPos blockAt(LocalPlayer player, float yaw, float pitch) {
+        ClientLevel world = Minecraft.getInstance().level;
         if (world == null) {
             return null;
         }
 
-        Vec3d eye = player.getEyePos();
-        Vec3d look = player.getRotationVector(pitch, yaw);
-        double reach = player.getBlockInteractionRange();
+        Vec3 eye = player.getEyePosition();
+        Vec3 look = player.calculateViewVector(pitch, yaw);
+        double reach = player.blockInteractionRange();
         if (reach <= 0.0) {
             reach = FALLBACK_REACH;
         }
-        Vec3d end = eye.add(look.multiply(reach));
+        Vec3 end = eye.add(look.scale(reach));
 
-        BlockHitResult hit = world.raycast(new RaycastContext(
-                eye, end, RaycastContext.ShapeType.OUTLINE, RaycastContext.FluidHandling.NONE, player));
+        BlockHitResult hit = world.clip(new ClipContext(
+                eye, end, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player));
         if (hit == null || hit.getType() != HitResult.Type.BLOCK) {
             return null;
         }

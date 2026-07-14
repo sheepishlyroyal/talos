@@ -3,9 +3,9 @@ package dev.talos.client.command;
 import com.mojang.brigadier.context.CommandContext;
 import dev.talos.client.pathing.talos.FollowTask;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.Entity;
 
 /**
  * {@code /talos follow <target> [distance]} — follow any entity, not just players.
@@ -19,26 +19,26 @@ final class FollowCommand {
     static int execute(CommandContext<FabricClientCommandSource> context, String target,
                        double distance) {
         FabricClientCommandSource source = context.getSource();
-        MinecraftClient client = source.getClient();
+        Minecraft client = source.getClient();
         Entity entity;
         try {
             entity = EntitySelectors.resolve(client, target, true);
         } catch (IllegalArgumentException error) {
-            source.sendError(Text.literal(error.getMessage()));
+            source.sendError(Component.literal(error.getMessage()));
             return 0;
         }
         if (entity == client.player) {
-            source.sendError(Text.literal("Cannot follow yourself"));
+            source.sendError(Component.literal("Cannot follow yourself"));
             return 0;
         }
         String name = entity.getName().getString();
-        source.sendFeedback(Text.literal("Following " + name
+        source.sendFeedback(Component.literal("Following " + name
                 + " (keeping ~" + (int) distance + " blocks; /talos stop to end)"));
         FollowTask.start(client, entity, distance).whenComplete((result, error) ->
                 client.execute(() -> {
                     String detail = error != null ? String.valueOf(error.getMessage())
                             : result.detail();
-                    source.sendFeedback(Text.literal("Follow ended: " + detail));
+                    source.sendFeedback(Component.literal("Follow ended: " + detail));
                 }));
         return 1;
     }

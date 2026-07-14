@@ -6,9 +6,9 @@ import dev.talos.client.pathing.PathResult;
 import dev.talos.client.pathing.PathingOptions;
 import dev.talos.client.task.TalosTask;
 import java.util.concurrent.CompletableFuture;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.Entity;
 
 /**
  * Moving-goal navigation: continuously re-paths toward a (possibly moving) entity,
@@ -31,7 +31,7 @@ public final class FollowTask extends TalosTask {
     /** Extra ticks of idling after a FAILED goto before retrying a stationary target. */
     private static final int FAILURE_BACKOFF_TICKS = 40;
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final int entityId;
     private final double keepDistance;
     private final String description;
@@ -41,7 +41,7 @@ public final class FollowTask extends TalosTask {
     private int lostTicks;
     private int cooldownTicks;
 
-    private FollowTask(MinecraftClient client, int entityId, double keepDistance, String description) {
+    private FollowTask(Minecraft client, int entityId, double keepDistance, String description) {
         this.client = client;
         this.entityId = entityId;
         this.keepDistance = keepDistance;
@@ -49,7 +49,7 @@ public final class FollowTask extends TalosTask {
     }
 
     /** Starts following {@code target}; call on the client thread. */
-    public static CompletableFuture<PathResult> start(MinecraftClient client, Entity target,
+    public static CompletableFuture<PathResult> start(Minecraft client, Entity target,
                                                       double keepDistance) {
         if (target == client.player)
             return CompletableFuture.completedFuture(new PathResult(false, "Cannot follow yourself"));
@@ -68,11 +68,11 @@ public final class FollowTask extends TalosTask {
     @Override
     public void body() {
         scheduleDelay();
-        if (client.world == null || client.player == null) {
+        if (client.level == null || client.player == null) {
             finish(false, "World unloaded while following");
             return;
         }
-        Entity target = client.world.getEntityById(entityId);
+        Entity target = client.level.getEntity(entityId);
         if (target == null || target.isRemoved()) {
             // Unloaded ≠ gone: chunk-edge flicker and dimension lag both look like this,
             // so hold position for a grace window before declaring the target lost.
@@ -83,9 +83,9 @@ public final class FollowTask extends TalosTask {
         lostTicks = 0;
         if (cooldownTicks > 0) cooldownTicks--;
 
-        double distanceSq = client.player.squaredDistanceTo(target);
+        double distanceSq = client.player.distanceToSqr(target);
         double closeEnough = keepDistance + 0.75;
-        BlockPos targetPos = target.getBlockPos().toImmutable();
+        BlockPos targetPos = target.blockPosition().immutable();
         boolean gotoLive = activeGoto != null && !activeGoto.isDone();
 
         // LIVE TRACKING: while our goto runs, feed it the target's fresh cell every tick
@@ -103,14 +103,14 @@ public final class FollowTask extends TalosTask {
             }
             // Engine can't retarget in place (no-op engine, or the run just ended): only
             // a real stray re-issues, exactly like the pre-retarget behavior.
-            if (lastGoal != null && targetPos.getSquaredDistance(lastGoal) < REISSUE_MOVE_SQ) {
+            if (lastGoal != null && targetPos.distSqr(lastGoal) < REISSUE_MOVE_SQ) {
                 return;
             }
         }
 
         if (distanceSq <= closeEnough * closeEnough) return; // near enough: idle
         boolean targetMoved = lastGoal == null
-                || targetPos.getSquaredDistance(lastGoal) >= REISSUE_MOVE_SQ;
+                || targetPos.distSqr(lastGoal) >= REISSUE_MOVE_SQ;
         if (cooldownTicks > 0) return;
         if (!targetMoved && distanceSq <= (keepDistance + 2) * (keepDistance + 2)) return;
 
