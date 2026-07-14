@@ -111,6 +111,7 @@ over, or after the target stays gone ~15s.
 | Command | Description |
 |---|---|
 | `/talos raytrace get <x> <y> <z>` (or bare `/talos raytrace <x> <y> <z>`) | Resolve a coordinate triple to a world point, reported to **3 decimals**, plus the block id there. |
+| `/talos raytrace simple\|advanced get <x> <y> <z>` | Same resolve, choosing the report: `simple` = the floored **block cell** (integers — stepping the forward axis walks adjacent cells), `advanced` = the exact 3dp point (the default). |
 | `/talos raytrace where [maxDist]` | Cast from the eyes along the look; report the first **block or entity** hit — exact point (3dp), id and distance. Default reach 64 (max 256). |
 | `/talos raytrace if block <id> [maxDist]` | Succeed (1) / fail (0) if the first hit is that block. |
 | `/talos raytrace if entity <selector> [maxDist]` | Succeed / fail if the first hit is a matching entity. |

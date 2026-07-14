@@ -838,12 +838,22 @@ public final class TalosCommands {
         com.mojang.brigadier.builder.LiteralArgumentBuilder<FabricClientCommandSource> raytrace =
                 ClientCommandManager.literal("raytrace");
 
-        // get / bare form: resolve a coordinate triple to a world point.
+        // get / bare form: resolve a coordinate triple to a world point. Bare and plain
+        // `get` report the exact point (advanced); the `simple`/`advanced` mode literals
+        // choose between the floored block cell (ints) and the exact 3dp point.
         raytrace.then(localCoord("x").then(localCoord("y").then(localCoord("z")
-                .executes(RaytraceCommand::get))));
+                .executes(context -> RaytraceCommand.get(context, false)))));
         raytrace.then(ClientCommandManager.literal("get")
                 .then(localCoord("x").then(localCoord("y").then(localCoord("z")
-                        .executes(RaytraceCommand::get)))));
+                        .executes(context -> RaytraceCommand.get(context, false))))));
+        raytrace.then(ClientCommandManager.literal("simple")
+                .then(ClientCommandManager.literal("get")
+                        .then(localCoord("x").then(localCoord("y").then(localCoord("z")
+                                .executes(context -> RaytraceCommand.get(context, true)))))));
+        raytrace.then(ClientCommandManager.literal("advanced")
+                .then(ClientCommandManager.literal("get")
+                        .then(localCoord("x").then(localCoord("y").then(localCoord("z")
+                                .executes(context -> RaytraceCommand.get(context, false)))))));
 
         // where [maxDist]: first block/entity hit along the look.
         raytrace.then(ClientCommandManager.literal("where")

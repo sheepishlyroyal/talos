@@ -34,7 +34,12 @@ final class RaytraceCommand {
 
     // ---- get -------------------------------------------------------------------------------
 
-    static int get(CommandContext<FabricClientCommandSource> context) {
+    /**
+     * {@code simple} reports the floored BLOCK CELL (integers — walking the forward axis
+     * steps through adjacent cells); {@code advanced} (and the bare/plain {@code get}
+     * forms) reports the exact point to 3 decimals.
+     */
+    static int get(CommandContext<FabricClientCommandSource> context, boolean simple) {
         ClientPlayerEntity player = context.getSource().getPlayer();
         Axis ax = context.getArgument("x", Axis.class);
         Axis ay = context.getArgument("y", Axis.class);
@@ -48,15 +53,21 @@ final class RaytraceCommand {
             return 0;
         }
 
+        BlockPos cell = BlockPos.ofFloored(point);
         String block = "unloaded";
         ClientWorld world = context.getSource().getClient().world;
         if (world != null) {
-            BlockPos cell = BlockPos.ofFloored(point);
             block = Registries.BLOCK.getId(world.getBlockState(cell).getBlock()).toString();
         }
-        context.getSource().sendFeedback(Text.literal(String.format(Locale.ROOT,
-                "§bpoint§f = %.3f %.3f %.3f §7(block: %s)",
-                point.x, point.y, point.z, block)));
+        if (simple) {
+            context.getSource().sendFeedback(Text.literal(String.format(Locale.ROOT,
+                    "§bblock§f = %d %d %d §7(%s)",
+                    cell.getX(), cell.getY(), cell.getZ(), block)));
+        } else {
+            context.getSource().sendFeedback(Text.literal(String.format(Locale.ROOT,
+                    "§bpoint§f = %.3f %.3f %.3f §7(block: %s)",
+                    point.x, point.y, point.z, block)));
+        }
         return 1;
     }
 
