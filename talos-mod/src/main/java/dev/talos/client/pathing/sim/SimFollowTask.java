@@ -256,9 +256,13 @@ public final class SimFollowTask extends TalosTask {
         // jump is reserved for climbing out onto a bank at the end of the swim.
         if (live.fluid() == MotionState.Fluid.WATER) {
             ClientPlayerEntity player = client.player;
+            // Climb out whenever the waypoint is a bank ABOVE us (even one block), not only
+            // when it sits above the measured surface — the strict check left the follower
+            // swimming against a 1-high ledge forever.
             boolean exitClimb = player != null
-                    && waypoint.position().y >= waterSurfaceY(player) - 0.25
-                    && horizontalDistance(live.position(), waypoint.position()) < 2.5;
+                    && (waypoint.position().y >= waterSurfaceY(player) - 0.25
+                            || waypoint.position().y > player.getY() + 0.3)
+                    && horizontalDistance(live.position(), waypoint.position()) < 3.5;
             return new Input(1, 0, exitClimb, true, false, yaw);
         }
         if (live.fluid() == MotionState.Fluid.LAVA) {
@@ -507,6 +511,21 @@ public final class SimFollowTask extends TalosTask {
             else if (blocking(feet.up())) block = feet.up();
             if (feet.getX() == destination.getX() && feet.getZ() == destination.getZ()) break;
         }
+        if (block == null) {
+            // The tunnel scan assumes a standing approach. From a swim (or any odd angle),
+            // fall back to the first blocking cell along the eye-to-waypoint line — this is
+            // what un-sticks "swimming" against a wall that a MINE waypoint says to dig.
+            Vec3d eye = player.getEyePos();
+            Vec3d toTarget = target.add(0.0, 0.5, 0.0).subtract(eye);
+            double length = toTarget.length();
+            if (length > 1.0E-3 && length <= 6.0) {
+                Vec3d direction = toTarget.multiply(1.0 / length);
+                for (double d = 0.5; d <= Math.min(length, 4.5); d += 0.25) {
+                    BlockPos cell = BlockPos.ofFloored(eye.add(direction.multiply(d)));
+                    if (blocking(cell)) { block = cell; break; }
+                }
+            }
+        }
         if (block == null) { breaking = null; return false; }
         status("mining");
         // Same aim language as the action cube-aim: yellow cube = the block being worked,
@@ -519,6 +538,11 @@ public final class SimFollowTask extends TalosTask {
                         face.x + 0.07, face.y + 0.07, face.z + 0.07),
                 AIM_GAZE_COLOR, PREDICTION_TTL * 3);
         releaseInputs();
+        // Mining while afloat: hold jump so buoyancy doesn't sink the player away from a
+        // dig line at or above them while the aim converges and the block breaks.
+        if (player.isTouchingWater() && target.y >= player.getY() - 0.5) {
+            client.options.jumpKey.setPressed(true);
+        }
         // Face the block with the eased look before a single swing: converge this tick,
         // dig on the tick the crosshair actually rests on it.
         if (!steerLook(player, Vec3d.ofCenter(block), 12.0)) return true;
@@ -851,6 +875,11 @@ public final class SimFollowTask extends TalosTask {
         double surface = waterSurfaceY(player);
         Vec3d target = waypoint.position();
         Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
+        // Exiting onto a bank: look UP at it. The surface-hold controller otherwise pins the
+        // gaze down at the waterline, which fights the climb-out.
+        if (target.y > feet.y + 0.3 && horizontalDistance(feet, target) < 3.5) {
+            return -25.0F;
+        }
         if (!surfacingForAir && target.y < surface - 2.0) {
             double horizontal = Math.max(horizontalDistance(feet, target), 0.001);
             return (float) Math.max(-60.0, Math.min(60.0,
