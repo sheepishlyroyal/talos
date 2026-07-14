@@ -254,6 +254,42 @@ public final class TalosNativeBridge {
             return new Pos(p.x, p.y, p.z);
         }));
     }
+    /** Feet/bottom-center position — the coordinate space blocks and hitboxes live in. */
+    @HostAccess.Export public Pos playerFeet() {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            return new Pos(client.player.getX(), client.player.getY(), client.player.getZ());
+        }));
+    }
+    /** Current view rotation as [yaw, pitch] in degrees (yaw wrapped to -180..180). */
+    @HostAccess.Export public double[] lookAngle() {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            return new double[]{
+                    net.minecraft.util.math.MathHelper.wrapDegrees(client.player.getYaw()),
+                    client.player.getPitch()};
+        }));
+    }
+    /** Block cell the crosshair targets right now, or null (air, out of reach, entity). */
+    @HostAccess.Export public Pos lookingAtBlock() {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            if (client.crosshairTarget instanceof BlockHitResult hit
+                    && hit.getType() == HitResult.Type.BLOCK) {
+                BlockPos pos = hit.getBlockPos();
+                return new Pos(pos.getX(), pos.getY(), pos.getZ());
+            }
+            return null;
+        }));
+    }
+    /** Registry id of the block at a cell, e.g. "minecraft:stone" ("minecraft:air" if empty). */
+    @HostAccess.Export public String blockAt(int x, int y, int z) {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            return Registries.BLOCK.getId(
+                    client.world.getBlockState(new BlockPos(x, y, z)).getBlock()).toString();
+        }));
+    }
     @HostAccess.Export public void log(String message) { LOGGER.info("[Python] {}", message); }
     @HostAccess.Export public void waitBetween(double a, double b) throws InterruptedException {
         checkValid();

@@ -33,11 +33,16 @@ public final class TalosWebSocketServer extends WebSocketServer {
     private final ConcurrentHashMap<WebSocket, Set<String>> pushed = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<WebSocket, String> pendingRuns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<WebSocket, CompletableFuture<Void>> activeRuns = new ConcurrentHashMap<>();
-    // The bridge is allowed by default: it only ever binds 127.0.0.1, requires the local
-    // token file, and rejects browser origins — the remaining risk is the local user, who
-    // is exactly who is pressing Run in VS Code. /talos bridge allow stays as a no-op arm.
-    private volatile boolean sessionAllowed = true;
+    // Armed either by /talos bridge allow (which persists the choice) or automatically on
+    // startup when a previous session already allowed it. The transport is always guarded
+    // regardless: 127.0.0.1 bind, token-file auth, browser origins rejected.
+    private volatile boolean sessionAllowed = isPersistentlyAllowed();
     private volatile boolean confirmationRequested;
+
+    private static boolean isPersistentlyAllowed() {
+        var config = dev.talos.client.config.TalosConfigManager.get();
+        return config != null && config.bridgeAutoAccept;
+    }
 
     public TalosWebSocketServer(BridgeAuth auth) throws IOException {
         this(auth, PORT);
@@ -171,11 +176,12 @@ public final class TalosWebSocketServer extends WebSocketServer {
         if (active != null) send(connection, BridgeProtocol.done(false, "Stopped"));
     }
 
-    /** Arms script execution until this Minecraft client process exits. */
+    /** Arms script execution and persists the choice, so future sessions start allowed. */
     public int allowSession() {
         sessionAllowed = true;
         confirmationRequested = false;
-        chat("Talos VS Code bridge allowed for this session");
+        dev.talos.client.config.TalosConfigManager.setBridgeAutoAccept(true);
+        chat("Talos VS Code bridge allowed (saved for future sessions)");
         pendingRuns.forEach((connection, name) -> {
             if (pendingRuns.remove(connection, name) && authenticated.contains(connection)) runScript(connection, name);
         });

@@ -11,6 +11,8 @@ public final class TalosConfig {
     public double blurStrength = 1.0;
     public int uiPanelX = -1;
     public int uiPanelY = -1;
-    public boolean bridgeAutoAccept = true;
+    /** Persisted by /talos bridge allow: once armed, scripts pushed from VS Code run
+     *  without re-confirmation in every future session until the config is edited. */
+    public boolean bridgeAutoAccept = false;
     public long seed = 0L;
 }

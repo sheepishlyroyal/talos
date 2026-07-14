@@ -185,5 +185,45 @@ def look_at(x, y=None, z=None):
     return _call(_talos_host.lookAt, float(x), float(y), float(z))
 
 def player_pos():
-    """Return an immutable player position snapshot."""
+    """Return the player's EYE position snapshot (use player_feet() for the body)."""
     return _wrap_pos(_call(_talos_host.playerPos))
+
+def player_feet():
+    """Return the player's feet (bottom-center) position — the block-space coordinate."""
+    return _wrap_pos(_call(_talos_host.playerFeet))
+
+def look_angle():
+    """Return the current view rotation as a (yaw, pitch) tuple in degrees.
+
+    Yaw is wrapped to -180..180 (0 = south, 90 = west); pitch is -90 (up) to 90 (down).
+    """
+    angles = _call(_talos_host.lookAngle)
+    return (float(angles[0]), float(angles[1]))
+
+def looking_at():
+    """Return the Pos of the block under the crosshair, or None (air/entity/out of reach).
+
+    Truthy like find_block: `if talos.looking_at(): ...`
+    """
+    return _wrap_pos(_call(_talos_host.lookingAtBlock))
+
+def block_at(x, y=None, z=None):
+    """Return the block id at a cell, e.g. "minecraft:stone" ("minecraft:air" if empty)."""
+    x, y, z = _coords(x, y, z)
+    return _call(_talos_host.blockAt, int(x), int(y), int(z))
+
+def on_edge(margin=0.3):
+    """True when the player's feet stand within `margin` of a block boundary on X or Z.
+
+    The player hitbox half-width is 0.3, so the default margin means "part of the
+    hitbox overhangs the neighboring cell". Combine with block_at() to ask whether
+    that neighbor is a drop:
+
+        feet = talos.player_feet()
+        if talos.on_edge() and talos.block_at(feet.x + 0.5, feet.y - 1, feet.z) == "minecraft:air":
+            ...
+    """
+    feet = player_feet()
+    fx = feet.x % 1.0  # fractional position inside the cell, 0..1
+    fz = feet.z % 1.0
+    return min(fx, 1.0 - fx) < margin or min(fz, 1.0 - fz) < margin

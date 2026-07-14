@@ -2,7 +2,7 @@
   "name": "talos",
   "displayName": "Talos Scripting",
   "description": "Push and run Python automation scripts against the Talos Minecraft Fabric mod over a local WebSocket, with live log streaming.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "talos",
   "private": true,
   "engines": {
@@ -88,7 +88,7 @@
         "talos.host": {
           "type": "string",
           "default": "127.0.0.1",
-          "description": "Host the Talos mod's WebSocket server listens on. Must be a loopback address (127.0.0.1, localhost, or ::1) — the extension refuses to connect elsewhere."
+          "description": "Host the Talos mod's WebSocket server listens on. Must be a loopback address (127.0.0.1, localhost, or ::1) \u2014 the extension refuses to connect elsewhere."
         },
         "talos.port": {
           "type": "number",
@@ -103,7 +103,7 @@
         "talos.runOnSave": {
           "type": "boolean",
           "default": false,
-          "description": "When enabled, saving a Python (.py) file automatically re-pushes and re-runs it in the running Minecraft session (live reload — no game restart). Toggle from the editor title bar or the command palette."
+          "description": "When enabled, saving a Python (.py) file automatically re-pushes and re-runs it in the running Minecraft session (live reload \u2014 no game restart). Toggle from the editor title bar or the command palette."
         }
       }
     }

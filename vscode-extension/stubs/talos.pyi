@@ -273,6 +273,33 @@ def player_pos() -> Pos:
     """The player's current eye position snapshot."""
     ...
 
+def player_feet() -> Pos:
+    """The player's feet (bottom-center) position — the block-space coordinate."""
+    ...
+
+def look_angle() -> tuple[float, float]:
+    """Current view rotation as (yaw, pitch) in degrees.
+
+    Yaw is wrapped to -180..180 (0 = south, 90 = west); pitch is -90 (up) to 90 (down)."""
+    ...
+
+def looking_at() -> Optional[Pos]:
+    """The block cell under the crosshair, or None (air, entity, out of reach).
+
+    Truthy like find_block: `if talos.looking_at(): ...`"""
+    ...
+
+def block_at(x: Union[float, _PosLike], y: float = ..., z: float = ...) -> str:
+    """Block id at a cell, e.g. "minecraft:stone" ("minecraft:air" if empty)."""
+    ...
+
+def on_edge(margin: float = 0.3) -> bool:
+    """True when the feet stand within `margin` of a block boundary on X or Z.
+
+    The player hitbox half-width is 0.3, so the default means part of the hitbox
+    overhangs the neighboring cell. Combine with block_at() to detect a drop."""
+    ...
+
 # --- events / misc ------------------------------------------------------------
 
 def on(event: str) -> Callable[[_EventHandler], _EventHandler]:

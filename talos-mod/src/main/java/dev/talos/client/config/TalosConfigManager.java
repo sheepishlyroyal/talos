@@ -116,4 +116,10 @@ public final class TalosConfigManager {
         config.activeProfile = profile.name().toUpperCase(Locale.ROOT);
         save();
     }
+
+    /** Persists the VS Code bridge arming decision (/talos bridge allow survives restarts). */
+    public static synchronized void setBridgeAutoAccept(boolean allowed) {
+        config.bridgeAutoAccept = allowed;
+        save();
+    }
 }
