@@ -350,5 +350,14 @@ class _Aio:
         """Awaitable talos.wait_between: humanized random pause, other tasks keep running."""
         return sleep(_errors.call(_talos_host.randomBetween, float(a), float(b)))
 
+    @staticmethod
+    def input(prompt="Script is waiting for input"):
+        """Awaitable talos.input: other tasks keep running while the user types.
+
+        The user's next plain chat message is captured (never sent to the server)
+        and returned. Commands ("/...") are not captured.
+        """
+        return _submit(_talos_host.submitUserInput, str(prompt))
+
 
 aio = _Aio()

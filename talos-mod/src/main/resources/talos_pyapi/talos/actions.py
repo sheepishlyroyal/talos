@@ -5,6 +5,8 @@ Positional actions accept either explicit coordinates or any snapshot with a
 position: goto(x, y, z), goto(pos), and goto(entity) all work.
 """
 
+import math as _math
+
 _errors = __import__("sys").modules["talos.errors"]
 _call = _errors.call
 
@@ -62,8 +64,57 @@ def _wrap_entity(raw):
                                            _wrap_pos(_axis(raw, "pos")))
 
 
+def _token_offset(token):
+    """Numeric tail of a '~'/'^' token: '~' -> 0, '~2.5' -> 2.5."""
+    tail = token.strip()[1:]
+    return float(tail) if tail else 0.0
+
+
+def _resolve_relative(x, y, z):
+    """Resolve Minecraft-style '~' (player-relative) and '^' (look-relative) tokens.
+
+    '~ ~ ~' anchors at the player's FEET, exactly like vanilla commands.
+    '^left ^up ^forward' anchors at the player's EYES and follows the gaze, so
+    block_at("^", "^", "^3") is the cell three blocks along your crosshair line.
+    Returns None when no component is a string token.
+    """
+    tokens = (x, y, z)
+    caret = tuple(isinstance(t, str) and t.strip().startswith("^") for t in tokens)
+    tilde = tuple(isinstance(t, str) and t.strip().startswith("~") for t in tokens)
+    if not any(caret) and not any(tilde):
+        return None
+    if any(caret):
+        if not all(caret):
+            raise ValueError("cannot mix ^ with ~ or absolute coordinates")
+        eye = player_pos()
+        yaw, pitch = look_angle()
+        yaw_r = _math.radians(yaw)
+        pitch_r = _math.radians(pitch)
+        sin_yaw, cos_yaw = _math.sin(yaw_r), _math.cos(yaw_r)
+        sin_pitch, cos_pitch = _math.sin(pitch_r), _math.cos(pitch_r)
+        forward = (-sin_yaw * cos_pitch, -sin_pitch, cos_yaw * cos_pitch)
+        up = (-sin_yaw * sin_pitch, cos_pitch, cos_yaw * sin_pitch)
+        left = (up[1] * forward[2] - up[2] * forward[1],
+                up[2] * forward[0] - up[0] * forward[2],
+                up[0] * forward[1] - up[1] * forward[0])
+        lx, ly, lz = (_token_offset(t) for t in tokens)
+        return (eye.x + left[0] * lx + up[0] * ly + forward[0] * lz,
+                eye.y + left[1] * lx + up[1] * ly + forward[1] * lz,
+                eye.z + left[2] * lx + up[2] * ly + forward[2] * lz)
+    feet = player_feet()
+    base = (feet.x, feet.y, feet.z)
+    return tuple(b + _token_offset(t) if is_tilde else float(t)
+                 for t, b, is_tilde in zip(tokens, base, tilde))
+
+
 def _coords(x, y=None, z=None):
-    """Accept (x, y, z) numbers or a single position-bearing snapshot."""
+    """Accept (x, y, z) numbers, '~'/'^' tokens, '~ ~1 ~' strings, or a snapshot."""
+    if isinstance(x, str) and y is None and z is None:
+        parts = x.split()
+        if len(parts) == 3:
+            x, y, z = parts
+        else:
+            raise ValueError("a single coordinate string needs three parts, e.g. '~ ~1 ~'")
     if y is None and z is None:
         p = getattr(x, "pos", x)
         if callable(p):
@@ -71,7 +122,10 @@ def _coords(x, y=None, z=None):
         return _axis(p, "x"), _axis(p, "y"), _axis(p, "z")
     if y is None or z is None:
         raise ValueError("expected all of x, y, z (or a single position)")
-    return x, y, z
+    relative = _resolve_relative(x, y, z)
+    if relative is not None:
+        return relative
+    return float(x), float(y), float(z)
 
 
 def goto(x, y=None, z=None):
@@ -211,6 +265,21 @@ def block_at(x, y=None, z=None):
     """Return the block id at a cell, e.g. "minecraft:stone" ("minecraft:air" if empty)."""
     x, y, z = _coords(x, y, z)
     return _call(_talos_host.blockAt, int(x), int(y), int(z))
+
+def input(prompt="Script is waiting for input"):
+    """Ask the user for input via chat and block until they answer.
+
+    The prompt is shown in chat; the user's NEXT plain chat message is captured —
+    it never reaches the server — and returned as a string. Commands ("/...")
+    are not captured, so /talos script stop still works while waiting.
+
+        answer = talos.input("How many logs?")
+        count = int(answer)
+
+    Blocking here only pauses this script (or task); use `await talos.aio.input(...)`
+    inside async tasks to let other tasks keep running.
+    """
+    return _call(_talos_host.userInput, str(prompt))
 
 def on_edge(margin=0.3):
     """True when the player's feet stand within `margin` of a block boundary on X or Z.

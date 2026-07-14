@@ -22,6 +22,23 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(ClientPlayNetworkHandler.class)
 public abstract class ClientPlayNetworkHandlerMixin {
+    /**
+     * Script input capture: while a script is awaiting talos.input(), the next PLAIN chat
+     * message is consumed here — cancelled before it is sent to the server — and handed to
+     * the script. Commands take the sendChatCommand path and are never captured.
+     */
+    @Inject(method = "sendChatMessage", at = @At("HEAD"), cancellable = true)
+    private void talos$captureScriptInput(String message, CallbackInfo ci) {
+        if (dev.talos.client.script.ScriptInputGate.offer(message)) {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player != null) {
+                client.player.sendMessage(Text.literal(
+                        "§bTalos §7» §finput received: §7" + message), false);
+            }
+            ci.cancel();
+        }
+    }
+
     @Inject(method = "onItemPickupAnimation", at = @At("HEAD"))
     private void talos$onItemPickup(ItemPickupAnimationS2CPacket packet, CallbackInfo ci) {
         if (!MinecraftClient.getInstance().isOnThread()) return;

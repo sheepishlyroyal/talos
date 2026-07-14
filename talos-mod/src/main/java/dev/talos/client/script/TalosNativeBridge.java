@@ -282,6 +282,27 @@ public final class TalosNativeBridge {
             return null;
         }));
     }
+    /** Blocks the script until the user's next plain chat message, which never reaches chat. */
+    @HostAccess.Export public String userInput(String prompt) {
+        return await(inputFuture(prompt));
+    }
+    @HostAccess.Export public FutureHandle submitUserInput(String prompt) {
+        checkValid();
+        return handle(inputFuture(prompt));
+    }
+    private CompletableFuture<String> inputFuture(String prompt) {
+        checkValid();
+        CompletableFuture<String> future = ScriptInputGate.request(prompt);
+        game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            client.player.sendMessage(net.minecraft.text.Text.literal(
+                    "§bTalos §7» §f" + prompt
+                            + " §7(answer in chat — the message stays local)"), false);
+            return null;
+        });
+        return future;
+    }
+
     /** Registry id of the block at a cell, e.g. "minecraft:stone" ("minecraft:air" if empty). */
     @HostAccess.Export public String blockAt(int x, int y, int z) {
         return await(game.submit(() -> {
