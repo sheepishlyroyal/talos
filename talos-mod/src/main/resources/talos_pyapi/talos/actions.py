@@ -118,6 +118,15 @@ def _wrap_stack(raw):
             "count": int(_axis(raw, "count"))}
 
 
+def _id(registry_id):
+    """Normalize a registry id: bare names get the minecraft: namespace.
+
+    Every id-taking function runs through this, so "dirt" and "minecraft:dirt"
+    are interchangeable everywhere — same rule as the /talos commands."""
+    name = str(registry_id)
+    return name if ":" in name else "minecraft:" + name
+
+
 def _flatten_names(values, kind="name"):
     """Normalize varargs: f(a, b), f([a, b]), and f((a, b)) all mean the same."""
     if len(values) == 1 and isinstance(values[0], (list, tuple)):
@@ -208,7 +217,7 @@ def goto_xz(x, z):
 def goto_block(block_id, radius=64):
     """Path to the nearest matching block, retrying the next-nearest candidate
     (up to 5) when one proves unreachable. Raises PathFailedError if none work."""
-    return _call(_talos_host.gotoBlockType, str(block_id), int(radius))
+    return _call(_talos_host.gotoBlockType, _id(block_id), int(radius))
 
 def follow(target, distance=3.0):
     """Follow any entity, keeping ~distance blocks, until following ENDS.
@@ -293,7 +302,7 @@ def place_block(x=None, y=None, z=None, block_id=None):
         raise ValueError("place_block needs all of x, y, z (or none, to place where looking)")
     if block_id is None:
         return _call(_talos_host.placeBlock, int(x), int(y), int(z))
-    return _call(_talos_host.placeBlockAs, int(x), int(y), int(z), str(block_id))
+    return _call(_talos_host.placeBlockAs, int(x), int(y), int(z), _id(block_id))
 
 
 def place_look():
@@ -362,7 +371,7 @@ def selected_slot():
 
 def count(item_id):
     """Total number of an item across the player's 36 main inventory slots."""
-    wanted = str(item_id)
+    wanted = _id(item_id)
     return sum(entry["count"] for entry in inventory() if entry["id"] == wanted)
 
 def has(item_id):
@@ -371,7 +380,7 @@ def has(item_id):
 
 def find_slot(item_id):
     """First PlayerInventory slot index (0-35, see inventory()) holding the item, or None."""
-    wanted = str(item_id)
+    wanted = _id(item_id)
     for entry in inventory():
         if entry["id"] == wanted:
             return entry["slot"]
@@ -394,7 +403,7 @@ def deposit(item_id, amount):
     (0 when the container is full; deposit(t, talos.count(t)) empties you of t).
     Raises if no container screen is open.
     """
-    return int(_call(_talos_host.deposit, str(item_id), int(amount)))
+    return int(_call(_talos_host.deposit, _id(item_id), int(amount)))
 
 def withdraw(item_id, amount):
     """Move up to `amount` items of a type from the open container into the player.
@@ -402,7 +411,7 @@ def withdraw(item_id, amount):
     Mirror of deposit(): returns the count actually moved (0 when your
     inventory is full or the container has none). Raises if no container is open.
     """
-    return int(_call(_talos_host.withdraw, str(item_id), int(amount)))
+    return int(_call(_talos_host.withdraw, _id(item_id), int(amount)))
 
 def craft(item_id, count=1):
     """Craft `count` results of an OUTPUT item via the recipe book.
@@ -416,7 +425,7 @@ def craft(item_id, count=1):
     (count=2 for oak planks yields 8). Waits for the server to fill the grid
     between crafts; raises (reporting partial progress) when ingredients run out.
     """
-    return _call(_talos_host.craft, str(item_id), int(count))
+    return _call(_talos_host.craft, _id(item_id), int(count))
 
 def screen():
     """Name of the open screen, or None when none is open.
@@ -564,9 +573,9 @@ def raytrace_if(block=None, entity=None, max_distance=64.0):
     if hit is None:
         return False
     if block is not None:
-        want = block if ":" in str(block) else "minecraft:" + str(block)
+        want = _id(block)
         return hit.type == "block" and hit.id == want
-    want = entity if ":" in str(entity) else "minecraft:" + str(entity)
+    want = _id(entity)
     return hit.type == "entity" and hit.id == want
 
 def move_ahead(distance):

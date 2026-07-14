@@ -148,7 +148,16 @@ public final class AimController {
      * chosen face so the cube's true center remains the expected value.
      */
     private Vec3d chooseMark(Vec3d cubeCenter) {
-        Vec3d toEye = client.player.getEyePos().subtract(cubeCenter);
+        return markOn(cubeCenter, client.player.getEyePos(), rng);
+    }
+
+    /**
+     * Shared cube-aim mark chooser (also used by navigation's gaze): picks a spot on a
+     * player-visible face of the 1m cube at {@code cubeCenter}, faces weighted by visible
+     * area, spot center-biased on the chosen face.
+     */
+    public static Vec3d markOn(Vec3d cubeCenter, Vec3d eye, SeededRng rng) {
+        Vec3d toEye = eye.subtract(cubeCenter);
         if (toEye.lengthSquared() < 1.0E-6) return cubeCenter;
         toEye = toEye.normalize();
         Vec3d[] normals = {

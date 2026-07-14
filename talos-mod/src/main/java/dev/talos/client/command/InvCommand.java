@@ -43,13 +43,13 @@ public final class InvCommand {
                 .then(ClientCommandManager.literal("deposit")
                         .then(ClientCommandManager.literal("all")
                                 .executes(context -> transfer(context.getSource(), null, true)))
-                        .then(ClientCommandManager.argument("item", StringArgumentType.string())
+                        .then(ClientCommandManager.argument("item", IdArgumentType.itemId())
                                 .executes(context -> transfer(context.getSource(),
                                         StringArgumentType.getString(context, "item"), true))))
                 .then(ClientCommandManager.literal("withdraw")
                         .then(ClientCommandManager.literal("all")
                                 .executes(context -> transfer(context.getSource(), null, false)))
-                        .then(ClientCommandManager.argument("item", StringArgumentType.string())
+                        .then(ClientCommandManager.argument("item", IdArgumentType.itemId())
                                 .executes(context -> transfer(context.getSource(),
                                         StringArgumentType.getString(context, "item"), false))))
                 .then(ClientCommandManager.literal("armor")

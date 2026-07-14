@@ -44,7 +44,7 @@ public final class TrackCommand {
                     return 1;
                 }))
                 .then(ClientCommandManager.literal("block")
-                        .then(ClientCommandManager.argument("block", StringArgumentType.string())
+                        .then(ClientCommandManager.argument("block", IdArgumentType.blockId())
                                 .executes(context -> start(context.getSource(), null,
                                         StringArgumentType.getString(context, "block"), 0))
                                 .then(ClientCommandManager.argument("index",

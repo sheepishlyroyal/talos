@@ -62,7 +62,7 @@ matching Fabric API build.
 ## Quick start
 
 ```
-/talos goto ~ ~ ~50            # walk 50 blocks north, tunnelling/bridging as needed
+/talos goto xyz ~ ~ ~50        # walk 50 blocks north, tunnelling/bridging as needed
 /talos raytrace where          # what am I looking at? (block or entity, to 3dp)
 /talos raytrace ^ ^ 5          # world coords of the point 5 blocks ahead
 /talos follow @e[type=cow]     # trail the nearest cow
@@ -80,21 +80,24 @@ Every command lives under `/talos`; `/talos` is a full alias (both prefixes work
 
 | Command | Description |
 |---|---|
-| `/talos goto <x> <y> <z>` | Path to an exact block. Coordinates accept `~`-relative syntax. |
-| `/talos goto <x> <z>` / `/talos xz <x> <z>` | Path to an X/Z column at your current Y. |
+| `/talos goto xyz <x> <y> <z>` | Path to an exact block. Coordinates accept `~`-relative syntax. |
+| `/talos goto xyz <x> <z>` / `/talos xz <x> <z>` | Path to an X/Z column at your current Y. |
 | `/talos goto near <x> <y> <z> <range>` | Path to within `range` blocks of a position. |
 | `/talos goto block <id> [radius]` | Path to the **nearest** matching block; if that one is unreachable it blacklists it and retries the next-nearest (up to 5 candidates). |
-| `/talos follow <target> [distance]` | Follow **any entity** until following ends. `target` is a player name, an entity type, or a selector. |
+| `/talos follow <target> [distance]` | Follow **any entity** until following ends. The goal live-tracks the target every tick it moves — no waiting for it to stray. `target` is a player name, an entity type, or a selector. |
 | `/talos find block <blockPredicate> [radius]` | Report the nearest matching block in loaded chunks. |
 | `/talos glow <x> <y> <z> [seconds]` | Wireframe box around a block, to confirm a lookup. |
 
 ```
-/talos goto ~ ~10 ~
+/talos goto xyz ~ ~10 ~
 /talos goto near 100 64 200 3
-/talos goto block minecraft:diamond_ore 32
+/talos goto block diamond_ore 32        # ids work bare or namespaced everywhere
 /talos follow Steve 4
 /talos follow @e[type=cow,distance=..20]
 ```
+
+Every block/item id argument accepts **both** the bare and the namespaced form (`stone` and
+`minecraft:stone`), and tab-completion suggests both — the same rule the Python API applies.
 
 `/talos goto` runs with mining **and** placing enabled by default — it tunnels through walls, bridges
 gaps, digs vertical shafts, nerdpoles up and parkours across, all through the same simulated-physics
@@ -172,6 +175,14 @@ passes within 0.4m of the cube, with per-tick jitter and a red dotted preview li
 curve the crosshair is about to draw. A per-session quadratic speed modulation (peaking mid-flight,
 never linear) adds a small random speed swell/sag and a slight bow to the path. `/talos track` keeps
 this same aim session alive against a moving target.
+
+Navigation gaze speaks the same language: while `/talos goto` walks, a **full-block yellow cube** is
+placed on a random, center-biased point of the look-ahead target's hitbox, the red mark lands on a
+visible face (weighted by visible area, random spot on the face), and the eased view — yaw *and*
+pitch — converges on that mark. The walking bearing stays honest: the mark may pull the gaze only a
+few degrees off the route line, and the physics rollouts still choose the actual movement inputs.
+The blue/green/purple route checkpoint boxes are re-drawn from the live follower every second, so
+they stay visible for the whole run — every run — and clear the moment it ends.
 
 ### Input automation
 
@@ -278,7 +289,8 @@ session only), `/talos on list` (dumps every trigger's grammar).
 | `/talos script stop` | Hard-stop the running script, even mid-loop. |
 | `/talos script profile` | Toggle per-event dispatch profiling (prints a report when toggled off). |
 | `/talos py <code>` | Run a Python one-liner; a trailing expression echoes its repr. Shares the running session's globals if one is live. |
-| `/talos cmd <name> [args]` | Invoke a script-registered command (`@talos.command(...)`) whose name would otherwise collide with a built-in. |
+| `/talos <name> [args]` | Script-registered commands (`@talos.command(...)`) work directly as `/talos <name>` — built-ins always win first. |
+| `/talos cmd <name> [args]` | Explicit dispatch for a script command whose name shadows a built-in. |
 | `/talos example [name]` | Bare form lists every bundled example; with a name, writes a commented reference script to `talos/scripts/example_<name>.py`. |
 | `/talos script editor` | Open the in-game Python editor screen. |
 | `/talos bridge allow` / `/talos bridge status` | Allow / inspect the VS Code WebSocket bridge for this session. |

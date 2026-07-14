@@ -70,7 +70,7 @@ public final class SimFollowTask extends TalosTask {
 
     private final MinecraftClient client;
     private PlannedRoute route;
-    private final Predicate<BlockPos> goal;
+    private volatile Predicate<BlockPos> goal;
     private final CompletableFuture<PathResult> future;
     private Runnable replanRequest;
     private boolean replanRequested;
@@ -97,6 +97,13 @@ public final class SimFollowTask extends TalosTask {
     private double maxTurnSpeed;
     private double pitchWander;
     private int pitchWanderTicks;
+    // Navigation cube-aim session: the gaze target is not the waypoint itself but a random
+    // spot (the red mark) on a visible face of a full-block yellow cube, itself centered on
+    // a random center-biased point of the aim anchor's standing hitbox. Resampled whenever
+    // the anchor strays, so the gaze wanders the way a walking player's does.
+    private Vec3d navAnchor;
+    private Vec3d navCubeCenter;
+    private Vec3d navMark;
     // The random look noise is PRE-SAMPLED: slot 0 is applied to the real view this tick,
     // slot i feeds simulated tick i of every rollout/prediction. Random to an observer,
     // fully known to the simulator — so predictions include the wobble before it happens.
@@ -145,6 +152,9 @@ public final class SimFollowTask extends TalosTask {
      * it latched silenced extensions exactly while the route was fraying.
      */
     public void extensionSettled() { replanRequested = false; }
+
+    /** Moving-goal retarget: refresh the arrival test so we stop at the NEW target. */
+    public void setGoal(Predicate<BlockPos> fresh) { if (fresh != null) this.goal = fresh; }
 
     /** Hot-swap in a fresher plan without releasing keys; passed waypoints self-advance. */
     public void swapRoute(PlannedRoute replacement) {
@@ -281,6 +291,11 @@ public final class SimFollowTask extends TalosTask {
             return;
         }
 
+        // Keep the checkpoint boxes alive for the WHOLE run: the engine's plan-time draw
+        // had a fixed TTL, so any goto outliving it (and every later replan gap) went
+        // visually dark. Re-drawing the remaining route once a second is the fix.
+        if (ticks % 20 == 0) RouteRenderer.render(route, index);
+
         PlannedRoute.Waypoint waypoint = route.waypoints().get(index);
         // Long routes can outrun the server's chunk streaming: a waypoint in an unloaded
         // chunk means every rollout would read air and steer into fiction. Hold at the
@@ -330,9 +345,16 @@ public final class SimFollowTask extends TalosTask {
         MovementProfile profile = MovementProfile.capture(player); // Effects/attributes are live.
         advanceJitter(); // pre-sampled look noise: slot 0 is THIS tick, the rest feed rollouts
         Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
-        Vec3d aim = aimPoint(feet, waypoint);
+        Vec3d anchor = aimPoint(feet, waypoint);
+        Vec3d aim = navAim(player, anchor);
         renderAim(player, aim);
-        float yaw = yawTo(feet, aim);
+        // The gaze pursues the randomized mark, but the WALKING bearing must stay honest:
+        // cap the mark's pull to a small deviation from the route bearing so a sideways
+        // mark at close range can never steer the body off the line the rollouts verify.
+        float routeYaw = yawTo(feet, anchor);
+        float markPull = net.minecraft.util.math.MathHelper.wrapDegrees(
+                yawTo(feet, aim) - routeYaw);
+        float yaw = routeYaw + Math.max(-10.0F, Math.min(10.0F, markPull));
         Input selected = chooseInput(live, profile, waypoint, yaw);
         if (live.fluid() == MotionState.Fluid.WATER) {
             updateAirMode(player);
@@ -633,6 +655,13 @@ public final class SimFollowTask extends TalosTask {
             if (landing != null && approachingFinal) {
                 score -= overshoot(landing.position(), finalFrom, finalTarget) * 220.0;
             }
+            // Eagerness bias: a sprint-jump whose landing proved safe wins ties (and
+            // near-ties) against a plain run. The hop is marginally faster and reads like
+            // a player who WANTS to be moving; every safety veto above still applies.
+            if (candidate.jump() && candidate.sprint() && !brakeNeeded && !approachingFinal
+                    && !rolloutMisfit && !(live.onGround() && landing == null)) {
+                score += 5.0;
+            }
             if (brakeNeeded) {
                 if (isBrake(candidate)) score += 18.0;
                 if (candidate.sprint() && !precisionLaunch) score -= 40.0;
@@ -915,20 +944,48 @@ public final class SimFollowTask extends TalosTask {
     }
 
     /**
-     * Always-visible aim readout while navigating: yellow marker = the point steering wants
-     * to face (the blended look-ahead target), red dot = where the crosshair points right
-     * now at that same depth. The red dot easing onto the yellow marker IS the humanized
-     * look, made visible.
+     * Navigation gaze target, cube-aim language (same as the action aim): around the
+     * blended look-ahead anchor a FULL-BLOCK yellow cube is placed, centered on a random
+     * center-biased point of the anchor's standing hitbox; the red mark is a random spot on
+     * one of the cube's player-visible faces, weighted by visible surface area. The session
+     * holds while the anchor drifts a little and resamples once it strays — so the gaze
+     * hops between plausible rest points instead of tracking a mathematical line.
      */
-    private void renderAim(ClientPlayerEntity player, Vec3d aim) {
-        Vec3d eyeTarget = aim.add(0.0, 1.62, 0.0); // head of the next hitbox, where gaze rests
+    private Vec3d navAim(ClientPlayerEntity player, Vec3d anchor) {
+        if (navAnchor == null || anchor.squaredDistanceTo(navAnchor) > 0.6 * 0.6
+                || navMark == null) {
+            navAnchor = anchor;
+            // Triangular [-1,1] offsets: sloppy but center-biased, like the action cube.
+            double u = steerRng.nextDouble() + steerRng.nextDouble() - 1.0;
+            double v = steerRng.nextDouble() + steerRng.nextDouble() - 1.0;
+            double w = steerRng.nextDouble() + steerRng.nextDouble() - 1.0;
+            // Anchor is a FEET position; the stand hitbox is 0.6 wide and 1.8 tall.
+            navCubeCenter = anchor.add(u * 0.3, 0.9 + v * 0.45, w * 0.3);
+            navMark = dev.talos.client.action.AimController.markOn(
+                    navCubeCenter, player.getEyePos(), steerRng);
+        }
+        return navMark;
+    }
+
+    /**
+     * Always-visible aim readout while navigating: yellow full-block cube = the aim cube on
+     * the look-ahead target, red mark = the random face spot steering wants to face, red
+     * dot = where the crosshair points right now at that same depth. The red dot easing
+     * onto the red mark IS the humanized look, made visible.
+     */
+    private void renderAim(ClientPlayerEntity player, Vec3d mark) {
+        if (navCubeCenter == null) return;
         RenderQueue.add("talos-goto-aim",
-                new Box(eyeTarget.x - 0.09, eyeTarget.y - 0.09, eyeTarget.z - 0.09,
-                        eyeTarget.x + 0.09, eyeTarget.y + 0.09, eyeTarget.z + 0.09),
+                new Box(navCubeCenter.x - 0.5, navCubeCenter.y - 0.5, navCubeCenter.z - 0.5,
+                        navCubeCenter.x + 0.5, navCubeCenter.y + 0.5, navCubeCenter.z + 0.5),
                 AIM_TARGET_COLOR, PREDICTION_TTL);
+        RenderQueue.add("talos-goto-mark",
+                new Box(mark.x - 0.07, mark.y - 0.07, mark.z - 0.07,
+                        mark.x + 0.07, mark.y + 0.07, mark.z + 0.07),
+                AIM_GAZE_COLOR, PREDICTION_TTL);
         Vec3d eye = player.getEyePos();
         Vec3d gaze = eye.add(player.getRotationVecClient()
-                .multiply(Math.max(eye.distanceTo(eyeTarget), 1.0)));
+                .multiply(Math.max(eye.distanceTo(mark), 1.0)));
         RenderQueue.add("talos-goto-gaze",
                 new Box(gaze.x - 0.05, gaze.y - 0.05, gaze.z - 0.05,
                         gaze.x + 0.05, gaze.y + 0.05, gaze.z + 0.05),
@@ -1056,11 +1113,11 @@ public final class SimFollowTask extends TalosTask {
             pitchWander = steerRng.nextGaussian() * 3.5;
         }
         Vec3d eye = player.getEyePos();
-        Vec3d target = waypoint.position();
+        // Gaze rests on the red mark of the navigation aim cube, so yaw and pitch converge
+        // on the SAME randomized point; the waypoint head is only the sessionless fallback.
+        Vec3d target = navMark != null ? navMark : waypoint.position().add(0.0, 1.62, 0.0);
         double horizontal = Math.max(horizontalDistance(eye, target), 3.0);
-        // Gaze rests on the HEAD of the next hitbox (eye height above its feet), so climbs
-        // and jumps are sighted at the level the body actually has to arrive at.
-        double toward = Math.toDegrees(Math.atan2(eye.y - (target.y + 1.62), horizontal));
+        double toward = Math.toDegrees(Math.atan2(eye.y - target.y, horizontal));
         double desired = Math.max(-30.0, Math.min(35.0, toward + pitchWander));
         double step = Math.max(-2.5, Math.min(2.5, desired - player.getPitch()));
         player.setPitch((float) (player.getPitch() + step
@@ -1194,6 +1251,7 @@ public final class SimFollowTask extends TalosTask {
     public void cancel() { finish(false, "Pathing cancelled"); _break(); }
 
     private void finish(boolean success, String detail) {
+        RouteRenderer.clear();
         releaseInputs();
         if (client.player != null) client.player.sendMessage(Text.literal(
                 (success ? "§aTalos §7» §f" : "§cTalos §7» §f") + detail), true);

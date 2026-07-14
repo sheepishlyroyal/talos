@@ -85,14 +85,34 @@ public final class FollowTask extends TalosTask {
 
         double distanceSq = client.player.squaredDistanceTo(target);
         double closeEnough = keepDistance + 0.75;
-        if (distanceSq <= closeEnough * closeEnough) return; // near enough: idle
-
         BlockPos targetPos = target.getBlockPos().toImmutable();
         boolean gotoLive = activeGoto != null && !activeGoto.isDone();
+
+        // LIVE TRACKING: while our goto runs, feed it the target's fresh cell every tick
+        // it moves. retarget() swaps the goal in place — momentum survives, the follower's
+        // arrival test updates, and planning continues toward where the mob IS, not where
+        // it stood when the goto was issued (the old snapshot-chasing looked exactly like
+        // pretending the mob was standing still).
+        if (gotoLive) {
+            if (targetPos.equals(lastGoal)) return;
+            if (TalosClient.pathingEngine().retarget(
+                    new GoalNear(targetPos.getX(), targetPos.getY(), targetPos.getZ(),
+                            (int) Math.floor(keepDistance)))) {
+                lastGoal = targetPos;
+                return;
+            }
+            // Engine can't retarget in place (no-op engine, or the run just ended): only
+            // a real stray re-issues, exactly like the pre-retarget behavior.
+            if (lastGoal != null && targetPos.getSquaredDistance(lastGoal) < REISSUE_MOVE_SQ) {
+                return;
+            }
+        }
+
+        if (distanceSq <= closeEnough * closeEnough) return; // near enough: idle
         boolean targetMoved = lastGoal == null
                 || targetPos.getSquaredDistance(lastGoal) >= REISSUE_MOVE_SQ;
-        if (cooldownTicks > 0 || (gotoLive && !targetMoved)) return;
-        if (!gotoLive && !targetMoved && distanceSq <= (keepDistance + 2) * (keepDistance + 2)) return;
+        if (cooldownTicks > 0) return;
+        if (!targetMoved && distanceSq <= (keepDistance + 2) * (keepDistance + 2)) return;
 
         lastGoal = targetPos;
         cooldownTicks = ISSUE_COOLDOWN_TICKS;

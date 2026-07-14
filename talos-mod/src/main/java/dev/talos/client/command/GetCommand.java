@@ -53,7 +53,7 @@ public final class GetCommand {
         ;
         get.then(ClientCommandManager.literal("blockpos")
                 .then(ClientCommandManager.argument("block",
-                                com.mojang.brigadier.arguments.StringArgumentType.string())
+                                IdArgumentType.blockId())
                         .executes(context -> blockAt(context.getSource(),
                                 com.mojang.brigadier.arguments.StringArgumentType
                                         .getString(context, "block"), 0))

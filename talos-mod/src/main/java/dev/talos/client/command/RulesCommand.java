@@ -104,20 +104,20 @@ public final class RulesCommand {
                                                         DoubleArgumentType.doubleArg(-1.0, 512.0))
                                                 .then(run(trigger, RulesCommand::readEntityArgs)))));
                 case BLOCK_COUNT -> node.then(
-                        ClientCommandManager.argument("block", StringArgumentType.string())
+                        ClientCommandManager.argument("block", IdArgumentType.blockId())
                                 .then(ClientCommandManager.literal("radius")
                                         .then(attachComparisons(
                                                 ClientCommandManager.argument("radius",
                                                         IntegerArgumentType.integer(1, EventRuleEngine.MAX_BLOCK_RADIUS)),
                                                 trigger, RulesCommand::readBlockArgs))));
                 case BLOCK_PRESENCE -> node.then(
-                        ClientCommandManager.argument("block", StringArgumentType.string())
+                        ClientCommandManager.argument("block", IdArgumentType.blockId())
                                 .then(ClientCommandManager.literal("radius")
                                         .then(ClientCommandManager.argument("radius",
                                                         IntegerArgumentType.integer(1, EventRuleEngine.MAX_BLOCK_RADIUS))
                                                 .then(run(trigger, RulesCommand::readBlockArgs)))));
                 case ITEM_COUNT -> node.then(attachComparisons(
-                        ClientCommandManager.argument("item", StringArgumentType.string()),
+                        ClientCommandManager.argument("item", IdArgumentType.itemId()),
                         trigger, (context, rule) ->
                                 rule.block = StringArgumentType.getString(context, "item")));
                 case REGION -> node.then(

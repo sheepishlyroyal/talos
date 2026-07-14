@@ -360,7 +360,7 @@ public final class TalosPathingEngine implements PathingEngine {
         // Simulation routes are never sampled: steering and the blue renderer receive every
         // rollout endpoint, including long 100+ move cave routes.
         currentNodes = List.copyOf(waypoints);
-        renderRouteNodes(route);
+        dev.talos.client.pathing.sim.RouteRenderer.render(route, 0);
 
         // Pipelined extension: the follower is still moving on the previous partial route.
         // The search started from that route's last node, so STITCH — current route plus the
@@ -549,6 +549,37 @@ public final class TalosPathingEngine implements PathingEngine {
 
     @Override public boolean isPathing() { return activeRun != null && !activeRun.future.isDone(); }
 
+    /**
+     * Moving-goal support: swaps the active run's goal snapshot in place. The live
+     * follower keeps walking (and its arrival test is refreshed so it stops at the NEW
+     * target); the next planning pass — nudged here when the target cell actually moved —
+     * plans toward the fresh goal and hot-swaps in as usual. Momentum survives.
+     */
+    @Override
+    public boolean retarget(Goal goal) {
+        NavigationRun run = activeRun;
+        if (run == null || run.cancelled || run.future.isDone()) return false;
+        MinecraftClient client = run.client;
+        if (client.player == null || client.world == null) return false;
+        GoalSnapshot fresh = snapshotGoal(goal, client);
+        BlockPos previous = run.snapshot.target();
+        if (fresh.target().equals(previous)) return true; // same cell: nothing to do
+        run.snapshot = fresh;
+        SimFollowTask follower = run.follower;
+        if (follower != null && follower.isActive()) follower.setGoal(fresh.test());
+        // The corridor was sketched toward the OLD target; once the goal strays a few
+        // cells it actively funnels the wrong way. Drop it and let the next launch
+        // re-sketch (or skip the coarse pass entirely at follow ranges).
+        if (run.corridor != null
+                && fresh.target().getSquaredDistance(previous) > SUB_GOAL_RADIUS_SQ) {
+            run.corridor = null;
+            run.coarseFailed = false;
+            clearCorridorMarkers();
+        }
+        launchSimSegment(run); // no-op while a planner is already in flight
+        return true;
+    }
+
     @Override public void setNodeCount(int count) {
         if (count < 0 || count > 4096) throw new IllegalArgumentException("node count must be 0..4096");
         nodeCount = count;
@@ -585,37 +616,6 @@ public final class TalosPathingEngine implements PathingEngine {
             RenderQueue.add("talos-path-node:" + i,
                     MotionState.box(MotionState.Pose.STAND, node), waypointColor, 20 * 30);
         }
-    }
-
-    private static int lastRenderedRouteNodes;
-
-    /**
-     * Checkpoint boxes mark MODE CHANGES: a box appears wherever the movement primitive
-     * switches (walk -> sprint-jump, sprint -> swim, ...), colored by what to do there,
-     * plus a sparse cadence on long same-mode stretches and always the goal. Steering
-     * still consumes the full-resolution route.
-     */
-    private static void renderRouteNodes(PlannedRoute route) {
-        int count = route.waypoints().size();
-        int drawn = 0;
-        dev.talos.client.pathing.sim.Primitive previous = null;
-        for (int i = 0; i < count; i++) {
-            PlannedRoute.Waypoint waypoint = route.waypoints().get(i);
-            var via = waypoint.via();
-            boolean transition = i == 0 || via != previous;
-            previous = via;
-            if (i != count - 1 && !transition && i % 6 != 0) continue;
-            RenderQueue.add("talos-path-node:" + drawn++,
-                    MotionState.box(waypoint.pose(), waypoint.position()),
-                    modeColor(via), 20 * 30);
-        }
-        count = drawn;
-        // Two overlapping plans on screen read as the pathfinder having "two ideas": always
-        // drop the previous route's leftover boxes the moment a fresh plan is drawn.
-        for (int i = count; i < lastRenderedRouteNodes; i++) {
-            RenderQueue.remove("talos-path-node:" + i);
-        }
-        lastRenderedRouteNodes = count;
     }
 
     private static int lastRenderedCorridorMarkers;
@@ -656,20 +656,6 @@ public final class TalosPathingEngine implements PathingEngine {
         for (int i = added.isEmpty() ? 0 : 1; i < added.size(); i++) combined.add(added.get(i));
         return new PlannedRoute(combined, extension.reachedGoal(),
                 "stitched: " + extension.detail());
-    }
-
-    /** One color per movement mode, so a checkpoint box says WHAT to do there at a glance. */
-    private static int modeColor(dev.talos.client.pathing.sim.Primitive via) {
-        if (via == null) return 0x66CCFF;
-        return switch (via) {
-            case WALK, DROP -> 0x66CCFF;        // cyan: plain movement
-            case SPRINT -> 0x33AAFF;            // stronger blue: sprint
-            case SPRINT_JUMP, STEP_UP -> 0x66FF88; // green: a jump/climb happens here
-            case SWIM -> 0x3355FF;              // deep blue: swimming leg
-            case CRAWL -> 0xCCCCFF;             // pale: crawl
-            case MINE -> 0xFF9955;              // orange-brown: dig here
-            case PLACE -> 0xCC66FF;             // purple: pillar up here
-        };
     }
 
     private static GoalSnapshot snapshotGoal(Goal goal, MinecraftClient client) {
@@ -815,7 +801,8 @@ public final class TalosPathingEngine implements PathingEngine {
 
     private static final class NavigationRun {
         final MinecraftClient client;
-        final GoalSnapshot snapshot;
+        /** Mutable: retarget() swaps in a fresh snapshot while the run keeps moving. */
+        volatile GoalSnapshot snapshot;
         final PathingOptions options;
         final CompletableFuture<PathResult> future;
         long attempts;

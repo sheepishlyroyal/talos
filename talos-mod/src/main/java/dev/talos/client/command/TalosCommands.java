@@ -89,9 +89,7 @@ public final class TalosCommands {
                         // `/talos goto block <id> [radius]` — nearest matching block, with
                         // blacklist-and-retry when a specific candidate proves unreachable.
                         .then(ClientCommandManager.literal("block")
-                                .then(ClientCommandManager.argument("blockId", StringArgumentType.word())
-                                        .suggests((context, builder) -> CommandSource.suggestIdentifiers(
-                                                net.minecraft.registry.Registries.BLOCK.getIds(), builder))
+                                .then(ClientCommandManager.argument("blockId", IdArgumentType.blockId())
                                         .executes(context -> scriptOverride(context, "goto") ? 1
                                                 : GotoBlockCommand.execute(context,
                                                 StringArgumentType.getString(context, "blockId"), 64))
@@ -115,24 +113,26 @@ public final class TalosCommands {
                                                                                 coordValue(context, "y", eyePos(context).y),
                                                                                 coordValue(context, "z", eyePos(context).z),
                                                                                 value(context, "range")))))))))
-                        // `/talos goto <x> <z>` — pathfind to X,Z at the player's current Y.
-                        // `/talos goto <x> <y> <z>` — pathfind to an exact block. These are two
-                        // distinct sibling argument nodes under "x" (named "z" and "y"
+                        // `/talos goto xyz <x> <z>` — pathfind to X,Z at the player's current Y.
+                        // `/talos goto xyz <x> <y> <z>` — pathfind to an exact block. These are
+                        // two distinct sibling argument nodes under "x" (named "z" and "y"
                         // respectively) so the 2nd token's meaning is unambiguous per branch —
-                        // chaining a shared node here would silently swap Y and Z.
-                        .then(coordinate("x")
-                                .then(coordinate("z")
-                                        .executes(context -> scriptOverride(context, "goto") ? 1
-                                                : GotoCommand.execute(context, xzGoal(context))))
-                                .then(coordinate("y")
+                        // chaining a shared node here would silently swap Y and Z. The "xyz"
+                        // literal keeps raw coordinates from colliding with the named modes.
+                        .then(ClientCommandManager.literal("xyz")
+                                .then(coordinate("x")
                                         .then(coordinate("z")
                                                 .executes(context -> scriptOverride(context, "goto") ? 1
-                                                        : GotoCommand.execute(
-                                                        context,
-                                                        new GoalBlock(
-                                                                coordValue(context, "x", eyePos(context).x),
-                                                                coordValue(context, "y", eyePos(context).y),
-                                                                coordValue(context, "z", eyePos(context).z))))))))
+                                                        : GotoCommand.execute(context, xzGoal(context))))
+                                        .then(coordinate("y")
+                                                .then(coordinate("z")
+                                                        .executes(context -> scriptOverride(context, "goto") ? 1
+                                                                : GotoCommand.execute(
+                                                                context,
+                                                                new GoalBlock(
+                                                                        coordValue(context, "x", eyePos(context).x),
+                                                                        coordValue(context, "y", eyePos(context).y),
+                                                                        coordValue(context, "z", eyePos(context).z)))))))))
                 // Back-compat alias: `/talos xz <x> <z>` delegates to the same XZ handler as
                 // `/talos goto <x> <z>`.
                 .then(ClientCommandManager.literal("xz")
@@ -276,7 +276,18 @@ public final class TalosCommands {
                         })
                         .then(ClientCommandManager.argument("name", StringArgumentType.word())
                                 .suggests(EXAMPLE_NAMES)
-                                .executes(TalosCommands::writeExample))));
+                                .executes(TalosCommands::writeExample)))
+                // Fallback: `/talos <name> [args]` for script-registered commands. Brigadier
+                // prefers literal nodes, so every built-in above wins first; only an unknown
+                // first token lands here and is dispatched to @talos.command handlers —
+                // making `/talos pygoto 0 64 0` work exactly as the examples advertise
+                // (`/talos cmd <name>` remains for names that shadow a built-in).
+                .then(ClientCommandManager.argument("name", StringArgumentType.word())
+                        .suggests(SCRIPT_COMMAND_NAMES)
+                        .executes(context -> runScriptCommand(context, ""))
+                        .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
+                                .executes(context -> runScriptCommand(
+                                        context, StringArgumentType.getString(context, "args"))))));
     }
 
     /** Dispatches {@code /talos py <code>} to the script engine's snippet evaluator. */
@@ -407,7 +418,7 @@ public final class TalosCommands {
             #
             # Run:    /talos script run example_goto
             # Then:   /talos pygoto <x> <y> <z>     (from-scratch goto, no pathfinder)
-            #         /talos goto <x> <y> <z>       (now routed through goto_override)
+            #         /talos goto xyz <x> <y> <z>   (now routed through goto_override)
             # Stop:   /talos script stop            (handlers unregister automatically)
 
             import math
@@ -477,7 +488,7 @@ public final class TalosCommands {
                 # Replaces /talos goto while this script runs. The built-ins stay reachable
                 # as talos.goto / talos.aio.goto / talos.aio.goto_block, so the override can
                 # prep, then delegate. Handles both forms:
-                #   /talos goto <x> <y> <z>
+                #   /talos goto xyz <x> <y> <z>
                 #   /talos goto block <blockId> [radius]
                 async def wrapped_xyz(x, y, z):
                     # Custom prep goes here (speedbridging, scaffolding, logging, ...).
@@ -491,8 +502,10 @@ public final class TalosCommands {
                 if args and args[0] == "block":
                     radius = int(args[2]) if len(args) > 2 else 64
                     return wrapped_block(args[1], radius)
+                if args and args[0] == "xyz":
+                    args = args[1:]
                 if len(args) != 3:
-                    talos.log("this override handles <x> <y> <z> and block <id> [radius]")
+                    talos.log("this override handles xyz <x> <y> <z> and block <id> [radius]")
                     return
                 x, y, z = (int(float(a)) for a in args)
                 return wrapped_xyz(x, y, z)
@@ -843,9 +856,7 @@ public final class TalosCommands {
         // if block <id> [maxDist] | if entity <selector> [maxDist]: predicate on the first hit.
         raytrace.then(ClientCommandManager.literal("if")
                 .then(ClientCommandManager.literal("block")
-                        .then(ClientCommandManager.argument("blockId", StringArgumentType.word())
-                                .suggests((context, builder) -> CommandSource.suggestIdentifiers(
-                                        net.minecraft.registry.Registries.BLOCK.getIds(), builder))
+                        .then(ClientCommandManager.argument("blockId", IdArgumentType.blockId())
                                 .executes(context -> RaytraceCommand.ifBlock(context,
                                         StringArgumentType.getString(context, "blockId"), DEFAULT_RAY_DIST))
                                 .then(ClientCommandManager.argument("maxDist",
