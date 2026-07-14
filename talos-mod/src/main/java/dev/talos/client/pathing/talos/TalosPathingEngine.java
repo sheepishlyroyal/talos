@@ -36,12 +36,25 @@ public final class TalosPathingEngine implements PathingEngine {
     private static final Logger LOGGER = LoggerFactory.getLogger(TalosPathingEngine.class);
     // Budgets are CAPS, not durations — the search returns the moment the goal is found.
     // Deep caps mean far goals get one complete plan instead of stop-and-replan stutters.
-    private static final int SIM_NODE_CAP = 160_000;
-    private static final long SIM_SEARCH_NANOS = 600_000_000L;
-    // Planning gets a dedicated per-tick slice rather than the shared 1-3ms action budget:
-    // a pending plan means the player is (or will be) idle, which costs far more than 15ms
-    // of one 50ms tick. Worst-case plan latency is therefore ~10 ticks (0.5s), usually 1-3.
-    private static final long SIM_TICK_SLICE_NANOS = 15_000_000L;
+    private static final int SIM_NODE_CAP = 300_000;
+    // Wall-clock budgets, deliberately time-based: a strong machine explores proportionally
+    // more of the world in the same 1.5 seconds, and a weak one is never punished with
+    // frozen ticks — deep searches run FULL SPEED on background planner threads against an
+    // immutable SnapshotView, so the client thread pays only the per-section capture memcpy.
+    private static final long SIM_SEARCH_NANOS = 1_500_000_000L;
+    // Background searches advance in short chunks so keep-moving cuts and cancellation are
+    // observed with low latency even mid-budget.
+    private static final long PLANNER_CHUNK_NANOS = 20_000_000L;
+    /** How far past the start/goal bounding box the world snapshot extends, in blocks. */
+    private static final int SNAPSHOT_MARGIN = 32;
+    /** Full-speed planner threads; searches are branchy CPU work, so size to the machine. */
+    private static final java.util.concurrent.ExecutorService PLANNER_POOL =
+            java.util.concurrent.Executors.newFixedThreadPool(
+                    Math.max(2, Runtime.getRuntime().availableProcessors() / 2), runnable -> {
+                        Thread thread = new Thread(runnable, "Talos Planner");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
     private static final int SIM_MAX_ROLLOUT_TICKS = 20;
     // Continuity beats completeness: rather than standing still while a deep search runs to
     // its full budget, the search is CUT the moment movement needs it — after ~8 slices for
@@ -56,6 +69,9 @@ public final class TalosPathingEngine implements PathingEngine {
     // are cut early anyway — while the corridor supplies the global direction they lack.
     private static final double COARSE_TRIGGER_DISTANCE_SQ = 64.0 * 64.0;
     private static final long COARSE_TIME_BUDGET_NANOS = 400_000_000L;
+    // The coarse corridor stays tick-sliced on the client thread: it needs live
+    // isChunkLoaded answers, and its block-grid cells are cheap enough to slice.
+    private static final long COARSE_TICK_SLICE_NANOS = 15_000_000L;
     private static final int CORRIDOR_LOOKAHEAD_CELLS = 48;
     private static final int CORRIDOR_INVALIDATE_CELLS = 16;
     // "Within 2 cells" of a corridor sub-goal counts as arrival: the coarse grid is only
@@ -214,15 +230,9 @@ public final class TalosPathingEngine implements PathingEngine {
         // planner weighs a dig against a detour with the cost the player will actually pay.
         java.util.List<net.minecraft.item.ItemStack> hotbar = new java.util.ArrayList<>(9);
         for (int slot = 0; slot < 9; slot++) {
-            hotbar.add(client.player.getInventory().getStack(slot));
+            // Copies: the planner thread reads these while the live stacks keep mutating.
+            hotbar.add(client.player.getInventory().getStack(slot).copy());
         }
-        java.util.function.ToIntFunction<BlockPos> breakTicks = pos ->
-                dev.talos.client.pathing.sim.MiningCosts.breakTicks(
-                        client.world.getBlockState(pos), client.world, pos, hotbar);
-        SimPathfinder.Options simOptions = new SimPathfinder.Options(
-                edits, edits, edits ? SIM_NODE_CAP * 2 : SIM_NODE_CAP,
-                edits ? SIM_SEARCH_NANOS * 3 : SIM_SEARCH_NANOS, SIM_MAX_ROLLOUT_TICKS,
-                breakTicks);
         // SUB-GOAL FUNNELING: with a corridor in hand, aim this search at the corridor cell
         // ~48 ahead of where it starts rather than the far goal. Reaching the run's REAL
         // goal always still counts (the predicate is an OR), so funneling can never make an
@@ -257,31 +267,43 @@ public final class TalosPathingEngine implements PathingEngine {
                 subGoalIndex = candidate;
             }
         }
-        SimPathfinder.Search search = SimPathfinder.begin(client.world, start, profile,
+        // Capture the immutable world snapshot the planner thread will search. The region
+        // covers start→(sub-)goal inflated by SNAPSHOT_MARGIN, so detours stay inside it;
+        // the copy is per-section memcpys — the client thread's whole cost for this plan.
+        Vec3d origin = start.position();
+        BlockPos snapMin = new BlockPos(
+                (int) Math.floor(Math.min(origin.x, deepGoal.getX())) - SNAPSHOT_MARGIN,
+                (int) Math.floor(Math.min(origin.y, deepGoal.getY())) - SNAPSHOT_MARGIN,
+                (int) Math.floor(Math.min(origin.z, deepGoal.getZ())) - SNAPSHOT_MARGIN);
+        BlockPos snapMax = new BlockPos(
+                (int) Math.ceil(Math.max(origin.x, deepGoal.getX())) + SNAPSHOT_MARGIN,
+                (int) Math.ceil(Math.max(origin.y, deepGoal.getY())) + SNAPSHOT_MARGIN,
+                (int) Math.ceil(Math.max(origin.z, deepGoal.getZ())) + SNAPSHOT_MARGIN);
+        dev.talos.client.pathing.sim.SnapshotView snapshot =
+                dev.talos.client.pathing.sim.SnapshotView.capture(client.world, snapMin, snapMax);
+        // Mining edges are billed at the REAL break time for the best hotbar tool; block
+        // lookups go to the snapshot so the planner thread never touches the live world.
+        java.util.function.ToIntFunction<BlockPos> breakTicks = pos ->
+                dev.talos.client.pathing.sim.MiningCosts.breakTicks(
+                        snapshot.getBlockState(pos), snapshot, pos, hotbar);
+        SimPathfinder.Options simOptions = new SimPathfinder.Options(
+                edits, edits, edits ? SIM_NODE_CAP * 2 : SIM_NODE_CAP,
+                edits ? SIM_SEARCH_NANOS * 2 : SIM_SEARCH_NANOS, SIM_MAX_ROLLOUT_TICKS,
+                breakTicks);
+        SimPathfinder.Search search = SimPathfinder.begin(snapshot, start, profile,
                 deepGoal, deepTest, simOptions);
         PlanningTask task = new PlanningTask(run, search, subGoalIndex);
         run.planner = task;
-        boolean followerActive = run.follower != null && run.follower.isActive();
-        if (!followerActive) {
-            run.task = task;
-            activeTask = task;
+        if (run.follower == null || !run.follower.isActive()) {
             if (client.player != null) client.player.sendMessage(
                     net.minecraft.text.Text.literal("§bTalos §7» §fplanning"), true);
         }
-        try {
-            TalosClient.taskScheduler().addTask("native-path-plan", task);
-        } catch (RuntimeException exception) {
-            run.planner = null;
-            if (!followerActive) activeTask = null;
-            run.future.completeExceptionally(exception);
-        }
+        task.start();
     }
 
     private void simPlanCompleted(NavigationRun run, PlanningTask planningTask,
             PlannedRoute route) {
         if (run.planner == planningTask) run.planner = null;
-        if (activeTask == planningTask) activeTask = null;
-        if (run.task == planningTask) run.task = null;
         // An abandoned planner's result is dead: a recovery replan superseded it, and using
         // its stale-origin route here would spawn a second follower next to the fresh one.
         if (planningTask.abandoned) return;
@@ -704,13 +726,19 @@ public final class TalosPathingEngine implements PathingEngine {
     }
 
     /** Owns persistent A* state and advances it a fixed dedicated slice per client tick. */
-    private final class PlanningTask extends TalosTask {
+    /**
+     * A deep search running FULL SPEED on a planner thread against an immutable
+     * {@link SnapshotView}. The search advances in short chunks so keep-moving cuts,
+     * abandonment, and run cancellation are observed with ~20ms latency; the finished
+     * route is handed back to the client thread. The Search object itself is only ever
+     * touched by the one planner thread — the client sees just the volatile flags.
+     */
+    private final class PlanningTask {
         private final NavigationRun run;
         private final SimPathfinder.Search search;
         /** Corridor index this search funnels toward; -1 when aimed at the real goal. */
         private final int subGoalIndex;
-        private boolean done;
-        private boolean abandoned;
+        private volatile boolean abandoned;
 
         PlanningTask(NavigationRun run, SimPathfinder.Search search, int subGoalIndex) {
             this.run = run;
@@ -721,33 +749,31 @@ public final class TalosPathingEngine implements PathingEngine {
         /** Supersede this search: it stops expanding and its result is discarded. */
         void abandon() {
             abandoned = true;
-            done = true;
         }
 
-        @Override public void initialize() { }
-        @Override public boolean condition() {
-            return !done && !run.cancelled && !run.future.isDone();
-        }
-        @Override public void increment() { }
-        @Override public void body() {
-            // Deliberately NOT gated on the shared action tick budget: that 1-3ms allowance
-            // throttled a 150ms search to many seconds of standing still. The fixed slice
-            // itself is the freeze guard (15ms of a 50ms tick).
-            search.advance(SIM_TICK_SLICE_NANOS, () -> true);
-            if (!search.isFinished() && search.hasUsefulPartial() && movementNeedsRouteNow()) {
-                search.cut("cut early to keep moving");
-            }
-            if (search.isFinished()) {
-                done = true;
+        void start() {
+            PLANNER_POOL.execute(() -> {
+                while (!search.isFinished()) {
+                    if (abandoned || run.cancelled || run.future.isDone()) return;
+                    search.advance(PLANNER_CHUNK_NANOS, () -> true);
+                    if (!search.isFinished() && search.hasUsefulPartial()
+                            && movementNeedsRouteNow()) {
+                        search.cut("cut early to keep moving");
+                    }
+                }
+                if (abandoned) return;
                 PlannedRoute route = search.route();
-                TalosClient.taskScheduler().addTask("native-path-plan-handoff", new OneShotTask(
-                        () -> simPlanCompleted(run, this, route)));
-            } else {
-                scheduleDelay();
-            }
+                run.client.execute(() -> {
+                    if (!abandoned) simPlanCompleted(run, this, route);
+                });
+            });
         }
 
-        /** True when waiting any longer would visibly stall the player. */
+        /**
+         * True when waiting any longer would visibly stall the player. Reads follower
+         * state cross-thread; both fields are single-word reads whose staleness only
+         * shifts a cut by one 20ms chunk.
+         */
         private boolean movementNeedsRouteNow() {
             SimFollowTask follower = run.follower;
             if (follower != null && follower.isActive()) {
@@ -778,7 +804,7 @@ public final class TalosPathingEngine implements PathingEngine {
         }
         @Override public void increment() { }
         @Override public void body() {
-            search.advance(SIM_TICK_SLICE_NANOS);
+            search.advance(COARSE_TICK_SLICE_NANOS);
             if (!search.isFinished()) return;
             done = true;
             CoarsePathfinder.Result result = search.result();
@@ -803,9 +829,11 @@ public final class TalosPathingEngine implements PathingEngine {
         final java.util.Set<BlockPos> corridorBlacklist = new java.util.HashSet<>();
         /** The coarse grid could not reach the goal at all: never funnel for this run. */
         boolean coarseFailed;
-        boolean cancelled;
+        // cancelled and follower are read by the background planner thread (loop exit and
+        // keep-moving cuts); volatile makes the client thread's writes visible promptly.
+        volatile boolean cancelled;
         TalosTask task;
-        SimFollowTask follower;
+        volatile SimFollowTask follower;
         PlanningTask planner;
         CoarseTask coarsePlanner;
 
