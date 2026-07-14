@@ -76,6 +76,11 @@ public final class SimFollowTask extends TalosTask {
     private double maxTurnSpeed;
     private double pitchWander;
     private int pitchWanderTicks;
+    // The random look noise is PRE-SAMPLED: slot 0 is applied to the real view this tick,
+    // slot i feeds simulated tick i of every rollout/prediction. Random to an observer,
+    // fully known to the simulator — so predictions include the wobble before it happens.
+    private final double[] plannedJitter = new double[ROLLOUT_TICKS * 2];
+    private boolean jitterSeeded;
 
     public SimFollowTask(MinecraftClient client, PlannedRoute route, Predicate<BlockPos> goal,
             CompletableFuture<PathResult> future) {
@@ -181,6 +186,7 @@ public final class SimFollowTask extends TalosTask {
 
         MotionState live = liveState(player);
         MovementProfile profile = MovementProfile.capture(player); // Effects/attributes are live.
+        advanceJitter(); // pre-sampled look noise: slot 0 is THIS tick, the rest feed rollouts
         Vec3d feet = new Vec3d(player.getX(), player.getY(), player.getZ());
         Vec3d aim = aimPoint(feet, waypoint);
         renderAim(player, aim);
@@ -191,12 +197,11 @@ public final class SimFollowTask extends TalosTask {
             player.setPitch(swimPitch(player, waypoint));
         }
         apply(player, selected, live, waypoint);
-        // Predict AFTER the humanized view is applied, using the yaw the player actually
-        // faces this tick — the orange hitbox trail then shows where the body will really
-        // be (friction, effects, momentum included), not where an instantly-snapped view
-        // would have taken it.
-        renderPrediction(live, new Input(selected.forward(), selected.strafe(),
-                selected.jump(), selected.sprint(), selected.sneak(), player.getYaw()), profile);
+        // Predict AFTER the humanized view is applied: the trail starts from the yaw the
+        // player really faces and keeps turning through the same view model each tick, so
+        // orange shows where the body will truly be — friction, effects, momentum, AND the
+        // natural eye movement included.
+        renderPrediction(live, selected, profile, player.getYaw());
         status(live.inFluid()
                 ? live.fluid() == MotionState.Fluid.LAVA ? "swimming (lava)" : "swimming"
                 : isBrake(selected) ? "braking (final approach)"
@@ -334,8 +339,16 @@ public final class SimFollowTask extends TalosTask {
             MotionState state = live;
             double score = 0.0;
             double oldDistance = horizontalDistance(state.position(), waypoint.position());
+            // The rollout turns its head like the real player will: yaw evolves through the
+            // eased view model each tick instead of snapping to the candidate heading.
+            double simYaw = client.player.getYaw();
+            double simVel = yawVelocity;
+            double accel = turnAccel();
             for (int tick = 0; tick < ROLLOUT_TICKS; tick++) {
-                state = PlayerMotion.step(client.world, state, candidate, profile);
+                double[] view = steerStep(simYaw, simVel, candidate.yaw(), accel, jitterAt(tick));
+                simYaw = view[0];
+                simVel = view[1];
+                state = PlayerMotion.step(client.world, state, withYaw(candidate, (float) simYaw), profile);
                 double distance = horizontalDistance(state.position(), waypoint.position());
                 score += (oldDistance - distance) * 12.0; // primary route progress
                 score -= distanceToSegment(state.position(), from, waypoint.position()) * 1.8;
@@ -416,10 +429,18 @@ public final class SimFollowTask extends TalosTask {
     }
 
     /** Refresh a short-lived, exact-hitbox trail for the input selected from this live state. */
-    private void renderPrediction(MotionState live, Input selected, MovementProfile profile) {
+    private void renderPrediction(MotionState live, Input selected, MovementProfile profile,
+            float appliedYaw) {
         MotionState predicted = live;
+        double simYaw = appliedYaw;
+        double simVel = yawVelocity;
+        double accel = turnAccel();
         for (int i = 0; i < ROLLOUT_TICKS * 2; i++) {
-            predicted = PlayerMotion.step(client.world, predicted, selected, profile);
+            double[] view = steerStep(simYaw, simVel, selected.yaw(), accel, jitterAt(i));
+            simYaw = view[0];
+            simVel = view[1];
+            predicted = PlayerMotion.step(client.world, predicted,
+                    withYaw(selected, (float) simYaw), profile);
             RenderQueue.add("talos-sim-tick:" + i,
                     predicted.box(predicted.position()), PREDICTION_COLOR, PREDICTION_TTL);
         }
@@ -636,7 +657,7 @@ public final class SimFollowTask extends TalosTask {
      * look, made visible.
      */
     private void renderAim(ClientPlayerEntity player, Vec3d aim) {
-        Vec3d eyeTarget = aim.add(0.0, 0.35, 0.0);
+        Vec3d eyeTarget = aim.add(0.0, 1.62, 0.0); // head of the next hitbox, where gaze rests
         RenderQueue.add("talos-goto-aim",
                 new Box(eyeTarget.x - 0.09, eyeTarget.y - 0.09, eyeTarget.z - 0.09,
                         eyeTarget.x + 0.09, eyeTarget.y + 0.09, eyeTarget.z + 0.09),
@@ -693,24 +714,59 @@ public final class SimFollowTask extends TalosTask {
         return yawError <= toleranceDegrees && pitchError <= toleranceDegrees;
     }
 
-    private void steerYaw(ClientPlayerEntity player, float targetYaw) {
+    /** Samples the turn-speed model lazily and returns the angular acceleration bound. */
+    private double turnAccel() {
         HumanizationProfile profile = TalosClient.humanizer().defaultProfile();
         if (maxTurnSpeed <= 0.0) {
             maxTurnSpeed = Math.max(6.0, profile.rotationSpeedDegPerTick().sample(steerRng));
         }
-        double delta = net.minecraft.util.math.MathHelper.wrapDegrees(targetYaw - player.getYaw());
+        return Math.max(2.0, profile.maxAngularAccelDegPerTick2());
+    }
+
+    /** Rolls the pre-sampled look noise forward one real tick. Call once per game tick. */
+    private void advanceJitter() {
+        double stdev = TalosClient.humanizer().defaultProfile().pathDeviationStdev() * 1.5;
+        if (!jitterSeeded) {
+            for (int i = 0; i < plannedJitter.length; i++) {
+                plannedJitter[i] = steerRng.nextGaussian() * stdev;
+            }
+            jitterSeeded = true;
+            return;
+        }
+        System.arraycopy(plannedJitter, 1, plannedJitter, 0, plannedJitter.length - 1);
+        plannedJitter[plannedJitter.length - 1] = steerRng.nextGaussian() * stdev;
+    }
+
+    private double jitterAt(int tick) {
+        return plannedJitter[Math.min(tick, plannedJitter.length - 1)];
+    }
+
+    /**
+     * One tick of the eased view model, noise included: returns {yaw, velocity}.
+     * Anticipatory braking (v^2 <= 2*a*remaining) means the view stops ON the heading
+     * instead of over-turning past it. This exact model — with the SAME pre-sampled
+     * jitter — runs both on the real view and inside every rollout, landing prediction,
+     * and the orange trail, so simulated physics always see the yaw the player will
+     * REALLY have that tick, natural eye movement and all.
+     */
+    private double[] steerStep(double yaw, double velocity, float targetYaw, double accel,
+            double jitter) {
+        double delta = net.minecraft.util.math.MathHelper.wrapDegrees(targetYaw - yaw);
         double cap = Math.abs(delta) > 60.0 ? Math.max(maxTurnSpeed * 2.5, 28.0) : maxTurnSpeed;
-        double accel = Math.max(2.0, profile.maxAngularAccelDegPerTick2());
-        // Anticipatory braking on the turn itself: never spin faster than can be shed
-        // before the target angle (v^2 <= 2*a*remaining), so the view stops ON the heading
-        // instead of swinging past it and coming back — the visible "over-turning".
         double stopCap = Math.sqrt(2.0 * accel * Math.abs(delta));
         double limit = Math.min(cap, stopCap);
         double desired = Math.max(-limit, Math.min(limit, delta * 0.45));
-        yawVelocity += Math.max(-accel, Math.min(accel, desired - yawVelocity));
-        double jitter = Math.abs(delta) > 1.0
-                ? steerRng.nextGaussian() * profile.pathDeviationStdev() * 1.5 : 0.0;
-        float yaw = (float) (player.getYaw() + yawVelocity + jitter);
+        velocity += Math.max(-accel, Math.min(accel, desired - velocity));
+        double applied = Math.abs(delta) > 1.0 ? jitter : 0.0;
+        return new double[]{yaw + velocity + applied, velocity};
+    }
+
+    private void steerYaw(ClientPlayerEntity player, float targetYaw) {
+        double accel = turnAccel();
+        double delta = net.minecraft.util.math.MathHelper.wrapDegrees(targetYaw - player.getYaw());
+        double[] next = steerStep(player.getYaw(), yawVelocity, targetYaw, accel, jitterAt(0));
+        yawVelocity = next[1];
+        float yaw = (float) next[0];
         if (Math.abs(delta) < 1.2 && Math.abs(yawVelocity) < 1.2) {
             yaw = (float) (player.getYaw() + delta * 0.6); // settle without a visible snap
             yawVelocity *= 0.5;
@@ -718,6 +774,11 @@ public final class SimFollowTask extends TalosTask {
         player.setYaw(yaw);
         player.setHeadYaw(yaw);
         player.setBodyYaw(yaw);
+    }
+
+    private static Input withYaw(Input input, float yaw) {
+        return new Input(input.forward(), input.strafe(), input.jump(), input.sprint(),
+                input.sneak(), yaw);
     }
 
     /**
@@ -733,7 +794,9 @@ public final class SimFollowTask extends TalosTask {
         Vec3d eye = player.getEyePos();
         Vec3d target = waypoint.position();
         double horizontal = Math.max(horizontalDistance(eye, target), 3.0);
-        double toward = Math.toDegrees(Math.atan2(eye.y - (target.y + 1.2), horizontal));
+        // Gaze rests on the HEAD of the next hitbox (eye height above its feet), so climbs
+        // and jumps are sighted at the level the body actually has to arrive at.
+        double toward = Math.toDegrees(Math.atan2(eye.y - (target.y + 1.62), horizontal));
         double desired = Math.max(-30.0, Math.min(35.0, toward + pitchWander));
         double step = Math.max(-2.5, Math.min(2.5, desired - player.getPitch()));
         player.setPitch((float) (player.getPitch() + step
@@ -816,13 +879,19 @@ public final class SimFollowTask extends TalosTask {
                 ((point.x - target.x) * dx + (point.z - target.z) * dz) / length);
     }
 
-    /** Continue a fixed input until the arc lands, with a hard cooperative tick bound. */
+    /** Continue a held input until the arc lands, with the view turning realistically. */
     private MotionState predictLanding(MotionState start, Input input,
             MovementProfile profile) {
         MotionState state = start;
         boolean airborne = !start.onGround();
+        double simYaw = client.player == null ? input.yaw() : client.player.getYaw();
+        double simVel = yawVelocity;
+        double accel = turnAccel();
         for (int tick = 0; tick < LANDING_ROLLOUT_TICKS; tick++) {
-            state = PlayerMotion.step(client.world, state, input, profile);
+            double[] view = steerStep(simYaw, simVel, input.yaw(), accel, jitterAt(tick));
+            simYaw = view[0];
+            simVel = view[1];
+            state = PlayerMotion.step(client.world, state, withYaw(input, (float) simYaw), profile);
             if (!PlayerMotion.hitboxFits(client.world, state.pose(), state.position())) return null;
             airborne |= !state.onGround();
             if (airborne && state.onGround()) return state;

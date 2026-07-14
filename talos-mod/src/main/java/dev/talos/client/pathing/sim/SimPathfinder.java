@@ -21,7 +21,9 @@ import net.minecraft.world.World;
  */
 public final class SimPathfinder {
     public static final int BUMP_PENALTY = 3;
-    public static final int EDIT_PENALTY = 40;
+    // Prefers walking around over digging/placing (an edit "costs" ~a second of detour),
+    // without making edit chains so expensive that A* floods the map before trying one.
+    public static final int EDIT_PENALTY = 16;
     private static final int MAX_DROP = 4;
     private static final double EPSILON = 1.0E-7;
     private static final int[][] DIRECTIONS = {
@@ -400,14 +402,15 @@ public final class SimPathfinder {
         int dx = Math.abs(goal.getX() - from.getX());
         int dz = Math.abs(goal.getZ() - from.getZ());
         double octile = Math.max(dx, dz) + (Math.sqrt(2.0) - 1.0) * Math.min(dx, dz);
-        double maxBlocksPerTick = Math.max(8.0,
-                profile.movementSpeed() * 40.0 + profile.jumpVelocity() * 4.0);
-        double maxVerticalPerTick = Math.max(20.0,
-                profile.jumpVelocity() * 2.0 + profile.gravity() * 14.0);
-        // Horizontal and vertical progress can occur in the same tick. Taking their maximum,
-        // rather than their sum, is an admissible lower bound and avoids greedy cave traps.
-        return Math.max(octile / maxBlocksPerTick,
-                Math.abs(goal.getY() - from.getY()) / maxVerticalPerTick);
+        // Speeds must be REALISTIC per-tick bounds (sprint-jump ~0.5 blocks/tick, climbing
+        // ~1 block per 4+ ticks, falling fast). The old 8/20 blocks-per-tick figures made
+        // the heuristic ~30x weaker than true cost, so A* flooded sideways instead of
+        // heading for the goal — vertical goals never planned and long plans came out
+        // partial. Costs are ticks; these are lower bounds on ticks needed.
+        double horizontalTicks = octile / Math.max(0.6, profile.movementSpeed() * 3.0);
+        int dy = goal.getY() - from.getY();
+        double verticalTicks = dy > 0 ? dy * 4.0 : -dy * 0.5;
+        return Math.max(horizontalTicks, verticalTicks);
     }
 
     private static Key key(Node node) {
@@ -447,7 +450,9 @@ public final class SimPathfinder {
 
     private record Node(MotionState state, BlockPos cell, int heading, Node parent,
             Primitive via, int edgeTicks, double g, double h, long sequence) {
-        double f() { return g + h; }
+        // Weighted A*: goal-directedness matters more than provable optimality for a live
+        // game bot. w=2 finds deep routes in a fraction of the expansions.
+        double f() { return g + 2.0 * h; }
 
         Node withState(MotionState replacement) {
             return new Node(replacement, SimPathfinder.cell(replacement.position()), heading,

@@ -43,6 +43,7 @@ public final class TalosPathingEngine implements PathingEngine {
     private static final int SIM_MAX_ROLLOUT_TICKS = 20;
     private volatile TalosTask activeTask;
     private volatile NavigationRun activeRun;
+    private volatile String lastPartialDetail = "";
     private volatile int nodeCount;
     private volatile List<Vec3d> currentNodes = List.of();
 
@@ -197,6 +198,15 @@ public final class TalosPathingEngine implements PathingEngine {
             return;
         }
         LOGGER.debug("Simulation path search attempt {}: {}", run.attempts, route.detail());
+        // A partial plan is worth explaining out loud: WHY the planner stopped short (node
+        // cap, time budget, frontier exhausted) is the difference between "needs a deeper
+        // search" and "that goal is genuinely unreachable".
+        if (!route.reachedGoal() && !route.detail().equals(lastPartialDetail)) {
+            lastPartialDetail = route.detail();
+            if (run.client.player != null) run.client.player.sendMessage(
+                    net.minecraft.text.Text.literal(
+                            "§6Talos §7» §fpartial plan: " + route.detail()), false);
+        }
         if (route.waypoints().size() <= 1) {
             scheduleReplan(run);
             return;
