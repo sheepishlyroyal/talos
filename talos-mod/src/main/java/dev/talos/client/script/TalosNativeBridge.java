@@ -233,7 +233,7 @@ public final class TalosNativeBridge {
                     .stream().min(Comparator.comparingDouble(client.player::squaredDistanceTo)).orElse(null);
             if (nearest == null) throw new IllegalStateException("No hostile entity within " + radius + " blocks");
             KillEntityAction action = new KillEntityAction(nearest);
-            TalosClient.taskScheduler().addTask("script-kill", action);
+            addTaskWhenFree("script-kill", action, action.future());
             return action.future();
         }).thenCompose(f -> f).thenApply(TalosNativeBridge::requireSuccess);
     }
@@ -287,9 +287,43 @@ public final class TalosNativeBridge {
         return game.submit(() -> {
             CompletableFuture<ActionResult> f = task instanceof PlaceBlockAction p ? p.future()
                     : ((BreakBlockAction) task).future();
-            TalosClient.taskScheduler().addTask("script-" + name, task);
+            addTaskWhenFree("script-" + name, task, f);
             return f;
         }).thenCompose(f -> f).thenApply(TalosNativeBridge::requireSuccess);
+    }
+
+    /**
+     * Concurrent script tasks share mutexes (a scan and a break both hold the intensive
+     * key); a conflict is a SCHEDULING situation, not an error. Queue the task and start
+     * it the tick the running action releases its keys, failing only on a long timeout.
+     */
+    private static void addTaskWhenFree(String name, dev.talos.client.task.TalosTask task,
+            CompletableFuture<?> result) {
+        try {
+            TalosClient.taskScheduler().addTask(name, task);
+            return;
+        } catch (IllegalStateException conflict) {
+            // fall through to the queued retry below
+        }
+        TalosClient.taskScheduler().forceAddTask(name + "-queued", new SimpleTask() {
+            private int waited;
+            @Override public void initialize() { }
+            @Override public boolean condition() { return !result.isDone(); }
+            @Override protected void onTick() {
+                try {
+                    TalosClient.taskScheduler().addTask(name, task);
+                    _break();
+                } catch (IllegalStateException conflict) {
+                    if (++waited > 600) {
+                        result.completeExceptionally(new IllegalStateException(
+                                "Timed out waiting for a conflicting action to finish ("
+                                        + conflict.getMessage() + ")"));
+                        _break();
+                    }
+                }
+            }
+            @Override public java.util.Set<Object> getMutexKeys() { return java.util.Set.of(); }
+        });
     }
 
     private String awaitBridgeTask(String name, BridgeTask task) {
@@ -299,7 +333,7 @@ public final class TalosNativeBridge {
     private CompletableFuture<String> bridgeTaskFuture(String name, BridgeTask task) {
         return game.submit(() -> {
             requireWorld();
-            TalosClient.taskScheduler().addTask(name, task);
+            addTaskWhenFree(name, task, task.future);
             return task.future;
         }).thenCompose(f -> f);
     }
@@ -321,7 +355,7 @@ public final class TalosNativeBridge {
         if (id == null || !Registries.BLOCK.containsId(id)) throw new IllegalArgumentException("Unknown block: " + text);
         ScriptBlockScanTask scan = new ScriptBlockScanTask(
                 client.player.getBlockPos(), radius, Registries.BLOCK.get(id));
-        TalosClient.taskScheduler().addTask("script-find-block", scan);
+        addTaskWhenFree("script-find-block", scan, scan.future);
         return scan.future;
     }
 
