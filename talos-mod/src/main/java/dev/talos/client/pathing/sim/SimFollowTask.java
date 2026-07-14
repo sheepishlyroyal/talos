@@ -60,6 +60,7 @@ public final class SimFollowTask extends TalosTask {
     private BlockPos pillarOrigin;
     private BlockPos lastPlacement;
     private int lastPlacementTick = Integer.MIN_VALUE;
+    private int placeFaceOffset;
     private String lastStatus = "";
     private Primitive committedPrimitive;
     private int committedStrafe;
@@ -588,21 +589,34 @@ public final class SimFollowTask extends TalosTask {
         client.options.sneakKey.setPressed(true);
         int slot = findBlockSlot(player);
         if (slot < 0) { finish(false, "Ran out of bridge blocks"); return true; }
-        for (Direction side : Direction.values()) {
+        if (support.equals(lastPlacement) && ticks - lastPlacementTick < 2) return true;
+        // Anchor preference: the top face of the block below the support (most reliable),
+        // then the side faces of the horizontal neighbors (sneak-bridge against the lip),
+        // then a ceiling. A rejected placement rotates to the next face next tick instead
+        // of blindly spamming the same failing click.
+        Direction[] sides = {Direction.UP, Direction.NORTH, Direction.SOUTH,
+                Direction.WEST, Direction.EAST, Direction.DOWN};
+        for (int i = 0; i < sides.length; i++) {
+            Direction side = sides[(i + placeFaceOffset) % sides.length];
             BlockPos anchor = support.offset(side.getOpposite());
             if (client.world.getBlockState(anchor).getCollisionShape(client.world, anchor).isEmpty()) continue;
-            if (support.equals(lastPlacement) && ticks - lastPlacementTick < 2) return true;
             Vec3d hit = Vec3d.ofCenter(anchor).add(side.getOffsetX() * .5,
                     side.getOffsetY() * .5, side.getOffsetZ() * .5);
             // Look at the actual anchor face (eased) before the click lands on it.
             if (!steerLook(player, hit, 14.0)) return true;
             player.getInventory().setSelectedSlot(slot);
-            client.interactionManager.interactBlock(player, Hand.MAIN_HAND,
-                    new BlockHitResult(hit, side, anchor, false));
+            net.minecraft.util.ActionResult interaction = client.interactionManager
+                    .interactBlock(player, Hand.MAIN_HAND, new BlockHitResult(hit, side, anchor, false));
             player.swingHand(Hand.MAIN_HAND);
-            lastPlacement = support.toImmutable();
-            lastPlacementTick = ticks;
-            return true;
+            if (interaction.isAccepted()) {
+                placeFaceOffset = 0;
+                lastPlacement = support.toImmutable();
+                lastPlacementTick = ticks;
+            } else {
+                placeFaceOffset++;
+                status("placement rejected - trying another face");
+            }
+            return true; // one attempt per tick, accepted or not
         }
         finish(false, "No solid face is available for bridging");
         return true;

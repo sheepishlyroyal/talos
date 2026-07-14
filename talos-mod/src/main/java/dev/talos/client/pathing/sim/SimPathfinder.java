@@ -348,7 +348,9 @@ public final class SimPathfinder {
         if (empty(world, node.cell().down()) && node.via() != Primitive.PLACE) return null;
         MotionState state = new MotionState(bottomCenter(node.cell().up()), Vec3d.ZERO, true,
                 MotionState.Pose.STAND);
-        return new Edge(state, Primitive.PLACE, 12, 12.0 + EDIT_PENALTY, node.heading());
+        // Nerdpoling is reliable and fast in practice; billed near its real tick cost (no
+        // full edit surcharge) so pillaring straight up beats a long detour over hills.
+        return new Edge(state, Primitive.PLACE, 12, 14.0, node.heading());
     }
 
     private static boolean standable(World world, BlockPos feet, MotionState.Pose pose) {
