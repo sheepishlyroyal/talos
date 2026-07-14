@@ -141,6 +141,14 @@ public final class TalosCommands {
                                         .executes(context -> GotoCommand.execute(
                                                 context, xzGoal(context))))))
                 .then(lookNode(registryAccess))
+                // `/talos human [on|off]` — toggle session-arc fatigue (see SessionArc).
+                .then(ClientCommandManager.literal("human")
+                        .executes(context -> setHuman(context,
+                                !dev.talos.client.TalosClient.humanizer().humanMode()))
+                        .then(ClientCommandManager.literal("on")
+                                .executes(context -> setHuman(context, true)))
+                        .then(ClientCommandManager.literal("off")
+                                .executes(context -> setHuman(context, false))))
                 .then(ClientCommandManager.literal("glow")
                         .then(coordinate("x")
                                 .then(coordinate("y")
@@ -288,6 +296,23 @@ public final class TalosCommands {
                         .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
                                 .executes(context -> runScriptCommand(
                                         context, StringArgumentType.getString(context, "args"))))));
+    }
+
+    /** Toggles session-arc "Human mode" and reports the new state + fatigue. */
+    private static int setHuman(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context,
+            boolean enabled) {
+        dev.talos.client.TalosClient.humanizer().setHumanMode(enabled);
+        if (enabled) {
+            context.getSource().sendFeedback(Text.literal(
+                    "§bTalos §7» §fHuman mode §aON§f — fatigue drifts reactions, aim and timing "
+                    + "over the session, with idle micro-breaks. Best-effort, not undetectable."));
+        } else {
+            context.getSource().sendFeedback(Text.literal(
+                    "§bTalos §7» §fHuman mode §cOFF§f — stationary "
+                    + dev.talos.client.TalosClient.humanizer().baseProfile().name() + " profile."));
+        }
+        return 1;
     }
 
     /** Dispatches {@code /talos py <code>} to the script engine's snippet evaluator. */

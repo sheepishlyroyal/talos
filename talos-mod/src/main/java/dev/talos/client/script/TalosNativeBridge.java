@@ -709,6 +709,18 @@ public final class TalosNativeBridge {
     @HostAccess.Export public void setProfile(String profile) {
         await(game.submit(() -> { TalosClient.humanizer().setDefaultProfile(HumanizationProfile.byName(profile)); return null; }));
     }
+    @HostAccess.Export public void setHumanMode(boolean enabled) {
+        await(game.submit(() -> { TalosClient.humanizer().setHumanMode(enabled); return null; }));
+    }
+    @HostAccess.Export public boolean humanMode() {
+        return await(game.submit(TalosClient.humanizer()::humanMode));
+    }
+    @HostAccess.Export public double humanFatigue() {
+        return await(game.submit(() -> TalosClient.humanizer().sessionArc().fatigue()));
+    }
+    @HostAccess.Export public boolean humanOnBreak() {
+        return await(game.submit(() -> TalosClient.humanizer().sessionArc().onBreak()));
+    }
     @HostAccess.Export public void setSeed(long seed) { checkValid(); random = new Random(seed); }
     @HostAccess.Export public double randomBetween(double a, double b) {
         checkValid();

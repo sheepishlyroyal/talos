@@ -22,3 +22,26 @@ def set_profile(name):
 def set_seed(seed):
     """Seed script-side humanized waits."""
     return _talos_host.setSeed(int(seed))
+
+def human(enabled=None):
+    """Toggle or query session-arc "Human mode".
+
+    human(True)/human(False) enables/disables it; human() with no argument
+    returns the current bool. When on, a wall-clock fatigue model drifts the
+    active profile over the session — reactions slow and spread, aim loosens
+    and overshoots more, the walk wobbles wider — plus idle micro-breaks that
+    pause pathing briefly. Best-effort obfuscation of the long-session
+    statistical fingerprint; NOT a guarantee of undetectability, and it never
+    makes wrong-target mistakes (only motor-level ones).
+    """
+    if enabled is None:
+        return bool(_talos_host.humanMode())
+    return _talos_host.setHumanMode(bool(enabled))
+
+def fatigue():
+    """Current session-arc fatigue in [0.0, 1.0] (0 when Human mode is off/fresh)."""
+    return float(_talos_host.humanFatigue())
+
+def on_break():
+    """True while a Human-mode micro-break is pausing automation."""
+    return bool(_talos_host.humanOnBreak())

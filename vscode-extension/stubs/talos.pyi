@@ -50,7 +50,7 @@ typed exceptions (talos.PathFailedError, talos.OutOfReachError, ...) you can
 catch with try/except.
 """
 
-from typing import Any, Awaitable, Callable, Coroutine, Iterable, Iterator, Optional, TypedDict, TypeVar, Union
+from typing import Any, Awaitable, Callable, Coroutine, Iterable, Iterator, Optional, TypedDict, TypeVar, Union, overload
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 _EventHandler = TypeVar("_EventHandler", bound=Callable[..., None])
@@ -594,6 +594,29 @@ def set_profile(name: str) -> None:
 
 def set_seed(n: int) -> None:
     """Seed script-side humanized randomness for reproducible runs."""
+    ...
+
+@overload
+def human() -> bool: ...
+@overload
+def human(enabled: bool) -> None: ...
+def human(enabled: bool | None = None):
+    """Toggle or query session-arc "Human mode".
+
+    human(True)/human(False) enables/disables it; human() returns the current
+    bool. When on, a wall-clock fatigue model drifts the active profile over
+    the session (slower/wider reactions, looser aim, wider path wobble) plus
+    idle micro-breaks that pause pathing. Best-effort obfuscation of the
+    long-session statistical fingerprint — not a guarantee of undetectability,
+    and it never makes wrong-target mistakes (only motor-level ones)."""
+    ...
+
+def fatigue() -> float:
+    """Current session-arc fatigue in [0.0, 1.0] (0 when Human mode is off/fresh)."""
+    ...
+
+def on_break() -> bool:
+    """True while a Human-mode micro-break is pausing automation."""
     ...
 
 def spawn(callable: Callable[[], Any]) -> Any:

@@ -16,7 +16,7 @@ from .actions import (goto, goto_near, goto_xz, goto_block, follow, set_node_cou
 from .engine import (on_start, on_tick, task, every, start, run, cancel_all, sleep, ticks,
                      next_tick, tick_count, aio, TaskHandle, command, state)
 from .events import on
-from .humanize import wait, wait_between, set_profile, set_seed
+from .humanize import wait, wait_between, set_profile, set_seed, human, fatigue, on_break
 
 import base64 as _base64
 import marshal as _marshal
@@ -171,7 +171,8 @@ __all__ = ["args", "require",
            "count", "has", "find_slot", "container_items", "deposit", "withdraw", "craft",
            "screen", "close_screen", "hud", "hud_remove", "hud_clear",
            "Pos", "Entity", "Player", "Hit", "log",
-           "wait", "wait_between", "set_profile", "set_seed", "on", "parallel", "spawn", "command",
+           "wait", "wait_between", "set_profile", "set_seed", "human", "fatigue", "on_break",
+           "on", "parallel", "spawn", "command",
            "on_start", "on_tick", "task", "every", "start", "run", "cancel_all",
            "sleep", "ticks", "next_tick", "tick_count", "aio", "TaskHandle", "state",
            "TalosError", "PathFailedError", "OutOfReachError", "NotFoundError",

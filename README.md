@@ -296,6 +296,7 @@ session only), `/talos on list` (dumps every trigger's grammar).
 | `/talos example [name]` | Bare form lists every bundled example; with a name, writes a commented reference script to `talos/scripts/example_<name>.py`. |
 | `/talos script editor` | Open the in-game Python editor screen. |
 | `/talos bridge allow` / `/talos bridge status` | Allow / inspect the VS Code WebSocket bridge for this session. |
+| `/talos human [on\|off]` | Toggle session-arc "Human mode" — wall-clock fatigue drift + idle micro-breaks (see Humanization). |
 | `/talos ui` | Open the Talos UI screen. |
 | `/talos stop` (alias `/talos stop all`) | Stop pathing, follow, aim and any running task. |
 
@@ -456,7 +457,22 @@ when the script stops). `hud_remove(id="hud")` · `hud_clear()`.
 
 `wait(a, b=None)` / `wait_between(a, b)` (right-skewed random pause) · `set_profile(name)` (aim/timing
 profile: raw/natural/paranoid categories) · `set_seed(seed)` (reproducible runs) ·
+`human(enabled=None)` (toggle/query session-arc fatigue) · `fatigue()` (0–1) · `on_break()` ·
 `sleep(seconds)` · `ticks(n)` · `next_tick()` · `tick_count()`.
+
+#### Human mode (session-arc)
+
+`/talos human [on|off]` (or `talos.human(True)`) enables **session-arc humanization**: on top of the
+stationary raw/natural/paranoid profile, a wall-clock **fatigue** model drifts your behaviour over the
+session — reactions slow and spread, aim loosens and overshoots more, the walk wobbles wider — and
+injects **idle micro-breaks** that pause pathing briefly (more often, and longer, as fatigue rises).
+The HUD shows a `human » fatigue N% (Mm)` line while it's on.
+
+The point: the fixed-parameter profiles are themselves a fingerprint a server can find over hours,
+because a real human's parameters *drift*. This makes the input stream non-stationary. It is
+**best-effort obfuscation of long-session statistical detection, not a guarantee of undetectability**,
+and automation may still violate a server's rules. It models only *motor-level* imperfection
+(overshoot, hesitation, breaks) — never *semantic* mistakes like attacking the wrong target.
 
 ### Events
 

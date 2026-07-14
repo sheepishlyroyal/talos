@@ -38,6 +38,10 @@ public final class TalosClientMod implements ClientModInitializer {
             GameThreadExecutor.instance().drain(client);
             ScriptEngine.instance().tick();
             dev.talos.client.script.ScriptGameEvents.tick(client);
+            // Session-arc ages only in-world and counts pathing/actions as "working".
+            if (client.player != null) {
+                TalosClient.humanizer().sessionArc().tick(TalosClient.pathingEngine().isPathing());
+            }
             TalosClient.tickBudget().beginTick();
             TalosClient.taskScheduler().tick();
         });

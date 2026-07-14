@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import dev.talos.client.TalosClient;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.minecraft.client.MinecraftClient;
@@ -81,9 +82,22 @@ public final class TalosHud {
     private static void render(DrawContext context) {
         List<String> lines;
         synchronized (LINES) {
-            if (LINES.isEmpty()) return;
             lines = List.copyOf(LINES.values());
         }
+        // Human mode gets its own always-on indicator line (fatigue % + break state), so it's
+        // visible even with no script HUD lines. Prepended above whatever a script draws.
+        if (TalosClient.humanizer().humanMode()) {
+            var arc = TalosClient.humanizer().sessionArc();
+            String tag = arc.onBreak()
+                    ? String.format("§ehuman §7» §fon break (%.0fs)", arc.breakRemainingMs() / 1000.0)
+                    : String.format("§ehuman §7» §ffatigue %.0f%% §7(%.0fm)",
+                            arc.fatigue() * 100.0, arc.activeMinutes());
+            List<String> merged = new java.util.ArrayList<>(lines.size() + 1);
+            merged.add(tag);
+            merged.addAll(lines);
+            lines = merged;
+        }
+        if (lines.isEmpty()) return;
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.getDebugHud().shouldShowDebugHud()) return;
         TextRenderer font = client.textRenderer;

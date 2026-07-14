@@ -255,6 +255,18 @@ public final class SimFollowTask extends TalosTask {
             scheduleDelay();
             return;
         }
+        // Human mode micro-break: stand still and hold no keys for the break's duration, the
+        // way a real player pauses mid-run. The stuck timer is bypassed — a break isn't a
+        // failure to make progress — and arrival is still checked so a break ON the goal ends.
+        if (TalosClient.humanizer().sessionArc().onBreak()) {
+            advance(player);
+            if (goal.test(player.getBlockPos())) { finish(true, "Arrived"); return; }
+            status("idle (break)");
+            releaseInputs();
+            lastProgressTick = ticks;
+            scheduleDelay();
+            return;
+        }
         checkPredictionDrift(player);
 
         advance(player);
