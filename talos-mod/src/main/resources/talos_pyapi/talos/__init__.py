@@ -3,13 +3,16 @@
 from .errors import (TalosError, PathFailedError, OutOfReachError, NotFoundError,
                      TargetLostError, ActionCancelledError, WorldClosedError)
 from .actions import (goto, goto_near, goto_xz, set_node_count, find_block, find_entity,
-                      find_item, place_block, place_look, break_block, mine, mine_looking_at,
+                      find_item, players, nearest_player, entities, angle_to,
+                      place_block, place_look, break_block, mine, mine_looking_at,
                       left_click, right_click, select_slot, click_slot, container_slot_count,
                       move_stack, take_stack, armor_item, equip_armor, kill_nearest, look_at,
                       player_pos, player_feet, key, tap, release_keys, look, look_angle,
-                      looking_at, block_at, on_edge, input, Pos, Entity)
-from .engine import (on_start, on_tick, task, start, run, cancel_all, sleep, ticks,
-                     next_tick, tick_count, aio, TaskHandle, command)
+                      looking_at, block_at, on_edge, input, inventory, hotbar, selected_slot,
+                      count, has, find_slot, container_items, deposit, withdraw, craft,
+                      screen, close_screen, Pos, Entity, Player)
+from .engine import (on_start, on_tick, task, every, start, run, cancel_all, sleep, ticks,
+                     next_tick, tick_count, aio, TaskHandle, command, state)
 from .events import on
 from .humanize import wait, wait_between, set_profile, set_seed
 
@@ -78,7 +81,13 @@ def spawn(callable):
 
 
 def parallel(*callables):
-    """Run callables concurrently, block until all finish, and return their results in order."""
+    """Run callables concurrently, block until all finish, and return their results in order.
+
+    Accepts separate arguments or a single list/tuple: parallel(a, b) and
+    parallel([a, b]) are equivalent.
+    """
+    if len(callables) == 1 and isinstance(callables[0], (list, tuple)):
+        callables = tuple(callables[0])
     handles = []
     try:
         handles = [spawn(function) for function in callables]
@@ -109,13 +118,16 @@ def log(message):
     return text
 
 __all__ = ["goto", "goto_near", "goto_xz", "set_node_count", "find_block", "find_entity",
-           "find_item", "place_block", "place_look", "break_block", "mine", "mine_looking_at",
+           "find_item", "players", "nearest_player", "entities", "angle_to",
+           "place_block", "place_look", "break_block", "mine", "mine_looking_at",
            "left_click", "right_click", "select_slot", "click_slot", "container_slot_count",
            "move_stack", "take_stack", "armor_item", "equip_armor", "kill_nearest", "look_at",
            "player_pos", "player_feet", "key", "tap", "release_keys", "look", "look_angle",
-           "looking_at", "block_at", "on_edge", "input", "Pos", "Entity", "log",
+           "looking_at", "block_at", "on_edge", "input", "inventory", "hotbar", "selected_slot",
+           "count", "has", "find_slot", "container_items", "deposit", "withdraw", "craft",
+           "screen", "close_screen", "Pos", "Entity", "Player", "log",
            "wait", "wait_between", "set_profile", "set_seed", "on", "parallel", "spawn", "command",
-           "on_start", "on_tick", "task", "start", "run", "cancel_all",
-           "sleep", "ticks", "next_tick", "tick_count", "aio", "TaskHandle",
+           "on_start", "on_tick", "task", "every", "start", "run", "cancel_all",
+           "sleep", "ticks", "next_tick", "tick_count", "aio", "TaskHandle", "state",
            "TalosError", "PathFailedError", "OutOfReachError", "NotFoundError",
            "TargetLostError", "ActionCancelledError", "WorldClosedError"]

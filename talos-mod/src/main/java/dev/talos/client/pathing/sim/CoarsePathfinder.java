@@ -38,10 +38,22 @@ public final class CoarsePathfinder {
     /** Ordered start-to-end corridor; a best-effort partial when the goal was not reached. */
     public record Result(List<BlockPos> corridor, boolean reachedGoal, String detail) {}
 
+    // CollisionView itself cannot answer "is this chunk loaded", so loadedness arrives as
+    // an explicit predicate: the engine passes the real chunk map, FakeWorld tests default
+    // to "always loaded" and stay untouched.
+    private static final Predicate<BlockPos> ALWAYS_LOADED = pos -> true;
+
     /** Runs the whole search inline. Callers on the client thread should slice via begin(). */
     public static Result find(CollisionView world, BlockPos start, BlockPos goal,
             Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos) {
-        Search search = begin(world, start, goal, isGoal, blacklist, timeBudgetNanos);
+        return find(world, start, goal, isGoal, blacklist, timeBudgetNanos, ALWAYS_LOADED);
+    }
+
+    /** Inline variant with an explicit loaded-chunk predicate (see {@link #begin}). */
+    public static Result find(CollisionView world, BlockPos start, BlockPos goal,
+            Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos,
+            Predicate<BlockPos> loaded) {
+        Search search = begin(world, start, goal, isGoal, blacklist, timeBudgetNanos, loaded);
         while (!search.isFinished()) search.advance(timeBudgetNanos);
         return search.result();
     }
@@ -49,7 +61,18 @@ public final class CoarsePathfinder {
     /** Creates a resumable search; call {@link Search#advance} from successive ticks. */
     public static Search begin(CollisionView world, BlockPos start, BlockPos goal,
             Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos) {
-        return new Search(world, start, goal, isGoal, blacklist, timeBudgetNanos);
+        return begin(world, start, goal, isGoal, blacklist, timeBudgetNanos, ALWAYS_LOADED);
+    }
+
+    /**
+     * Resumable search that treats cells outside {@code loaded} as non-walkable. Unloaded
+     * client chunks read back as pure air — indistinguishable from a bottomless void — so
+     * refusing them keeps the corridor honest about where the world is actually known.
+     */
+    public static Search begin(CollisionView world, BlockPos start, BlockPos goal,
+            Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos,
+            Predicate<BlockPos> loaded) {
+        return new Search(world, start, goal, isGoal, blacklist, timeBudgetNanos, loaded);
     }
 
     public static final class Search {
@@ -58,6 +81,7 @@ public final class CoarsePathfinder {
         private final Predicate<BlockPos> isGoal;
         private final Set<BlockPos> blacklist;
         private final long timeBudgetNanos;
+        private final Predicate<BlockPos> loaded;
         private final PriorityQueue<Node> open = new PriorityQueue<>(Comparator
                 .comparingDouble(Node::f).thenComparingDouble(Node::h)
                 .thenComparingLong(Node::sequence));
@@ -72,9 +96,10 @@ public final class CoarsePathfinder {
         private String reason;
 
         private Search(CollisionView world, BlockPos start, BlockPos goal,
-                Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos) {
+                Predicate<BlockPos> isGoal, Set<BlockPos> blacklist, long timeBudgetNanos,
+                Predicate<BlockPos> loaded) {
             if (world == null || start == null || goal == null || isGoal == null
-                    || blacklist == null || timeBudgetNanos < 0L) {
+                    || blacklist == null || timeBudgetNanos < 0L || loaded == null) {
                 throw new IllegalArgumentException("invalid coarse search arguments");
             }
             this.world = world;
@@ -82,6 +107,7 @@ public final class CoarsePathfinder {
             this.isGoal = isGoal;
             this.blacklist = blacklist;
             this.timeBudgetNanos = timeBudgetNanos;
+            this.loaded = loaded;
             // The start cell is exempt from walkability: the player is already there, and
             // rejecting a swimming or mid-fall start would make every wet goto plan nothing.
             Node root = new Node(start.asLong(), 0.0, heuristic(start, goal), sequence++);
@@ -187,6 +213,8 @@ public final class CoarsePathfinder {
 
         /** Feet+head passable, no lava, and either solid support below or a swimmable cell. */
         private boolean walkable(BlockPos feet) {
+            // Unloaded cells read as air (see begin): never stand the corridor on fiction.
+            if (!loaded.test(feet)) return false;
             if (!open2(feet)) return false;
             if (PlayerMotion.isLava(world.getFluidState(feet))
                     || PlayerMotion.isLava(world.getFluidState(feet.up()))) return false;

@@ -50,7 +50,7 @@ typed exceptions (talos.PathFailedError, talos.OutOfReachError, ...) you can
 catch with try/except.
 """
 
-from typing import Any, Awaitable, Callable, Coroutine, Iterator, Optional, TypeVar, Union
+from typing import Any, Awaitable, Callable, Coroutine, Iterable, Iterator, Optional, TypedDict, TypeVar, Union
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 _EventHandler = TypeVar("_EventHandler", bound=Callable[..., None])
@@ -69,10 +69,24 @@ class Pos:
     def __iter__(self) -> Iterator[float]: ...
 
 class Entity:
-    """An entity snapshot: .uuid, .type (registry id like "minecraft:zombie"), .pos."""
+    """An entity snapshot: .uuid, .type (registry id like "minecraft:zombie"), .pos,
+    and .distance (feet-to-feet from the local player; None when not measured)."""
     uuid: str
     type: str
     pos: Pos
+    distance: Optional[float]
+
+class Player(Entity):
+    """A player snapshot: .name (gamertag), .uuid, .pos (exact doubles, never floored),
+    .distance (feet-to-feet from the local player). .type is "minecraft:player"."""
+    name: str
+    distance: float
+
+class SlotEntry(TypedDict):
+    """One non-empty stack: its slot number, item registry id, and count."""
+    slot: int
+    id: str
+    count: int
 
 _PosLike = Union[Pos, Entity]
 
@@ -113,6 +127,18 @@ def on_tick(fn: _F) -> _F:
 def task(fn: _F) -> _F:
     """Declare a long-running `async def` task, started when the script starts.
     Any number can run concurrently; `await` points are where they interleave."""
+    ...
+
+def every(seconds: Optional[float] = None, minutes: Optional[float] = None,
+          ticks: Optional[int] = None) -> Callable[[_F], _F]:
+    """Run the decorated function repeatedly at a fixed interval.
+
+    Give exactly one interval (or combine seconds+minutes):
+    @talos.every(seconds=5), @talos.every(minutes=1), @talos.every(ticks=10).
+    Works on a plain `def` (keep it fast) or an `async def` (awaited to
+    completion before the next interval, so runs never overlap). The first run
+    happens one interval after the script starts; a failed run is reported and
+    the schedule keeps going."""
     ...
 
 class TaskHandle:
@@ -211,6 +237,26 @@ def find_item(item: str, radius: float = 64.0) -> Optional[Entity]:
     """Nearest dropped item of a registry id, or None."""
     ...
 
+def players(radius: float = 128.0) -> list[Player]:
+    """All OTHER players within radius, nearest first (never the local player).
+    Positions are exact doubles; .distance is feet-to-feet from the local player."""
+    ...
+
+def nearest_player(radius: float = 128.0) -> Optional[Player]:
+    """The nearest other player within radius, or None."""
+    ...
+
+def entities(type: Optional[str] = None, radius: float = 64.0) -> list[Entity]:
+    """All entities within radius, nearest first, excluding the local player.
+    `type` filters on the exact registry id ("minecraft:zombie"); None = everything."""
+    ...
+
+def angle_to(x: Union[float, str, _PosLike], y: Union[float, str] = ..., z: Union[float, str] = ...) -> tuple[float, float]:
+    """(yaw, pitch) in degrees the player would need to face a point/snapshot,
+    computed from the EYES with the same math look_at() uses. Yaw wrapped to
+    -180..180 (0 = south, 90 = west); pitch -90 (up) to 90 (down)."""
+    ...
+
 def place_block(x: Optional[Union[float, _PosLike]] = ..., y: Optional[float] = ...,
                 z: Optional[float] = ..., block_id: Optional[str] = ...) -> str:
     """Place a block. No arguments = place at the crosshair target. With x/y/z,
@@ -261,6 +307,67 @@ def take_stack(container_slot: int, player_slot: int) -> str:
     """Move a stack from an open container/horse slot into a player screen slot."""
     ...
 
+def inventory() -> list[SlotEntry]:
+    """Non-empty stacks in the player's 36 main slots as {slot, id, count}.
+
+    Slot numbers are stable PlayerInventory indices: 0-8 hotbar (what
+    select_slot()/selected_slot() use), 9-35 main grid — NOT the raw
+    screen-handler indices click_slot()/move_stack() take."""
+    ...
+
+def hotbar() -> list[SlotEntry]:
+    """The hotbar's non-empty stacks: inventory() entries with slot 0-8."""
+    ...
+
+def selected_slot() -> int:
+    """The currently selected hotbar slot, 0-8."""
+    ...
+
+def count(item_id: str) -> int:
+    """Total number of an item across the player's 36 main inventory slots."""
+    ...
+
+def has(item_id: str) -> bool:
+    """True when at least one of the item sits in the player's main inventory."""
+    ...
+
+def find_slot(item_id: str) -> Optional[int]:
+    """First PlayerInventory slot index (0-35, see inventory()) holding the item, or None."""
+    ...
+
+def container_items() -> list[SlotEntry]:
+    """Non-empty stacks in the open container's non-player slots as {slot, id, count}.
+    Slot numbers ARE the raw screen-handler indices, usable with click_slot()/move_stack()."""
+    ...
+
+def deposit(item_id: str, amount: int) -> int:
+    """Move up to `amount` items of a type from the player into the open container.
+    Best-effort exact; returns the count ACTUALLY moved (0 when the container is
+    full). deposit(t, talos.count(t)) empties you of t. Raises if no container is open."""
+    ...
+
+def withdraw(item_id: str, amount: int) -> int:
+    """Move up to `amount` items of a type from the open container into the player.
+    Mirror of deposit(); returns the count actually moved."""
+    ...
+
+def craft(item_id: str, count: int = 1) -> str:
+    """Craft `count` results of an OUTPUT item via the recipe book. Needs the
+    inventory (2x2) or a crafting table open. 1.21.11 does not sync recipe ids
+    to the client, so item_id names the recipe's RESULT item; recipes whose
+    ingredients you have are preferred. Raises (with partial progress) when
+    ingredients run out."""
+    ...
+
+def screen() -> Optional[str]:
+    """Name of the open screen ("minecraft:generic_9x3", "minecraft:crafting",
+    "minecraft:inventory", a title for other screens), or None when none is open."""
+    ...
+
+def close_screen() -> None:
+    """Close whatever screen is open; safe when none is."""
+    ...
+
 def armor_item(slot: str) -> str:
     """Item id equipped in helmet/chestplate/leggings/boots."""
     ...
@@ -304,11 +411,12 @@ def tap(name: str) -> str:
     cleanup is ever needed."""
     ...
 
-def release_keys(*names: str) -> None:
+def release_keys(*names: Union[str, list[str], tuple[str, ...]]) -> None:
     """Release keys held by key(). With no arguments, releases ALL of them.
 
     With names, releases only those, e.g. release_keys("forward", "jump")
-    keeps a held "sneak" pressed. Safe to call unconditionally."""
+    keeps a held "sneak" pressed. A single list/tuple also works:
+    release_keys(["forward", "jump"]). Safe to call unconditionally."""
     ...
 
 def look(yaw: float, pitch: float) -> None:
@@ -403,6 +511,38 @@ def spawn(callable: Callable[[], Any]) -> Any:
     interpreter, no shared state). For shared-state concurrency use @talos.task."""
     ...
 
-def parallel(*callables: Callable[[], Any]) -> list[Any]:
-    """Run functions in isolated sessions concurrently and block until all finish."""
+def parallel(*callables: Union[Callable[[], Any], Iterable[Callable[[], Any]]]) -> list[Any]:
+    """Run functions in isolated sessions concurrently and block until all finish.
+    Accepts separate arguments or a single list/tuple: parallel(a, b) == parallel([a, b])."""
     ...
+
+# --- persistent state -----------------------------------------------------------
+
+class _State:
+    """Dict-like storage that survives restarts: talos.state["key"] = value.
+
+    Values must be JSON-serializable (str/int/float/bool/None/list/dict) —
+    anything else raises TypeError on assignment. The whole mapping is capped at
+    256KB serialized (ValueError beyond it, mutation rolled back). Contents live
+    ONLY at <gameDir>/talos/state/<script>.json, named after the running script;
+    no paths ever cross the boundary and no other file APIs exist. Every mutation
+    persists immediately; save() forces a write anyway."""
+    def __getitem__(self, key: str) -> Any: ...
+    def __setitem__(self, key: str, value: Any) -> None: ...
+    def __delitem__(self, key: str) -> None: ...
+    def __contains__(self, key: str) -> bool: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[str]: ...
+    def get(self, key: str, default: Any = None) -> Any: ...
+    def setdefault(self, key: str, default: Any = None) -> Any: ...
+    def keys(self) -> Iterable[str]: ...
+    def values(self) -> Iterable[Any]: ...
+    def items(self) -> Iterable[tuple[str, Any]]: ...
+    def pop(self, key: str, *default: Any) -> Any: ...
+    def update(self, mapping: Union[dict[str, Any], Iterable[tuple[str, Any]]]) -> None: ...
+    def clear(self) -> None: ...
+    def save(self) -> None:
+        """Persist the current contents now (mutations already save automatically)."""
+        ...
+
+state: _State

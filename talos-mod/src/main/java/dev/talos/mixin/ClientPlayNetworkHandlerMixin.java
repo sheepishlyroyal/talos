@@ -8,6 +8,7 @@ import net.minecraft.entity.boss.BossBar;
 import net.minecraft.network.packet.s2c.play.BossBarS2CPacket;
 import net.minecraft.network.packet.s2c.play.ExplosionS2CPacket;
 import net.minecraft.network.packet.s2c.play.ItemPickupAnimationS2CPacket;
+import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
 import net.minecraft.text.Text;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -37,6 +38,18 @@ public abstract class ClientPlayNetworkHandlerMixin {
             }
             ci.cancel();
         }
+    }
+
+    /**
+     * Rubberband detection: this packet is the server force-setting the client's position
+     * (teleport, anti-cheat correction, lag resync). Every prediction the pathing follower
+     * made is now fiction — tell it so it can release inputs, mute its desync watchdog,
+     * and resume the closed loop from the corrected position.
+     */
+    @Inject(method = "onPlayerPositionLook", at = @At("HEAD"))
+    private void talos$onPlayerPositionLook(PlayerPositionLookS2CPacket packet, CallbackInfo ci) {
+        if (!MinecraftClient.getInstance().isOnThread()) return;
+        dev.talos.client.pathing.sim.SimFollowTask.onServerCorrection();
     }
 
     @Inject(method = "onItemPickupAnimation", at = @At("HEAD"))

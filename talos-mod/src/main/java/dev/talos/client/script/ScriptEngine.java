@@ -37,6 +37,9 @@ import org.graalvm.polyglot.io.IOAccess;
 
 /** Process scripting service. Each session owns one worker and one long-lived Python context. */
 public final class ScriptEngine {
+    private static final org.slf4j.Logger LOGGER =
+            org.slf4j.LoggerFactory.getLogger("Talos");
+
     @FunctionalInterface
     public interface LogSink {
         void log(String level, String text);
@@ -48,6 +51,59 @@ public final class ScriptEngine {
     private static final List<String> API_FILES = List.of(
             "errors.py", "actions.py", "engine.py", "events.py", "humanize.py", "__init__.py");
     private static final int MAX_SESSIONS = 8;
+
+    /**
+     * Guest-side static analyzer for the first-run trust summary: walks the script's ast
+     * for {@code talos.X} / {@code talos.aio.X} attribute uses plus literal
+     * {@code talos.command("...")} / {@code talos.on("...")} registrations, and buckets
+     * them into human-readable permission categories. Returns '' on any syntax error.
+     */
+    private static final String SCAN_SNIPPET = """
+            def _talos_scan(_src):
+                import ast
+                try:
+                    tree = ast.parse(_src)
+                except SyntaxError:
+                    return ''
+                names = set()
+                commands = set()
+                events = set()
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Attribute):
+                        base = node.value
+                        if isinstance(base, ast.Name) and base.id == 'talos':
+                            names.add(node.attr)
+                        elif (isinstance(base, ast.Attribute) and base.attr == 'aio'
+                              and isinstance(base.value, ast.Name) and base.value.id == 'talos'):
+                            names.add(node.attr)
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                        func = node.func
+                        if (isinstance(func.value, ast.Name) and func.value.id == 'talos'
+                                and node.args and isinstance(node.args[0], ast.Constant)):
+                            if func.attr == 'command':
+                                commands.add(str(node.args[0].value))
+                            elif func.attr == 'on':
+                                events.add(str(node.args[0].value))
+                if 'on_tick' in names:
+                    events.add('tick')
+                categories = []
+                if names & {'goto', 'goto_near', 'goto_xz', 'key', 'tap', 'look', 'look_at',
+                            'release_keys'}:
+                    categories.append('movement')
+                if names & {'place_block', 'place_look', 'break_block', 'mine',
+                            'mine_looking_at'}:
+                    categories.append('block edits')
+                if names & {'input'}:
+                    categories.append('chat capture')
+                if names & {'left_click', 'right_click', 'click_slot', 'move_stack',
+                            'take_stack'}:
+                    categories.append('clicks')
+                if commands:
+                    categories.append('commands: ' + ', '.join(sorted(commands)))
+                if events:
+                    categories.append('events: ' + ', '.join(sorted(events)))
+                return ', '.join(categories)
+            """;
 
     static {
         Thread thread = new Thread(() -> {
@@ -101,8 +157,7 @@ public final class ScriptEngine {
     }
 
     public void tick() {
-        for (Session current : List.copyOf(sessions.values()))
-            if (current.state.get() == State.RUNNING) current.events.post("tick");
+        postEvent("tick");
     }
 
     public void stop() {
@@ -110,15 +165,51 @@ public final class ScriptEngine {
     }
 
     public void onDisconnect() {
-        for (Session current : List.copyOf(sessions.values()))
-            if (current.state.get() == State.RUNNING) current.events.post("disconnect");
+        postEvent("disconnect");
         stop();
     }
 
     /** Entry point for client-side hooks; Python dispatch still occurs only on the worker. */
     public void postEvent(String event, Object... snapshots) {
         for (Session current : List.copyOf(sessions.values()))
-            if (current.state.get() == State.RUNNING) current.events.post(event, snapshots);
+            if (current.state.get() == State.RUNNING)
+                // withEvent stamps the name on this thread so enqueueEvent (called
+                // synchronously inside post) can attribute the dispatch when profiling.
+                ScriptProfiler.withEvent(event, () -> current.events.post(event, snapshots));
+    }
+
+    /**
+     * Runs a one-liner (semicolon-separated statements; a trailing expression echoes its
+     * repr) on the RUNNING session's worker — sharing that script's globals — or, when no
+     * session is running, on a fresh ephemeral session that shuts down after the eval.
+     * The client thread never touches Python: everything happens on the session worker.
+     */
+    public CompletableFuture<Void> evalSnippet(String code, LogSink logSink) {
+        Objects.requireNonNull(code, "code");
+        LogSink sink = logSink == null ? CHAT : logSink;
+        Session target;
+        boolean ephemeral;
+        synchronized (lock) {
+            Session current = session;
+            if (current != null && current.state.get() == State.RUNNING) {
+                target = current;
+                ephemeral = false;
+            } else {
+                target = createSession(sink, true);
+                if (target == null) return tooManySessions(sink);
+                ephemeral = true;
+            }
+        }
+        CompletableFuture<Void> result =
+                target.submit(() -> { target.evalSnippet(code, sink); return null; });
+        if (ephemeral) result.whenComplete((ignored, error) -> target.stop());
+        return result;
+    }
+
+    /** True when a snippet would share the running (primary) script session's globals. */
+    public boolean snippetSharesSession() {
+        Session current = session;
+        return current != null && current.state.get() == State.RUNNING;
     }
 
     public State state() { Session current = session; return current == null ? State.STOPPED : current.state.get(); }
@@ -259,8 +350,13 @@ public final class ScriptEngine {
         }
 
         private void enqueueEvent(Runnable event) {
+            // Captured here because EventDispatcher.post calls this synchronously on the
+            // posting thread; the name travels with the runnable onto the worker.
+            String profiledEvent = ScriptProfiler.currentEventName();
             submit(() -> {
                 ensureContext();
+                long began = profiledEvent != null && ScriptProfiler.enabled()
+                        ? System.nanoTime() : 0L;
                 try {
                     event.run();
                     stdout.flushLine();
@@ -273,6 +369,10 @@ public final class ScriptEngine {
                     // silently instead of reaching the console/chat.
                     reportError(error, stdout.sink);
                     throw error;
+                } finally {
+                    if (began != 0L) {
+                        ScriptProfiler.record(profiledEvent, System.nanoTime() - began);
+                    }
                 }
                 return null;
             });
@@ -297,6 +397,7 @@ public final class ScriptEngine {
                         + "        globals().pop(_key, None)\n");
                 events.clear();
                 installApi(context);
+                summarizeFirstRun(file, effectiveSink);
                 context.eval(Source.newBuilder("python", file.toFile()).build());
                 stdout.flushLine();
                 stderr.flushLine();
@@ -330,6 +431,71 @@ public final class ScriptEngine {
                 stderr.flushLine();
                 reportError(error, outputSink);
                 throw error;
+            }
+        }
+
+        /**
+         * Executes a {@code /talos py} one-liner inside this session's Python context.
+         * Statement splitting is done by Python itself: the code is ast-parsed inside the
+         * guest (semicolon-separated simple statements are separate top-level statements),
+         * everything but a trailing expression is exec'd into the module globals — the
+         * SAME globals a running script uses — and a trailing expression is eval'd, its
+         * repr printed through the ordinary stdout path. No Java-side string parsing.
+         */
+        private void evalSnippet(String code, LogSink sink) {
+            try {
+                ensureContext();
+                String runner = "def _talos_py_eval(_src):\n"
+                        + "    import ast\n"
+                        + "    g = globals()\n"
+                        + "    if 'talos' not in g:\n"
+                        + "        import talos as _talos_module\n"
+                        + "        g['talos'] = _talos_module\n"
+                        + "    module = ast.parse(_src, '<talos-py>')\n"
+                        + "    last = module.body[-1] if module.body and isinstance(module.body[-1], ast.Expr) else None\n"
+                        + "    if last is None:\n"
+                        + "        exec(compile(_src, '<talos-py>', 'exec'), g)\n"
+                        + "        return\n"
+                        + "    for node in module.body[:-1]:\n"
+                        + "        exec(compile(ast.get_source_segment(_src, node), '<talos-py>', 'exec'), g)\n"
+                        + "    value = eval(compile(ast.get_source_segment(_src, last), '<talos-py>', 'eval'), g)\n"
+                        + "    if value is not None:\n"
+                        + "        print(repr(value))\n"
+                        + "_talos_py_eval(" + py(code) + ")";
+                context.eval("python", runner);
+                stdout.flushLine();
+                stderr.flushLine();
+            } catch (RuntimeException error) {
+                stdout.flushLine();
+                stderr.flushLine();
+                reportError(error, sink);
+                throw error;
+            }
+        }
+
+        /**
+         * First-run trust summary: when this script's SHA-256 hasn't been seen before (or
+         * the content changed), statically scan the source with Python's own {@code ast}
+         * — inside this worker's GraalPy context, before the script executes — for the
+         * talos APIs it calls, bucketed into human categories, and print one summary line.
+         * Purely informational: scan errors never prevent execution.
+         */
+        private void summarizeFirstRun(Path file, LogSink sink) {
+            try {
+                String source = Files.readString(file);
+                String hash = ScriptTrust.hash(source);
+                String scriptName = file.getFileName().toString();
+                if (ScriptTrust.isKnown(scriptName, hash)) return;
+                Value summary = context.eval("python", SCAN_SNIPPET + "_talos_scan(" + py(source) + ")");
+                String uses = summary != null && summary.isString() ? summary.asString() : "";
+                String message = "First run of '" + scriptName + "' — uses: "
+                        + (uses.isEmpty() ? "no talos APIs detected" : uses);
+                if (sink != null) sink.log("info", message);
+                LOGGER.info(message);
+                ScriptTrust.remember(scriptName, hash);
+            } catch (IOException | RuntimeException scanError) {
+                // Malformed source will fail the run itself; the summary must never.
+                LOGGER.debug("Talos trust scan skipped for {}", file, scanError);
             }
         }
 

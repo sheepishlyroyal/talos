@@ -25,12 +25,15 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Closed-loop route follower. The route contains geometric intent, never a recorded input
  * schedule: every client tick starts from the real player state and runs fresh short rollouts.
  */
 public final class SimFollowTask extends TalosTask {
+    private static final Logger LOGGER = LoggerFactory.getLogger(SimFollowTask.class);
     private static final double REACHED_SQUARED = 0.36;
     private static final int ROLLOUT_TICKS = 6;
     private static final int LANDING_ROLLOUT_TICKS = 40;
@@ -45,6 +48,25 @@ public final class SimFollowTask extends TalosTask {
     private static final int AIM_TARGET_COLOR = 0xFFE14D; // yellow: where we WANT to look
     private static final int AIM_GAZE_COLOR = 0xFF3333;   // red: where we look right now
     private static final int STUCK_TICKS = 100;
+    // Desync watchdog: single-tick spike threshold, EWMA decay, and the sustained-drift
+    // trip. The score's steady state is drift/(1-decay), so 0.6 means ~0.15 blocks of
+    // unexplained motion EVERY tick — small individually, but the simulator is normally
+    // millimeter-accurate, so sustained centi-block error is a real model/world mismatch.
+    private static final double DRIFT_SPIKE = 0.35;
+    private static final double DRIFT_DECAY = 0.75;
+    private static final double DRIFT_SCORE_HIGH = 0.6;
+    private static final int DRIFT_HIGH_TICKS = 10;
+    private static final int DRIFT_LOG_INTERVAL = 40;
+    private static final int DRIFT_SUPPRESS_TICKS = 5;
+    private static final int CORRECTION_HOLD_TICKS = 5;
+    // Waiting on chunk streaming is not "stuck", but a dead frontier must still fail:
+    // 15 seconds is longer than any healthy server takes to stream one more chunk ring.
+    private static final int CHUNK_WAIT_LIMIT_TICKS = 300;
+    // Per-tick scorer complaints, ringed over the same window the stuck timer watches.
+    private static final int CAUSE_BUMP = 1;
+    private static final int CAUSE_JUMP = 2;
+    private static final int CAUSE_FIT = 4;
+    private static final int CAUSE_BRAKE = 8;
 
     private final MinecraftClient client;
     private PlannedRoute route;
@@ -80,6 +102,22 @@ public final class SimFollowTask extends TalosTask {
     // fully known to the simulator — so predictions include the wobble before it happens.
     private final double[] plannedJitter = new double[ROLLOUT_TICKS * 2];
     private boolean jitterSeeded;
+    // Desync watchdog: last tick's 1-step predicted position (null when no rollout ran),
+    // an exponentially-decayed drift score, and suppression windows around events where a
+    // prediction/actual mismatch is EXPECTED (server corrections, route swaps).
+    private static volatile SimFollowTask activeFollower;
+    private Vec3d predictedNext;
+    private double driftScore;
+    private int driftHighTicks;
+    private int lastDriftLogTick = -1000;
+    private int driftSuppressedUntil;
+    private int correctionHoldTicks;
+    private int recalibratingUntil;
+    private int chunkWaitTicks;
+    // What the candidate scorer complained about each tick, as bit-flags over the stuck
+    // window: turns "stuck near waypoint N" into "stuck ... - likely cause: <plain words>".
+    private final byte[] causeRing = new byte[STUCK_TICKS];
+    private int causeCursor;
 
     public SimFollowTask(MinecraftClient client, PlannedRoute route, Predicate<BlockPos> goal,
             CompletableFuture<PathResult> future) {
@@ -149,9 +187,38 @@ public final class SimFollowTask extends TalosTask {
         this.committedPrimitive = null;
         this.closestApproach = Double.POSITIVE_INFINITY;
         this.recedeTicks = 0;
+        // A swapped route legitimately changes the chosen input mid-prediction; give the
+        // watchdog a few ticks before trusting drift numbers again.
+        this.predictedNext = null;
+        this.driftSuppressedUntil = ticks + DRIFT_SUPPRESS_TICKS;
     }
 
-    @Override public void initialize() { }
+    /**
+     * Rubberband hook, called on the client thread from the PlayerPositionLookS2CPacket
+     * handler mixin: the server just force-set our position, so every in-flight prediction
+     * is fiction. The active follower releases keys for a few ticks, suppresses the desync
+     * watchdog, and resets its progress trackers — the closed loop then resumes naturally
+     * from the corrected position.
+     */
+    public static void onServerCorrection() {
+        SimFollowTask follower = activeFollower;
+        if (follower != null && follower.isActive()) follower.serverCorrection();
+    }
+
+    private void serverCorrection() {
+        correctionHoldTicks = CORRECTION_HOLD_TICKS;
+        predictedNext = null;
+        driftScore = 0.0;
+        driftHighTicks = 0;
+        driftSuppressedUntil = ticks + CORRECTION_HOLD_TICKS + DRIFT_SUPPRESS_TICKS;
+        bestRemaining = Double.POSITIVE_INFINITY;
+        lastProgressTick = ticks;
+        closestApproach = Double.POSITIVE_INFINITY;
+        recedeTicks = 0;
+        status("resyncing (server correction)");
+    }
+
+    @Override public void initialize() { activeFollower = this; }
     @Override public boolean condition() { return !future.isDone(); }
     @Override public void increment() { ticks++; }
 
@@ -163,9 +230,22 @@ public final class SimFollowTask extends TalosTask {
             return;
         }
         if (!TalosClient.tickBudget().hasBudgetRemaining()) {
+            predictedNext = null; // skipped tick: the 1-step prediction no longer lines up
             scheduleDelay();
             return;
         }
+        // A server correction teleported us: hold everything for a few ticks so the client
+        // finishes settling on the corrected position, then let the closed loop re-decide
+        // from live state (it replans from wherever we actually are, no special path).
+        if (correctionHoldTicks > 0) {
+            correctionHoldTicks--;
+            status("resyncing (server correction)");
+            releaseInputs();
+            lastProgressTick = ticks; // the teleport is not the follower's lack of progress
+            scheduleDelay();
+            return;
+        }
+        checkPredictionDrift(player);
 
         advance(player);
         if (goal.test(player.getBlockPos())) {
@@ -192,19 +272,36 @@ public final class SimFollowTask extends TalosTask {
                 status("extending route");
                 releaseInputs();
                 if (ticks - lastProgressTick > STUCK_TICKS) {
-                    finish(false, "Route ran out and no extension arrived");
+                    finish(false, "Route ran out and no extension arrived" + dominantCause());
                 }
                 scheduleDelay();
                 return;
             }
-            finish(false, "Nodes ended before the goal was reached");
+            finish(false, "Nodes ended before the goal was reached" + dominantCause());
             return;
         }
 
         PlannedRoute.Waypoint waypoint = route.waypoints().get(index);
+        // Long routes can outrun the server's chunk streaming: a waypoint in an unloaded
+        // chunk means every rollout would read air and steer into fiction. Hold at the
+        // frontier — genuinely waiting is not "stuck" — but bound the wait so a stalled
+        // stream still fails with a message that names what actually happened.
+        if (!client.world.isChunkLoaded(BlockPos.ofFloored(waypoint.position()))) {
+            if (++chunkWaitTicks > CHUNK_WAIT_LIMIT_TICKS) {
+                finish(false, "Waited 15s for chunks to load near waypoint " + index
+                        + " and gave up");
+                return;
+            }
+            status("waiting for chunks");
+            releaseInputs();
+            lastProgressTick = ticks; // stuck timer generously bypassed while waiting
+            scheduleDelay();
+            return;
+        }
+        chunkWaitTicks = 0;
         updateProgress(new Vec3d(player.getX(), player.getY(), player.getZ()), waypoint.position());
         if (ticks - lastProgressTick > STUCK_TICKS) {
-            finish(false, "Pathing is stuck near route waypoint " + index);
+            finish(false, "Pathing is stuck near route waypoint " + index + dominantCause());
             return;
         }
 
@@ -247,7 +344,8 @@ public final class SimFollowTask extends TalosTask {
         // orange shows where the body will truly be — friction, effects, momentum, AND the
         // natural eye movement included.
         renderPrediction(live, selected, profile, player.getYaw());
-        status(live.inFluid()
+        status(ticks < recalibratingUntil ? "recalibrating (prediction drift)"
+                : live.inFluid()
                 ? live.fluid() == MotionState.Fluid.LAVA ? "swimming (lava)" : "swimming"
                 : isBrake(selected) ? "braking (final approach)"
                 : selected.sprint() && selected.jump() ? "sprint-jumping"
@@ -275,6 +373,85 @@ public final class SimFollowTask extends TalosTask {
         }
         return new MotionState(new Vec3d(player.getX(), player.getY(), player.getZ()), player.getVelocity(), player.isOnGround(), pose,
                 fluid, false);
+    }
+
+    /**
+     * Desync watchdog: compare the ACTUAL position this tick against the 1-step prediction
+     * captured last tick (the first rollout step of the applied input). The simulator is
+     * normally millimeter-accurate, so real drift means the model and the world disagree —
+     * server-side knockback, an unmodeled block, latency — and the honest response is to
+     * stop trusting the current plan and recalibrate from live state. Cost per tick is one
+     * Vec3d distance.
+     */
+    private void checkPredictionDrift(ClientPlayerEntity player) {
+        Vec3d expected = predictedNext;
+        predictedNext = null; // re-armed only when a fresh rollout runs this tick
+        if (expected == null || ticks < driftSuppressedUntil) return;
+        Vec3d actual = new Vec3d(player.getX(), player.getY(), player.getZ());
+        double drift = actual.distanceTo(expected);
+        driftScore = driftScore * DRIFT_DECAY + drift;
+        driftHighTicks = driftScore > DRIFT_SCORE_HIGH ? driftHighTicks + 1 : 0;
+        if (drift < DRIFT_SPIKE && driftHighTicks < DRIFT_HIGH_TICKS) return;
+        if (ticks - lastDriftLogTick >= DRIFT_LOG_INTERVAL) {
+            lastDriftLogTick = ticks;
+            LOGGER.warn("Prediction drift {} blocks (decayed score {}): actual {} vs "
+                    + "predicted {}; underfoot {}, pose {}, touching water {}, in lava {}",
+                    String.format("%.3f", drift), String.format("%.2f", driftScore),
+                    actual, expected,
+                    client.world.getBlockState(player.getBlockPos().down()),
+                    player.getPose(), player.isTouchingWater(), player.isInLava());
+        }
+        recalibratingUntil = ticks + 20;
+        driftScore = 0.0;
+        driftHighTicks = 0;
+        driftSuppressedUntil = ticks + DRIFT_SUPPRESS_TICKS;
+        forceRecalibrate();
+    }
+
+    /**
+     * Recalibrate from live reality: forget stale progress bookkeeping (the drifted route
+     * position poisoned bestRemaining) and fire the engine's EXISTING extension machinery
+     * outside its normal cooldown — the fresh route is stitched/swap-anchored to wherever
+     * the player really is, so no new pathing mechanism is invented here.
+     */
+    private void forceRecalibrate() {
+        bestRemaining = Double.POSITIVE_INFINITY;
+        lastProgressTick = ticks;
+        if (replanRequest != null && !replanRequested) {
+            replanRequested = true;
+            lastExtensionTick = ticks;
+            replanRequest.run();
+        }
+    }
+
+    /** One byte of "what the scorer saw" per tick; the ring spans the whole stuck window. */
+    private void recordCauses(boolean bumped, boolean misfit, boolean jumpsOffRoute,
+            boolean brakeOvershoot) {
+        causeRing[causeCursor] = (byte) ((bumped ? CAUSE_BUMP : 0) | (misfit ? CAUSE_FIT : 0)
+                | (jumpsOffRoute ? CAUSE_JUMP : 0) | (brakeOvershoot ? CAUSE_BRAKE : 0));
+        causeCursor = (causeCursor + 1) % causeRing.length;
+    }
+
+    /**
+     * The scorer's dominant complaint over the recent window, in plain words — or "" when
+     * nothing persistent stood out. A quarter of the window is the noise floor: a couple of
+     * incidental bumps on a doorframe must not masquerade as the reason a route died.
+     */
+    private String dominantCause() {
+        int bump = 0, jump = 0, fit = 0, brake = 0;
+        for (byte bits : causeRing) {
+            if ((bits & CAUSE_BUMP) != 0) bump++;
+            if ((bits & CAUSE_JUMP) != 0) jump++;
+            if ((bits & CAUSE_FIT) != 0) fit++;
+            if ((bits & CAUSE_BRAKE) != 0) brake++;
+        }
+        int top = Math.max(Math.max(bump, jump), Math.max(fit, brake));
+        if (top < STUCK_TICKS / 4) return "";
+        String cause = top == bump ? "path blocked (persistent horizontal collision)"
+                : top == jump ? "every jump candidate lands off-route"
+                : top == fit ? "the hitbox does not fit along the predicted line"
+                : "braking keeps overshooting the target";
+        return " - likely cause: " + cause;
     }
 
     /** Enumerate compact controls, simulate each from reality, and keep the safest progress. */
@@ -381,16 +558,25 @@ public final class SimFollowTask extends TalosTask {
         // Once an unsafe landing is imminent, scoring cannot trade the mark for short-term
         // progress. First bleed momentum; at release speed rollout scoring chooses the least
         // forceful safe launch, while retaining sprint-jump only when a gap requires it.
-        if (hardBrake) return brake;
+        if (hardBrake) {
+            recordCauses(false, false, false, true);
+            return brake;
+        }
 
         Input best = candidates.getFirst();
         double bestScore = Double.NEGATIVE_INFINITY;
+        boolean bestBumped = false;
+        boolean bestMisfit = false;
+        int jumpCandidates = 0;
+        int jumpDisqualified = 0;
         for (Input candidate : candidates) {
             if (!TalosClient.tickBudget().hasBudgetRemaining() && bestScore > Double.NEGATIVE_INFINITY) {
                 break;
             }
             MotionState state = live;
             double score = 0.0;
+            boolean rolloutBumped = false;
+            boolean rolloutMisfit = false;
             double oldDistance = horizontalDistance(state.position(), waypoint.position());
             // The rollout turns its head like the real player will: yaw evolves through the
             // eased view model each tick instead of snapping to the candidate heading.
@@ -408,11 +594,12 @@ public final class SimFollowTask extends TalosTask {
                 double distance = horizontalDistance(state.position(), waypoint.position());
                 score += (oldDistance - distance) * 12.0; // primary route progress
                 score -= distanceToSegment(state.position(), from, waypoint.position()) * 1.8;
-                if (state.bumpedHorizontally()) score -= 7.0;
+                if (state.bumpedHorizontally()) { score -= 7.0; rolloutBumped = true; }
                 if (state.fluid() == MotionState.Fluid.LAVA) score -= 100.0;
                 if (isHazard(BlockPos.ofFloored(state.position()))) score -= 60.0;
                 if (!PlayerMotion.hitboxFits(client.world, state.pose(), state.position())) {
                     score -= 1_000.0;
+                    rolloutMisfit = true;
                     break;
                 }
                 if (state.position().y < Math.min(from.y, waypoint.position().y) - 2.5) score -= 80.0;
@@ -429,13 +616,18 @@ public final class SimFollowTask extends TalosTask {
             // a hole, or a landing far off the route line disqualifies the launch — this is
             // what stops jumps the player cannot actually make.
             if (candidate.jump() && live.onGround()) {
+                jumpCandidates++;
                 if (landing == null) {
                     score -= 400.0;
+                    jumpDisqualified++;
                 } else {
-                    if (landing.position().y < Math.min(from.y, waypoint.position().y) - 2.5) {
-                        score -= 300.0;
-                    }
-                    score -= distanceToSegment(landing.position(), from, waypoint.position()) * 6.0;
+                    boolean landsInHole =
+                            landing.position().y < Math.min(from.y, waypoint.position().y) - 2.5;
+                    if (landsInHole) score -= 300.0;
+                    double offRoute =
+                            distanceToSegment(landing.position(), from, waypoint.position());
+                    score -= offRoute * 6.0;
+                    if (landsInHole || offRoute > 1.5) jumpDisqualified++;
                 }
             }
             if (landing != null && approachingFinal) {
@@ -458,8 +650,15 @@ public final class SimFollowTask extends TalosTask {
             // beat it materially, preventing close scores from alternating left/right — the
             // visible symptom of a thin margin was sideways wiggle on hills.
             double margin = candidate.strafe() == 0.0F ? 0.0 : 1.4;
-            if (score > bestScore + margin) { bestScore = score; best = candidate; }
+            if (score > bestScore + margin) {
+                bestScore = score;
+                best = candidate;
+                bestBumped = rolloutBumped;
+                bestMisfit = rolloutMisfit;
+            }
         }
+        recordCauses(bestBumped, bestMisfit,
+                jumpCandidates > 0 && jumpDisqualified == jumpCandidates, false);
         int chosenStrafe = Float.compare(best.strafe(), 0.0F);
         if (chosenStrafe != 0) {
             committedStrafe = chosenStrafe;
@@ -512,6 +711,9 @@ public final class SimFollowTask extends TalosTask {
             simVel = view[1];
             predicted = PlayerMotion.step(client.world, predicted,
                     withYaw(selected, (float) simYaw), profile);
+            // The first rollout step from the APPLIED input is exactly where the player
+            // should stand next tick; the desync watchdog compares it against reality.
+            if (i == 0) predictedNext = predicted.position();
             RenderQueue.add("talos-sim-tick:" + i,
                     predicted.box(predicted.position()), PREDICTION_COLOR, PREDICTION_TTL);
         }
@@ -1009,6 +1211,7 @@ public final class SimFollowTask extends TalosTask {
     }
 
     @Override public void onCompleted() {
+        if (activeFollower == this) activeFollower = null;
         releaseInputs();
         if (!future.isDone()) future.complete(new PathResult(false, "Navigation was interrupted"));
     }

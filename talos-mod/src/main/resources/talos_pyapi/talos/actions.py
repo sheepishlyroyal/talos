@@ -38,16 +38,38 @@ class Pos:
 
 
 class Entity:
-    """An entity snapshot: .uuid, .type (registry id), and .pos."""
-    __slots__ = ("uuid", "type", "pos")
+    """An entity snapshot: .uuid, .type (registry id), .pos, and .distance.
 
-    def __init__(self, uuid, type, pos):
+    .distance is the feet-to-feet distance from the local player at snapshot
+    time (None on snapshots that carry no distance, e.g. event payloads).
+    """
+    __slots__ = ("uuid", "type", "pos", "distance")
+
+    def __init__(self, uuid, type, pos, distance=None):
         self.uuid = uuid
         self.type = type
         self.pos = pos
+        self.distance = distance
 
     def __repr__(self):
         return f"Entity(type={self.type!r}, pos={self.pos!r})"
+
+
+class Player(Entity):
+    """A player snapshot: .name (gamertag), .uuid, .pos (exact doubles), .distance.
+
+    .type is always "minecraft:player"; positions are never floored, so full
+    double precision is preserved. .distance is feet-to-feet from the local
+    player (see player_feet()).
+    """
+    __slots__ = ("name",)
+
+    def __init__(self, name, uuid, pos, distance):
+        super().__init__(uuid, "minecraft:player", pos, distance)
+        self.name = name
+
+    def __repr__(self):
+        return f"Player(name={self.name!r}, pos={self.pos!r}, distance={self.distance:.3f})"
 
 
 def _axis(snapshot, name):
@@ -60,8 +82,31 @@ def _wrap_pos(raw):
 
 
 def _wrap_entity(raw):
-    return None if raw is None else Entity(_axis(raw, "uuid"), _axis(raw, "type"),
-                                           _wrap_pos(_axis(raw, "pos")))
+    if raw is None:
+        return None
+    distance = _axis(raw, "distance") if hasattr(raw, "distance") else None
+    return Entity(_axis(raw, "uuid"), _axis(raw, "type"), _wrap_pos(_axis(raw, "pos")),
+                  None if distance is None else float(distance))
+
+
+def _wrap_player(raw):
+    return Player(str(_axis(raw, "name")), _axis(raw, "uuid"),
+                  _wrap_pos(_axis(raw, "pos")), float(_axis(raw, "distance")))
+
+
+def _wrap_stack(raw):
+    return {"slot": int(_axis(raw, "slot")), "id": str(_axis(raw, "id")),
+            "count": int(_axis(raw, "count"))}
+
+
+def _flatten_names(values, kind="name"):
+    """Normalize varargs: f(a, b), f([a, b]), and f((a, b)) all mean the same."""
+    if len(values) == 1 and isinstance(values[0], (list, tuple)):
+        values = tuple(values[0])
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            raise TypeError(f"pass {kind}s as separate arguments or ONE list, not nested lists")
+    return values
 
 
 def _token_offset(token):
@@ -157,6 +202,46 @@ def find_item(item, radius=64.0):
     """Return the nearest dropped-item snapshot, or None."""
     return _wrap_entity(_call(_talos_host.findItem, str(item), float(radius)))
 
+def players(radius=128.0):
+    """All OTHER players within radius blocks, nearest first (never the local player).
+
+    Each Player snapshot carries .name (gamertag), .uuid, .pos (exact doubles,
+    at least 3-decimal precision — never floored), and .distance. Distances are
+    measured FEET-to-feet (entity origin to entity origin, the same coordinate
+    player_feet() reports), not from the eyes.
+    """
+    return [_wrap_player(raw) for raw in _call(_talos_host.players, float(radius))]
+
+def nearest_player(radius=128.0):
+    """The nearest other player within radius, or None. Same snapshot as players()."""
+    found = players(radius)
+    return found[0] if found else None
+
+def entities(type=None, radius=64.0):
+    """All entities within radius blocks, nearest first, excluding the local player.
+
+    `type` filters on the exact registry id ("minecraft:zombie"); None returns
+    everything. Same position/distance conventions as players().
+    """
+    raw_list = _call(_talos_host.entities, None if type is None else str(type), float(radius))
+    return [_wrap_entity(raw) for raw in raw_list]
+
+def angle_to(x, y=None, z=None):
+    """The (yaw, pitch) in degrees the player would need to face a point.
+
+    Accepts the same targets as look_at(): coordinates, a Pos/Entity/Player
+    snapshot, or '~ ~ ~' tokens. Angles are computed from the player's EYES
+    with the exact math the rotation humanizer uses, so
+    look(*talos.angle_to(target)) and talos.look_at(target) agree. Yaw is
+    wrapped to -180..180 (0 = south, 90 = west); pitch -90 (up) to 90 (down).
+    """
+    tx, ty, tz = _coords(x, y, z)
+    eye = player_pos()
+    dx, dy, dz = tx - eye.x, ty - eye.y, tz - eye.z
+    yaw = _math.degrees(_math.atan2(-dx, dz))
+    pitch = -_math.degrees(_math.atan2(dy, _math.hypot(dx, dz)))
+    return ((yaw + 180.0) % 360.0 - 180.0, pitch)
+
 def place_block(x=None, y=None, z=None, block_id=None):
     """Place a block.
 
@@ -221,6 +306,97 @@ def take_stack(container_slot, player_slot):
     """Move a stack from an open container/horse slot into a player screen slot."""
     return _call(_talos_host.takeStack, int(container_slot), int(player_slot))
 
+def inventory():
+    """Non-empty stacks in the player's 36 main slots as {slot, id, count} dicts.
+
+    SLOT NUMBERING: these are stable PlayerInventory indices — 0-8 the hotbar
+    (what select_slot()/selected_slot() use), 9-35 the main grid. They are NOT
+    the raw screen-handler indices click_slot()/move_stack() take; those shift
+    with whichever screen is open (use container_items() for raw indices).
+    Empty slots are omitted — the "slot" field says where each stack sits.
+    """
+    return [_wrap_stack(raw) for raw in _call(_talos_host.inventoryItems)]
+
+def hotbar():
+    """The hotbar's non-empty stacks: inventory() entries with slot 0-8."""
+    return [entry for entry in inventory() if entry["slot"] < 9]
+
+def selected_slot():
+    """The currently selected hotbar slot, 0-8 (the slot select_slot() sets)."""
+    return int(_call(_talos_host.selectedSlot))
+
+def count(item_id):
+    """Total number of an item across the player's 36 main inventory slots."""
+    wanted = str(item_id)
+    return sum(entry["count"] for entry in inventory() if entry["id"] == wanted)
+
+def has(item_id):
+    """True when at least one of the item sits in the player's main inventory."""
+    return count(item_id) > 0
+
+def find_slot(item_id):
+    """First PlayerInventory slot index (0-35, see inventory()) holding the item, or None."""
+    wanted = str(item_id)
+    for entry in inventory():
+        if entry["id"] == wanted:
+            return entry["slot"]
+    return None
+
+def container_items():
+    """Non-empty stacks in the open container's non-player slots as {slot, id, count}.
+
+    SLOT NUMBERING: these ARE the raw screen-handler indices, directly usable
+    with click_slot()/move_stack()/take_stack() (container slots come first in
+    every vanilla handler, so they typically run 0..container_slot_count()-1).
+    """
+    return [_wrap_stack(raw) for raw in _call(_talos_host.containerItems)]
+
+def deposit(item_id, amount):
+    """Move up to `amount` items of a type from the player into the open container.
+
+    Best-effort exact: whole stacks are shift-clicked, a partial tail is placed
+    one item at a time, and the number of items ACTUALLY moved is returned
+    (0 when the container is full; deposit(t, talos.count(t)) empties you of t).
+    Raises if no container screen is open.
+    """
+    return int(_call(_talos_host.deposit, str(item_id), int(amount)))
+
+def withdraw(item_id, amount):
+    """Move up to `amount` items of a type from the open container into the player.
+
+    Mirror of deposit(): returns the count actually moved (0 when your
+    inventory is full or the container has none). Raises if no container is open.
+    """
+    return int(_call(_talos_host.withdraw, str(item_id), int(amount)))
+
+def craft(item_id, count=1):
+    """Craft `count` results of an OUTPUT item via the recipe book.
+
+    Needs a crafting screen open: the player inventory (2x2 recipes) or a
+    crafting table. LIMITATION: 1.21.11 servers no longer send recipe resource
+    ids to the client (recipes arrive as anonymous network ids plus displays),
+    so `item_id` names the recipe's RESULT item ("minecraft:crafting_table"),
+    not a recipe id — when several recipes share an output, one whose
+    ingredients you currently have is preferred. Each craft is one grid fill
+    (count=2 for oak planks yields 8). Waits for the server to fill the grid
+    between crafts; raises (reporting partial progress) when ingredients run out.
+    """
+    return _call(_talos_host.craft, str(item_id), int(count))
+
+def screen():
+    """Name of the open screen, or None when none is open.
+
+    Screen-handler screens report their registry id ("minecraft:generic_9x3",
+    "minecraft:crafting", ...); the player's own inventory reports
+    "minecraft:inventory"; other screens report their title or class name.
+    """
+    name = _call(_talos_host.screenName)
+    return None if name is None else str(name)
+
+def close_screen():
+    """Close whatever screen is open (container, inventory, ...); safe when none is."""
+    return _call(_talos_host.closeScreen)
+
 def armor_item(slot):
     """Return the item id equipped in helmet/chestplate/leggings/boots."""
     return _call(_talos_host.armorItem, str(slot))
@@ -271,8 +447,10 @@ def release_keys(*names):
     """Release keys held by key(). With no arguments, releases ALL of them.
 
     With names, releases only those, e.g. release_keys("forward", "jump")
-    keeps a held "sneak" pressed. Safe to call unconditionally.
+    keeps a held "sneak" pressed. A single list/tuple also works:
+    release_keys(["forward", "jump"]). Safe to call unconditionally.
     """
+    names = _flatten_names(names, "key name")
     if not names:
         return _call(_talos_host.releaseKeys)
     for name in names:

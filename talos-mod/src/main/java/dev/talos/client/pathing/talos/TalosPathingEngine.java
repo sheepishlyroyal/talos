@@ -235,8 +235,20 @@ public final class TalosPathingEngine implements PathingEngine {
         if (corridor != null) {
             Vec3d origin = start.position();
             BlockPos from = BlockPos.ofFloored(origin.x, origin.y + 1.0E-4, origin.z);
-            int candidate = nearestCorridorIndex(corridor, from) + CORRIDOR_LOOKAHEAD_CELLS;
-            if (candidate < corridor.size() - 1) {
+            int nearest = nearestCorridorIndex(corridor, from);
+            int candidate = nearest + CORRIDOR_LOOKAHEAD_CELLS;
+            // Corridor cells past the server's streamed chunks read back as pure air: a
+            // deep search funneled there would plan through fiction (and then blacklist a
+            // perfectly good corridor for "frontier exhausted"). Clamp the sub-goal back
+            // to the last corridor cell whose chunk is actually loaded; the follower's
+            // "waiting for chunks" hold buys time for the frontier to advance.
+            int frontier = Math.min(candidate, corridor.size() - 1);
+            while (frontier > nearest
+                    && !client.world.isChunkLoaded(corridor.get(frontier))) {
+                frontier--;
+            }
+            candidate = frontier;
+            if (candidate > nearest && candidate < corridor.size() - 1) {
                 BlockPos sub = corridor.get(candidate);
                 Predicate<BlockPos> realTest = run.snapshot.test();
                 deepGoal = sub;
@@ -416,9 +428,12 @@ public final class TalosPathingEngine implements PathingEngine {
         // The exact goal cell may be unoccupiable (interaction targets, mid-air pillars);
         // steering the corridor to "beside it" is enough — the deep planner finishes the job.
         Predicate<BlockPos> realTest = run.snapshot.test();
+        // The loaded predicate keeps the corridor off unloaded chunks EXPLICITLY (they read
+        // as air, which walkability already rejects, but air over a real plain and air over
+        // a void look identical — refusing unloaded cells outright is the honest contract).
         CoarsePathfinder.Search search = CoarsePathfinder.begin(client.world, from, target,
                 pos -> realTest.test(pos) || pos.getSquaredDistance(target) <= SUB_GOAL_RADIUS_SQ,
-                run.corridorBlacklist, COARSE_TIME_BUDGET_NANOS);
+                run.corridorBlacklist, COARSE_TIME_BUDGET_NANOS, client.world::isChunkLoaded);
         CoarseTask task = new CoarseTask(run, search, resumeDeepPlan);
         run.coarsePlanner = task;
         if (resumeDeepPlan && client.player != null) client.player.sendMessage(

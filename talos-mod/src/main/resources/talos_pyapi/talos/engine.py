@@ -39,6 +39,7 @@ dynamically with talos.start(coro).
 import sys as _sys
 import types as _types
 import inspect as _inspect
+import json as _json
 import traceback as _traceback
 
 _errors = _sys.modules["talos.errors"]
@@ -201,6 +202,64 @@ def task(fn):
     _declared_tasks.append(fn)
     _ensure_running()
     return fn
+
+
+def every(seconds=None, minutes=None, ticks=None):
+    """Run the decorated function repeatedly at a fixed interval.
+
+    Give exactly one interval (or combine seconds+minutes): @talos.every(seconds=5),
+    @talos.every(minutes=1), @talos.every(ticks=10). Works on a plain `def` (must
+    return quickly, like on_tick) or an `async def` (awaited to completion before
+    the next interval starts, so runs never overlap). The first run happens one
+    interval after the script starts.
+
+        @talos.every(seconds=30)
+        def checkpoint():
+            talos.state["pos"] = list(talos.player_feet())
+    """
+    total = 0.0
+    if seconds is not None:
+        total += float(seconds)
+    if minutes is not None:
+        total += float(minutes) * 60.0
+    if ticks is not None:
+        if seconds is not None or minutes is not None:
+            raise ValueError("@talos.every takes ticks OR seconds/minutes, not both")
+        interval = int(ticks)
+    elif seconds is None and minutes is None:
+        raise ValueError("@talos.every needs seconds=, minutes=, or ticks=")
+    else:
+        interval = int(round(total * 20))
+    if interval < 1:
+        raise ValueError("@talos.every interval must be at least one tick")
+
+    def decorate(fn):
+        is_async = _inspect.iscoroutinefunction(fn)
+
+        async def _every_loop():
+            while True:
+                await _wait(_TickWaiter(_tick_no + interval))
+                try:
+                    if is_async:
+                        await fn()
+                    else:
+                        fn()
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except _errors.ActionCancelledError:
+                    raise  # cancel() must still stop the loop
+                except BaseException as error:
+                    # One failed run gets the usual one-line report; the schedule survives.
+                    _report(f"every {getattr(fn, '__name__', '?')!r}", error)
+
+        _every_loop.__name__ = f"every {getattr(fn, '__name__', '?')}"
+        if _launched:
+            start(_every_loop())
+        else:
+            _declared_tasks.append(_every_loop)
+        _ensure_running()
+        return fn
+    return decorate
 
 
 def run():
@@ -441,3 +500,140 @@ class _Aio:
 
 
 aio = _Aio()
+
+
+# --- persistent state -----------------------------------------------------------
+
+_STATE_MAX_BYTES = 256 * 1024
+
+
+def _script_name():
+    """Name of the running script, from the interpreter's own frame data.
+
+    The main script (and every function it defines) carries the real file path
+    as its code's filename, while the embedded talos modules use "embedded:/..."
+    — the same distinction _script_frames() relies on. Never user input: Python
+    code cannot choose where its frames claim to come from without also being
+    the file at that path, and the host re-validates the name before any IO.
+    """
+    frame = _sys._getframe(1)
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        if not filename.startswith("embedded:") and not filename.startswith("<"):
+            name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+            return name[:-3] if name.endswith(".py") else name
+        frame = frame.f_back
+    raise _errors.TalosError("cannot determine the running script's name for talos.state")
+
+
+class _State:
+    """Dict-like storage that survives restarts: talos.state["key"] = value.
+
+    Values must be JSON-serializable (str/int/float/bool/None/list/dict) —
+    anything else raises TypeError on assignment. The whole mapping is capped
+    at 256KB serialized; a mutation that would cross the cap is rolled back and
+    raises ValueError. Contents live ONLY at <gameDir>/talos/state/<script>.json
+    (one file per script, named after the running script — no paths ever cross
+    the boundary, and no other file APIs exist). Every mutation persists
+    immediately, so state survives crashes and /talos script stop alike;
+    save() forces a write anyway if you want one.
+    """
+
+    __slots__ = ("_data", "_name")
+
+    def __init__(self):
+        self._data = None
+        self._name = None
+
+    def _load(self):
+        if self._data is None:
+            self._name = _script_name()
+            raw = _errors.call(_talos_host.stateLoad, self._name)
+            data = _json.loads(str(raw)) if raw is not None else {}
+            self._data = data if isinstance(data, dict) else {}
+        return self._data
+
+    def save(self):
+        """Persist the current contents now (mutations already save automatically)."""
+        data = self._load()
+        text = _json.dumps(data)
+        if len(text.encode("utf-8")) > _STATE_MAX_BYTES:
+            raise ValueError(
+                f"talos.state exceeds the 256KB limit ({len(text.encode('utf-8'))} bytes serialized)")
+        _errors.call(_talos_host.stateSave, self._name, text)
+
+    def _mutate(self, action):
+        """Apply one mutation, persist, and roll back if the 256KB cap is crossed."""
+        data = self._load()
+        snapshot = dict(data)
+        action(data)
+        try:
+            self.save()
+        except ValueError:
+            self._data = snapshot
+            raise
+
+    def __setitem__(self, key, value):
+        if not isinstance(key, str):
+            raise TypeError("talos.state keys must be strings")
+        try:
+            _json.dumps(value)
+        except (TypeError, ValueError) as error:
+            raise TypeError(f"talos.state values must be JSON-serializable: {error}") from None
+        self._mutate(lambda data: data.__setitem__(key, value))
+
+    def __getitem__(self, key):
+        return self._load()[key]
+
+    def __delitem__(self, key):
+        self._mutate(lambda data: data.__delitem__(key))
+
+    def __contains__(self, key):
+        return key in self._load()
+
+    def __len__(self):
+        return len(self._load())
+
+    def __iter__(self):
+        return iter(self._load())
+
+    def __repr__(self):
+        return f"talos.state({self._load()!r})"
+
+    def get(self, key, default=None):
+        return self._load().get(key, default)
+
+    def setdefault(self, key, default=None):
+        data = self._load()
+        if key not in data:
+            self[key] = default  # routes through validation + persist
+        return data[key]
+
+    def keys(self):
+        return self._load().keys()
+
+    def values(self):
+        return self._load().values()
+
+    def items(self):
+        return self._load().items()
+
+    def pop(self, key, *default):
+        data = self._load()
+        if key not in data:
+            if default:
+                return default[0]
+            raise KeyError(key)
+        value = data[key]
+        self._mutate(lambda d: d.__delitem__(key))
+        return value
+
+    def update(self, mapping):
+        for key, value in (mapping.items() if hasattr(mapping, "items") else mapping):
+            self[key] = value
+
+    def clear(self):
+        self._mutate(lambda data: data.clear())
+
+
+state = _State()

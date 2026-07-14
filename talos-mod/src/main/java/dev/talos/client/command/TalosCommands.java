@@ -179,7 +179,18 @@ public final class TalosCommands {
                                     ScriptEngine.instance().stop();
                                     context.getSource().sendFeedback(Text.literal("Stopped script engine"));
                                     return 1;
-                                })))
+                                }))
+                        // `/talos script profile` — toggle per-event dispatch profiling;
+                        // toggling OFF prints the aggregated report.
+                        .then(ClientCommandManager.literal("profile")
+                                .executes(TalosCommands::toggleProfile)))
+                // `/talos py <code>` — run a Python one-liner. Semicolons separate
+                // statements; a trailing expression echoes its repr to chat. Shares the
+                // running script's globals when a session is live, otherwise runs (and
+                // discards) an ephemeral session. Python only ever runs on the worker.
+                .then(ClientCommandManager.literal("py")
+                        .then(ClientCommandManager.argument("code", StringArgumentType.greedyString())
+                                .executes(TalosCommands::runPySnippet)))
                 .then(ClientCommandManager.literal("bridge")
                         .then(ClientCommandManager.literal("allow")
                                 .executes(context -> {
@@ -238,6 +249,37 @@ public final class TalosCommands {
                         .then(ClientCommandManager.argument("name", StringArgumentType.word())
                                 .suggests(EXAMPLE_NAMES)
                                 .executes(TalosCommands::writeExample))));
+    }
+
+    /** Dispatches {@code /talos py <code>} to the script engine's snippet evaluator. */
+    private static int runPySnippet(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
+        String code = StringArgumentType.getString(context, "code");
+        ScriptEngine engine = ScriptEngine.instance();
+        if (engine.snippetSharesSession()) {
+            context.getSource().sendFeedback(Text.literal(
+                    "py » evaluating in the running script's session (shared globals)"));
+        }
+        // Output and errors stream back through the default chat sink; the evaluator
+        // itself reports failures, so no extra whenComplete handling is needed here.
+        engine.evalSnippet(code, ScriptEngine.CHAT);
+        return 1;
+    }
+
+    /** Toggles {@code /talos script profile}; prints the report when switching off. */
+    private static int toggleProfile(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
+        var source = context.getSource();
+        if (dev.talos.client.script.ScriptProfiler.toggle()) {
+            source.sendFeedback(Text.literal(
+                    "Script profiling ON — run /talos script profile again for the report"));
+            return 1;
+        }
+        List<String> report = dev.talos.client.script.ScriptProfiler.report();
+        source.sendFeedback(Text.literal("Script profiling OFF"
+                + (report.isEmpty() ? " — nothing was dispatched while profiling" : ":")));
+        for (String line : report) source.sendFeedback(Text.literal("  " + line));
+        return 1;
     }
 
     /**

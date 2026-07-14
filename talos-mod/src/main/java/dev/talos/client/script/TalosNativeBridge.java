@@ -15,21 +15,34 @@ import dev.talos.client.pathing.PathResult;
 import dev.talos.client.pathing.PathingOptions;
 import dev.talos.client.scan.ScanTask;
 import dev.talos.client.task.SimpleTask;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.option.GameOptions;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.mob.HostileEntity;
+import net.minecraft.recipe.NetworkRecipeId;
+import net.minecraft.recipe.RecipeDisplayEntry;
+import net.minecraft.recipe.RecipeFinder;
+import net.minecraft.recipe.display.SlotDisplayContexts;
 import net.minecraft.registry.Registries;
+import net.minecraft.screen.AbstractCraftingScreenHandler;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
@@ -136,6 +149,58 @@ public final class TalosNativeBridge {
         return await(game.submit(() -> findEntityOnGameThread(item, radius, true)));
     }
 
+    /**
+     * Every other player within {@code radius} blocks, nearest first, EXCLUDING the local
+     * player. Positions are exact doubles (never floored); distances are measured
+     * feet-to-feet (entity origin to entity origin), matching {@link #playerFeet}.
+     */
+    @HostAccess.Export public PlayerInfo[] players(double radius) {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            checkListRadius(radius);
+            double limit = radius * radius;
+            return client.world.getPlayers().stream()
+                    .filter(p -> p != client.player && p.isAlive()
+                            && client.player.squaredDistanceTo(p) <= limit)
+                    .sorted(Comparator.comparingDouble(client.player::squaredDistanceTo))
+                    .map(p -> new PlayerInfo(p.getGameProfile().name(), p.getUuidAsString(),
+                            new Pos(p.getX(), p.getY(), p.getZ()),
+                            Math.sqrt(client.player.squaredDistanceTo(p))))
+                    .toArray(PlayerInfo[]::new);
+        }));
+    }
+
+    /**
+     * Every entity within {@code radius} blocks, nearest first, excluding the local player.
+     * {@code type} filters on the exact registry id ("minecraft:zombie"); null/empty
+     * matches everything. Same exactness/distance conventions as {@link #players}.
+     */
+    @HostAccess.Export public EntityInfo[] entities(String type, double radius) {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            checkListRadius(radius);
+            String wanted = type == null || type.isEmpty() ? null : type.toLowerCase(Locale.ROOT);
+            Box box = client.player.getBoundingBox().expand(radius);
+            double limit = radius * radius;
+            return client.world.getEntitiesByClass(Entity.class, box, entity ->
+                            entity.isAlive() && entity != client.player
+                                    && client.player.squaredDistanceTo(entity) <= limit
+                                    && (wanted == null || Registries.ENTITY_TYPE.getId(entity.getType())
+                                            .toString().equals(wanted)))
+                    .stream().sorted(Comparator.comparingDouble(client.player::squaredDistanceTo))
+                    .map(entity -> new EntityInfo(entity.getUuidAsString(),
+                            Registries.ENTITY_TYPE.getId(entity.getType()).toString(),
+                            new Pos(entity.getX(), entity.getY(), entity.getZ()),
+                            Math.sqrt(client.player.squaredDistanceTo(entity))))
+                    .toArray(EntityInfo[]::new);
+        }));
+    }
+
+    private static void checkListRadius(double radius) {
+        if (!Double.isFinite(radius) || radius <= 0 || radius > 512)
+            throw new IllegalArgumentException("radius must be in (0,512]");
+    }
+
     @HostAccess.Export public String placeBlock(int x, int y, int z) {
         return action(new PlaceBlockAction(new BlockPos(x, y, z)), "place");
     }
@@ -213,6 +278,190 @@ public final class TalosNativeBridge {
 
     @HostAccess.Export public String takeStack(int containerSlot, int playerSlot) {
         return moveStack(containerSlot, playerSlot);
+    }
+
+    /**
+     * Non-empty stacks in the player's 36 main inventory slots. Slot numbers are
+     * PlayerInventory indices (0-8 hotbar, 9-35 main grid) — the space
+     * {@link #hotbarSelect} uses — NOT the raw screen-handler indices that
+     * {@link #clickSlot}/{@link #moveStack} take, which shift with the open screen.
+     */
+    @HostAccess.Export public SlotStack[] inventoryItems() {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            List<SlotStack> stacks = new ArrayList<>();
+            for (int i = 0; i < 36; i++) {
+                ItemStack stack = client.player.getInventory().getStack(i);
+                if (!stack.isEmpty()) stacks.add(new SlotStack(i,
+                        Registries.ITEM.getId(stack.getItem()).toString(), stack.getCount()));
+            }
+            return stacks.toArray(SlotStack[]::new);
+        }));
+    }
+
+    /** Currently selected hotbar slot, 0..8. */
+    @HostAccess.Export public int selectedSlot() {
+        return await(game.submit(() -> requireWorld().player.getInventory().getSelectedSlot()));
+    }
+
+    /**
+     * Non-empty stacks in the open container's non-player slots. Slot numbers here ARE
+     * the raw screen-handler indices, directly usable with {@link #clickSlot}/{@link #moveStack}.
+     */
+    @HostAccess.Export public SlotStack[] containerItems() {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            List<SlotStack> stacks = new ArrayList<>();
+            for (Slot slot : client.player.currentScreenHandler.slots) {
+                if (slot.inventory == client.player.getInventory() || !slot.hasStack()) continue;
+                ItemStack stack = slot.getStack();
+                stacks.add(new SlotStack(slot.id,
+                        Registries.ITEM.getId(stack.getItem()).toString(), stack.getCount()));
+            }
+            return stacks.toArray(SlotStack[]::new);
+        }));
+    }
+
+    /** Move up to {@code amount} items of a type from the player into the open container. */
+    @HostAccess.Export public int deposit(String itemId, int amount) {
+        return transfer(itemId, amount, true);
+    }
+
+    /** Move up to {@code amount} items of a type from the open container into the player. */
+    @HostAccess.Export public int withdraw(String itemId, int amount) {
+        return transfer(itemId, amount, false);
+    }
+
+    private int transfer(String itemId, int amount, boolean toContainer) {
+        net.minecraft.item.Item item = parseItem(itemId);
+        if (amount < 0) throw new IllegalArgumentException("amount must be >= 0");
+        TransferTask task = new TransferTask(item, amount, toContainer);
+        return await(game.submit(() -> {
+            requireWorld();
+            addTaskWhenFree("script-transfer", task, task.future);
+            return task.future;
+        }).thenCompose(f -> f));
+    }
+
+    private static net.minecraft.item.Item parseItem(String itemId) {
+        Identifier id = Identifier.tryParse(itemId);
+        if (id == null || !Registries.ITEM.containsId(id))
+            throw new IllegalArgumentException("Unknown item: " + itemId);
+        return Registries.ITEM.get(id);
+    }
+
+    /**
+     * Craft {@code count} results of an OUTPUT item via the recipe book. 1.21.11 no longer
+     * syncs recipe resource ids to the client (recipes arrive as anonymous
+     * {@link NetworkRecipeId}s plus displays), so lookup matches the recipe's RESULT item
+     * instead; a recipe whose ingredients are currently available is preferred. Requires a
+     * crafting screen (player inventory 2x2 or crafting table) to be open.
+     */
+    @HostAccess.Export public String craft(String output, int count) {
+        if (count < 1 || count > 1024) throw new IllegalArgumentException("count must be 1..1024");
+        net.minecraft.item.Item wanted = parseItem(output);
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            if (!(client.player.currentScreenHandler instanceof AbstractCraftingScreenHandler crafting))
+                throw new IllegalStateException(
+                        "No crafting screen: open the inventory (2x2 recipes) or a crafting table first");
+            RecipeFinder finder = new RecipeFinder();
+            crafting.populateRecipeFinder(finder);
+            var parameters = SlotDisplayContexts.createParameters(client.world);
+            NetworkRecipeId match = null;
+            NetworkRecipeId fallback = null;
+            outer:
+            for (var collection : client.player.getRecipeBook().getOrderedResults()) {
+                for (RecipeDisplayEntry entry : collection.getAllRecipes()) {
+                    if (entry.getStacks(parameters).stream().noneMatch(stack -> stack.isOf(wanted))) continue;
+                    if (fallback == null) fallback = entry.id();
+                    if (entry.isCraftable(finder)) { match = entry.id(); break outer; }
+                }
+            }
+            NetworkRecipeId recipe = match != null ? match : fallback;
+            if (recipe == null) throw new IllegalStateException("No recipe book entry produces " + output);
+            CraftTask task = new CraftTask(recipe, wanted, count, crafting,
+                    crafting.getOutputSlot().id, output);
+            addTaskWhenFree("script-craft", task, task.future);
+            return task.future;
+        }).thenCompose(f -> f));
+    }
+
+    /**
+     * Name of the open screen: the screen handler's registry id when it has one
+     * (e.g. "minecraft:generic_9x3", "minecraft:crafting"), "minecraft:inventory" for the
+     * player's own inventory, the screen title/class for non-handled screens, or null
+     * when no screen is open.
+     */
+    @HostAccess.Export public String screenName() {
+        return await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            if (client.currentScreen == null) return null;
+            if (client.currentScreen instanceof HandledScreen<?> handled) {
+                try {
+                    return Registries.SCREEN_HANDLER.getId(handled.getScreenHandler().getType()).toString();
+                } catch (UnsupportedOperationException noType) {
+                    return "minecraft:inventory"; // PlayerScreenHandler has no registered type
+                }
+            }
+            String title = client.currentScreen.getTitle().getString();
+            return title.isEmpty() ? client.currentScreen.getClass().getSimpleName() : title;
+        }));
+    }
+
+    /** Close whatever screen is open (container, inventory, ...); safe when none is. */
+    @HostAccess.Export public void closeScreen() {
+        await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            if (client.currentScreen instanceof HandledScreen<?>) client.player.closeHandledScreen();
+            else if (client.currentScreen != null) client.setScreen(null);
+            return null;
+        }));
+    }
+
+    private static final int STATE_MAX_BYTES = 256 * 1024;
+
+    /**
+     * The ONLY file surface exposed to Python: JSON blobs pinned to
+     * {@code <gameDir>/talos/state/<script>.json}. The script name is derived by the
+     * embedded talos.state module (never user input), and re-validated here so no
+     * path component can escape the state directory.
+     */
+    private static Path stateFile(String script) {
+        if (script == null || !script.matches("[A-Za-z0-9_.-]{1,64}") || script.contains(".."))
+            throw new IllegalArgumentException("Invalid script name for state storage");
+        Path dir = FabricLoader.getInstance().getGameDir().resolve("talos").resolve("state").normalize();
+        Path file = dir.resolve(script + ".json").normalize();
+        if (!dir.equals(file.getParent()))
+            throw new IllegalArgumentException("Invalid script name for state storage");
+        return file;
+    }
+
+    /** Persisted talos.state JSON for a script, or null when nothing was saved yet. */
+    @HostAccess.Export public String stateLoad(String script) {
+        checkValid();
+        Path file = stateFile(script);
+        try {
+            return Files.isRegularFile(file) ? Files.readString(file, StandardCharsets.UTF_8) : null;
+        } catch (IOException error) {
+            throw new IllegalStateException("Cannot read talos.state: " + error.getMessage());
+        }
+    }
+
+    /** Persist talos.state JSON for a script; rejects payloads over 256KB serialized. */
+    @HostAccess.Export public void stateSave(String script, String json) {
+        checkValid();
+        Path file = stateFile(script);
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > STATE_MAX_BYTES)
+            throw new IllegalArgumentException(
+                    "talos.state exceeds the 256KB limit (" + bytes.length + " bytes serialized)");
+        try {
+            Files.createDirectories(file.getParent());
+            Files.write(file, bytes);
+        } catch (IOException error) {
+            throw new IllegalStateException("Cannot write talos.state: " + error.getMessage());
+        }
     }
 
     @HostAccess.Export public String armorItem(String armorSlot) {
@@ -539,7 +788,8 @@ public final class TalosNativeBridge {
                 }).stream().min(Comparator.comparingDouble(client.player::squaredDistanceTo))
                 .map(entity -> new EntityInfo(entity.getUuidAsString(),
                         Registries.ENTITY_TYPE.getId(entity.getType()).toString(),
-                        new Pos(entity.getX(), entity.getY(), entity.getZ()))).orElse(null);
+                        new Pos(entity.getX(), entity.getY(), entity.getZ()),
+                        Math.sqrt(client.player.squaredDistanceTo(entity)))).orElse(null);
     }
 
     private MinecraftClient requireWorld() {
@@ -585,10 +835,24 @@ public final class TalosNativeBridge {
         @HostAccess.Export public double y() { return y; }
         @HostAccess.Export public double z() { return z; }
     }
-    public record EntityInfo(String uuid, String type, Pos pos) {
+    public record EntityInfo(String uuid, String type, Pos pos, double distance) {
         @HostAccess.Export public String uuid() { return uuid; }
         @HostAccess.Export public String type() { return type; }
         @HostAccess.Export public Pos pos() { return pos; }
+        @HostAccess.Export public double distance() { return distance; }
+    }
+    /** One nearby player: gamertag, uuid, exact position, feet-to-feet distance. */
+    public record PlayerInfo(String name, String uuid, Pos pos, double distance) {
+        @HostAccess.Export public String name() { return name; }
+        @HostAccess.Export public String uuid() { return uuid; }
+        @HostAccess.Export public Pos pos() { return pos; }
+        @HostAccess.Export public double distance() { return distance; }
+    }
+    /** One non-empty stack: its slot number, item registry id, and count. */
+    public record SlotStack(int slot, String id, int count) {
+        @HostAccess.Export public int slot() { return slot; }
+        @HostAccess.Export public String id() { return id; }
+        @HostAccess.Export public int count() { return count; }
     }
 
     private static final class ScriptBlockScanTask extends SimpleTask {
@@ -730,6 +994,162 @@ public final class TalosNativeBridge {
             client.interactionManager.clickSlot(handler.syncId, to, 0, SlotActionType.PICKUP, client.player);
             if (!handler.getCursorStack().isEmpty()) client.interactionManager.clickSlot(handler.syncId, from, 0, SlotActionType.PICKUP, client.player);
             finish("Moved stack from " + from + " to " + to);
+        }
+    }
+
+    /**
+     * Best-effort exact-amount item transfer between the player's main inventory and the
+     * open container, in one tick. Whole stacks ride QUICK_MOVE; a partial tail is placed
+     * one item at a time with cursor right-clicks (vanilla single-item drop), so
+     * deposit(t, count(t)) and small exact amounts both work. Completes with the number
+     * of items that actually moved (client-predicted stack deltas, 0 when nothing fit).
+     */
+    private static final class TransferTask extends SimpleTask {
+        private final net.minecraft.item.Item item;
+        private final int amount;
+        private final boolean toContainer;
+        final CompletableFuture<Integer> future = new CompletableFuture<>();
+
+        private TransferTask(net.minecraft.item.Item item, int amount, boolean toContainer) {
+            this.item = item;
+            this.amount = amount;
+            this.toContainer = toContainer;
+        }
+        @Override public boolean condition() { return !future.isDone(); }
+        @Override public void onCompleted() {
+            if (!future.isDone()) future.completeExceptionally(new IllegalStateException("Action cancelled"));
+        }
+        @Override public java.util.Set<Object> getMutexKeys() { return java.util.Set.of("talos-player-action"); }
+
+        @Override protected void onTick() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player == null || client.interactionManager == null) {
+                future.completeExceptionally(new IllegalStateException("No active player"));
+                _break();
+                return;
+            }
+            var handler = client.player.currentScreenHandler;
+            List<Slot> containerSlots = new ArrayList<>();
+            List<Slot> playerSlots = new ArrayList<>();
+            for (Slot slot : handler.slots) {
+                if (slot.inventory != client.player.getInventory()) containerSlots.add(slot);
+                else if (slot.getIndex() < 36) playerSlots.add(slot); // main 36 only; never armor/offhand
+            }
+            if (containerSlots.isEmpty()) {
+                future.completeExceptionally(new IllegalStateException("No container screen is open"));
+                _break();
+                return;
+            }
+            List<Slot> sources = toContainer ? playerSlots : containerSlots;
+            List<Slot> destinations = toContainer ? containerSlots : playerSlots;
+            int moved = 0;
+            for (Slot source : sources) {
+                if (moved >= amount) break;
+                ItemStack stack = source.getStack();
+                if (stack.isEmpty() || !stack.isOf(item)) continue;
+                int want = amount - moved;
+                if (stack.getCount() <= want) {
+                    int before = stack.getCount();
+                    client.interactionManager.clickSlot(handler.syncId, source.id, 0,
+                            SlotActionType.QUICK_MOVE, client.player);
+                    int after = source.getStack().isOf(item) ? source.getStack().getCount() : 0;
+                    if (after >= before) break; // destination side is full
+                    moved += before - after;
+                } else {
+                    moved += placePartial(client, handler, source, destinations, want);
+                    break; // an exact tail always ends the transfer
+                }
+            }
+            future.complete(moved);
+            _break();
+        }
+
+        /** Cursor-carries the source stack and right-click drops single items until `want` landed. */
+        private int placePartial(MinecraftClient client, net.minecraft.screen.ScreenHandler handler,
+                Slot source, List<Slot> destinations, int want) {
+            client.interactionManager.clickSlot(handler.syncId, source.id, 0,
+                    SlotActionType.PICKUP, client.player);
+            int placed = 0;
+            while (placed < want && !handler.getCursorStack().isEmpty()) {
+                Slot dest = pickDestination(destinations);
+                if (dest == null) break;
+                client.interactionManager.clickSlot(handler.syncId, dest.id, 1,
+                        SlotActionType.PICKUP, client.player);
+                placed++;
+            }
+            if (!handler.getCursorStack().isEmpty())
+                client.interactionManager.clickSlot(handler.syncId, source.id, 0,
+                        SlotActionType.PICKUP, client.player);
+            return placed;
+        }
+
+        private Slot pickDestination(List<Slot> destinations) {
+            Slot empty = null;
+            for (Slot slot : destinations) {
+                ItemStack stack = slot.getStack();
+                if (stack.isEmpty()) {
+                    if (empty == null) empty = slot;
+                } else if (stack.isOf(item) && stack.getCount() < slot.getMaxItemCount(stack)) {
+                    return slot; // top up matching stacks before opening a fresh slot
+                }
+            }
+            return empty;
+        }
+    }
+
+    /**
+     * Multi-tick recipe-book craft: ask the server to fill the grid (clickRecipe), wait
+     * for the result slot to fill (the fill is a server round-trip, never same-tick),
+     * quick-move the output, repeat. Fails, reporting partial progress, when the result
+     * never appears — usually exhausted ingredients.
+     */
+    private static final class CraftTask extends BridgeTask {
+        private final NetworkRecipeId recipe;
+        private final net.minecraft.item.Item wanted;
+        private final AbstractCraftingScreenHandler handler;
+        private final int resultSlot;
+        private final String outputName;
+        private int remaining;
+        private int crafted;
+        private int waited;
+        private boolean sent;
+
+        private CraftTask(NetworkRecipeId recipe, net.minecraft.item.Item wanted, int count,
+                AbstractCraftingScreenHandler handler, int resultSlot, String outputName) {
+            this.recipe = recipe;
+            this.wanted = wanted;
+            this.remaining = count;
+            this.handler = handler;
+            this.resultSlot = resultSlot;
+            this.outputName = outputName;
+        }
+
+        @Override protected void onTick() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.player == null || client.interactionManager == null) { fail("No active player"); return; }
+            if (client.player.currentScreenHandler != handler) { fail("The crafting screen was closed"); return; }
+            if (!sent) {
+                client.interactionManager.clickRecipe(handler.syncId, recipe, false);
+                sent = true;
+                waited = 0;
+                return;
+            }
+            ItemStack out = handler.slots.get(resultSlot).getStack();
+            if (!out.isEmpty() && out.isOf(wanted)) {
+                int produced = out.getCount();
+                client.interactionManager.clickSlot(handler.syncId, resultSlot, 0,
+                        SlotActionType.QUICK_MOVE, client.player);
+                crafted += produced;
+                remaining--;
+                if (remaining <= 0) { finish("Crafted " + crafted + " x " + outputName); return; }
+                sent = false;
+                return;
+            }
+            if (++waited > 100) {
+                fail(crafted > 0
+                        ? "Crafted only " + crafted + " x " + outputName + " before the recipe stopped producing (out of ingredients?)"
+                        : "Crafting produced no output (missing ingredients, or the recipe does not fit this grid)");
+            }
         }
     }
 

@@ -107,6 +107,32 @@ class CoarsePathfinderTest {
     }
 
     @Test
+    void unloadedRegionConfinesCorridorToLoadedHalf() {
+        // Same flat field everywhere, but only the x <= 40 half is "loaded": the corridor
+        // must route freely inside it and never plant a cell beyond the frontier — unloaded
+        // chunks read as air on a real client, and air over a plain looks like a void.
+        FakeWorld world = field(-5, -10, 100, 10);
+        Predicate<BlockPos> loaded = pos -> pos.getX() <= 40;
+        BlockPos start = new BlockPos(0, 64, 0);
+
+        BlockPos nearGoal = new BlockPos(30, 64, 0);
+        CoarsePathfinder.Result near = CoarsePathfinder.find(world, start, nearGoal,
+                nearGoal::equals, Set.of(), BUDGET, loaded);
+        assertTrue(near.reachedGoal(), near.detail());
+        for (BlockPos cell : near.corridor()) {
+            assertTrue(cell.getX() <= 40, "corridor entered unloaded region at " + cell);
+        }
+
+        BlockPos farGoal = new BlockPos(90, 64, 0);
+        CoarsePathfinder.Result far = CoarsePathfinder.find(world, start, farGoal,
+                farGoal::equals, Set.of(), BUDGET, loaded);
+        assertFalse(far.reachedGoal(), "goal beyond the loaded frontier must not be reached");
+        for (BlockPos cell : far.corridor()) {
+            assertTrue(cell.getX() <= 40, "partial corridor entered unloaded region at " + cell);
+        }
+    }
+
+    @Test
     void stepsUpAndDropsAcrossTerraces() {
         // A one-block rise at x=10 and a two-block drop at x=20 on the way to the goal.
         FakeWorld world = new FakeWorld();
