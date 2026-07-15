@@ -3,7 +3,7 @@
 from .errors import (TalosError, PathFailedError, OutOfReachError, NotFoundError,
                      TargetLostError, ActionCancelledError, WorldClosedError)
 from .actions import (goto, goto_near, goto_xz, goto_block, follow, set_node_count,
-                      find_block, find_entity,
+                      find_block, find_entity, get,
                       find_item, players, nearest_player, entities, angle_to,
                       place_block, place_look, break_block, mine, mine_looking_at,
                       left_click, right_click, select_slot, click_slot, container_slot_count,
@@ -160,7 +160,7 @@ def __getattr__(name):
 
 __all__ = ["args", "require",
            "goto", "goto_near", "goto_xz", "goto_block", "follow",
-           "set_node_count", "find_block", "find_entity",
+           "set_node_count", "find_block", "find_entity", "get",
            "find_item", "players", "nearest_player", "entities", "angle_to",
            "place_block", "place_look", "break_block", "mine", "mine_looking_at",
            "left_click", "right_click", "select_slot", "click_slot", "container_slot_count",
