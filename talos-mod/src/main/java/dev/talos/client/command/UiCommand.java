@@ -14,7 +14,7 @@ final class UiCommand {
         Minecraft client = context.getSource().getClient();
         // Defer: the chat screen closes after the command runs and would
         // immediately replace a screen set synchronously here.
-        client.schedule(() -> client.setScreen(new TalosScreen()));
+        client.schedule(() -> client.gui.setScreen(new TalosScreen()));
         return 1;
     }
 }

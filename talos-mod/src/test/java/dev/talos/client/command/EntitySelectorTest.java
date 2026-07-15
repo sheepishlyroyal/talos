@@ -7,16 +7,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Set;
 import net.minecraft.SharedConstants;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.Bootstrap;
-import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.damagesource.DamageSource;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.network.syncher.SynchedEntityData;
-import net.minecraft.world.level.storage.ValueInput;
-import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.world.entity.EntityTypes;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -39,24 +33,20 @@ class EntitySelectorTest {
 
     @Test
     void tagTypeAndQuotedNameFiltersCompose() {
-        Entity cow = new TestEntity();
-        cow.addTag("ready");
-        cow.setCustomName(Component.literal("Dinner Bone"));
-
         String[] error = new String[1];
         EntitySelector matching = EntitySelector.parse(
                 "@e[type=cow,tag=ready,name=\"Dinner Bone\"]", error);
         assertNotNull(matching, error[0]);
-        assertTrue(matching.matchesFilters(cow));
+        assertTrue(matching.matchesFilters(EntityTypes.COW, Set.of("ready"), "Dinner Bone"));
 
         EntitySelector excluded = EntitySelector.parse(
                 "@e[type=!pig,tag=!hostile,name=!Alex]", error);
         assertNotNull(excluded, error[0]);
-        assertTrue(excluded.matchesFilters(cow));
+        assertTrue(excluded.matchesFilters(EntityTypes.COW, Set.of("ready"), "Dinner Bone"));
 
         EntitySelector wrongTag = EntitySelector.parse("@e[tag=missing]", error);
         assertNotNull(wrongTag, error[0]);
-        assertFalse(wrongTag.matchesFilters(cow));
+        assertFalse(wrongTag.matchesFilters(EntityTypes.COW, Set.of("ready"), "Dinner Bone"));
     }
 
     @Test
@@ -77,16 +67,4 @@ class EntitySelectorTest {
                 EntitySelector.parse("@r", error).kind());
     }
 
-    private static final class TestEntity extends Entity {
-        TestEntity() {
-            super(EntityType.COW, null);
-        }
-
-        @Override protected void defineSynchedData(SynchedEntityData.Builder builder) { }
-        @Override public boolean hurtServer(ServerLevel level, DamageSource source, float damage) {
-            return false;
-        }
-        @Override protected void readAdditionalSaveData(ValueInput input) { }
-        @Override protected void addAdditionalSaveData(ValueOutput output) { }
-    }
 }

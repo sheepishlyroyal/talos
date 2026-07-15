@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -226,26 +227,30 @@ public final class EntitySelector {
      * executing player's position.
      */
     public boolean matchesFilters(Entity entity) {
+        return matchesFilters(entity.getType(), entity.entityTags(), entity.getName().getString());
+    }
+
+    boolean matchesFilters(EntityType<?> entityType, Set<String> commandTags, String entityName) {
         if (typeId != null) {
-            if (BuiltInRegistries.ENTITY_TYPE.getValue(typeId) != entity.getType()) return false;
+            if (BuiltInRegistries.ENTITY_TYPE.getValue(typeId) != entityType) return false;
         }
-        if (typeTag != null && !entity.is(typeTag)) return false;
-        Identifier entityTypeId = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType());
+        var entityTypeHolder = BuiltInRegistries.ENTITY_TYPE.wrapAsHolder(entityType);
+        if (typeTag != null && !entityTypeHolder.is(typeTag)) return false;
+        Identifier entityTypeId = BuiltInRegistries.ENTITY_TYPE.getKey(entityType);
         if (excludedTypeIds.contains(entityTypeId)) return false;
         for (TagKey<EntityType<?>> excludedTypeTag : excludedTypeTags) {
-            if (entity.is(excludedTypeTag)) return false;
+            if (entityTypeHolder.is(excludedTypeTag)) return false;
         }
         for (String tag : requiredTags) {
-            if (tag.isEmpty() ? !entity.entityTags().isEmpty() : !entity.entityTags().contains(tag)) {
+            if (tag.isEmpty() ? !commandTags.isEmpty() : !commandTags.contains(tag)) {
                 return false;
             }
         }
         for (String tag : excludedTags) {
-            if (tag.isEmpty() ? entity.entityTags().isEmpty() : entity.entityTags().contains(tag)) {
+            if (tag.isEmpty() ? commandTags.isEmpty() : commandTags.contains(tag)) {
                 return false;
             }
         }
-        String entityName = entity.getName().getString();
         if (name != null && !name.equalsIgnoreCase(entityName)) return false;
         return excludedNames.stream().noneMatch(excluded -> excluded.equalsIgnoreCase(entityName));
     }

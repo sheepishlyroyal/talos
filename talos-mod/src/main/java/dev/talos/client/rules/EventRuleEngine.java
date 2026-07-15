@@ -1340,8 +1340,8 @@ public final class EventRuleEngine {
     private static void evaluateContainerEvents(Minecraft client,
             LocalPlayer player, boolean wasOpen, boolean isOpen) {
         if (!isOpen) { containerCounts = Map.of(); return; }
-        if (!wasOpen && client.screen != null) {
-            fireText(Trigger.CONTAINER_TITLE, client.screen.getTitle().getString());
+        if (!wasOpen && client.gui.screen() != null) {
+            fireText(Trigger.CONTAINER_TITLE, client.gui.screen().getTitle().getString());
         }
         Map<String, Integer> now = new HashMap<>();
         for (net.minecraft.world.inventory.Slot slot : player.containerMenu.slots) {
@@ -1563,7 +1563,7 @@ public final class EventRuleEngine {
                     player.horizontalCollision, player.hurtTime > 0, player.isFullyFrozen(),
                     player.onGround(), (float) player.fallDistance, player.getDeltaMovement().y,
                     client.isWindowActive(),
-                    client.screen == null ? "" : client.screen.getClass().getSimpleName(),
+                    client.gui.screen() == null ? "" : client.gui.screen().getClass().getSimpleName(),
                     BuiltInRegistries.ITEM.getKey(player.getOffhandItem().getItem()).toString(),
                     lookingAtEntity, hotbarEmpty, armorMissing,
                     containerSlots > 0 && containerFilled == containerSlots,

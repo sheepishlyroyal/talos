@@ -71,7 +71,7 @@ public final class TalosScreen extends Screen {
         super.extractRenderState(context, mouseX, mouseY, deltaTicks);
 
         if (closing && openAnim.isSettled()) {
-            this.minecraft.setScreen(null);
+            this.minecraft.gui.setScreen(null);
             return;
         }
 

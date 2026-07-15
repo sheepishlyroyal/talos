@@ -3,11 +3,10 @@ package dev.talos.client.ui.pipeline;
 import com.mojang.blaze3d.pipeline.BlendFunction;
 import com.mojang.blaze3d.pipeline.ColorTargetState;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.shaders.UniformType;
+import com.mojang.blaze3d.GpuFormat;
+import com.mojang.blaze3d.PrimitiveTopology;
 import com.mojang.blaze3d.vertex.VertexFormat;
-import com.mojang.blaze3d.vertex.VertexFormatElement;
-import net.minecraft.client.renderer.rendertype.RenderType;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.resources.Identifier;
 import java.util.Optional;
 
@@ -15,11 +14,11 @@ import java.util.Optional;
  * Single choke point for every render layer / pipeline choice Talos makes.
  *
  * <p>All drawing — in-world wireframes and the P4 UI overlay — must obtain its
- * {@link RenderType} or {@link RenderPipeline} here so that swapping the underlying
+ * {@link RenderPipeline} here so that swapping the underlying
  * pipeline — custom shaders, no-depth X-ray variants, translucent fills — is a
  * one-file change.
  *
- * <h2>How custom GUI pipelines work on 1.21.11 (P4a spike findings)</h2>
+ * <h2>How custom GUI pipelines work on 26.2</h2>
  *
  * <p>The JSON core-shader system is gone (1.21.9+). A pipeline is now built in code via
  * {@link RenderPipeline#builder}, pointing at raw GLSL assets resolved by
@@ -49,16 +48,15 @@ public final class TalosRenderPipelines {
      *   <li>{@code UV2} (2 shorts, the light channel) — (corner radius, reserved)</li>
      * </ul>
      *
-     * <p>Reusing vanilla {@link VertexFormatElement}s (instead of registering new ones)
-     * avoids the global 32-element id space and keeps {@code BufferBuilder}'s standard
-     * {@code texture/overlay/light} writers usable.
+     * <p>26.2 describes attributes directly with {@link GpuFormat}; the names and formats
+     * mirror the vanilla GUI-compatible position/color/UV channels.
      */
-    public static final VertexFormat UI_ROUNDED_RECT_FORMAT = VertexFormat.builder()
-            .add("Position", VertexFormatElement.POSITION)
-            .add("Color", VertexFormatElement.COLOR)
-            .add("UV0", VertexFormatElement.UV0)
-            .add("UV1", VertexFormatElement.UV1)
-            .add("UV2", VertexFormatElement.UV2)
+    public static final VertexFormat UI_ROUNDED_RECT_FORMAT = VertexFormat.builder(0)
+            .addAttribute("Position", GpuFormat.RGB32_FLOAT)
+            .addAttribute("Color", GpuFormat.RGBA8_UNORM)
+            .addAttribute("UV0", GpuFormat.RG32_FLOAT)
+            .addAttribute("UV1", GpuFormat.RG16_SINT)
+            .addAttribute("UV2", GpuFormat.RG16_SINT)
             .build();
 
     /**
@@ -67,33 +65,16 @@ public final class TalosRenderPipelines {
      * vanilla's {@code GUI} pipeline state (translucent blend, no depth test) and
      * declares exactly the UBOs the GUI render pass binds.
      *
-     * <p>{@code withUsePipelineDrawModeForGui} is a Fabric API injected method
-     * (fabric-rendering-v1 {@code FabricRenderPipeline.Builder}); it makes the GUI
-     * renderer honor this pipeline's draw mode for index-buffer selection instead of
-     * assuming quads. We draw quads anyway, but wiring it keeps the intent explicit.
+     * <p>The vanilla GUI snippet supplies the standard bind-group layouts, while the
+     * custom vertex binding and quad topology carry the SDF parameters.
      */
-    public static final RenderPipeline UI_ROUNDED_RECT = RenderPipeline.builder()
+    public static final RenderPipeline UI_ROUNDED_RECT = RenderPipeline.builder(RenderPipelines.GUI_SNIPPET)
             .withLocation(Identifier.fromNamespaceAndPath("talos", "pipeline/ui_rounded_rect"))
             .withVertexShader(Identifier.fromNamespaceAndPath("talos", "core/ui_rounded_rect"))
             .withFragmentShader(Identifier.fromNamespaceAndPath("talos", "core/ui_rounded_rect"))
-            .withUniform("DynamicTransforms", UniformType.UNIFORM_BUFFER)
-            .withUniform("Projection", UniformType.UNIFORM_BUFFER)
             .withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
             .withDepthStencilState(Optional.empty())
-            .withVertexFormat(UI_ROUNDED_RECT_FORMAT, VertexFormat.Mode.QUADS)
-            .withUsePipelineDrawModeForGui(true)
+            .withVertexBinding(0, UI_ROUNDED_RECT_FORMAT)
+            .withPrimitiveTopology(PrimitiveTopology.QUADS)
             .build();
-
-    /**
-     * Layer used for wireframe box outlines. Depth-tested vanilla lines:
-     * highlights are occluded by terrain, which is the honest v1 behavior.
-     */
-    // ponytail: X-ray (see-through-walls) wireframes are a P9 refinement — build a custom
-    // pipeline via RenderPipeline.builder(...)
-    //     .withDepthTestFunction(com.mojang.blaze3d.platform.DepthTestFunction.NO_DEPTH_TEST)
-    // wrapped in a RenderLayer, and return it here. For P3 the vanilla depth-tested
-    // lines layer is all we need.
-    public static RenderType wireframeLines() {
-        return RenderTypes.lines();
-    }
 }

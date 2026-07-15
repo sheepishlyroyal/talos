@@ -33,7 +33,7 @@ public final class ScriptCommand {
                                     var client = context.getSource().getClient();
                                     // Chat closes after command dispatch, so defer opening
                                     // by one client task (same trick as /talos editor).
-                                    client.execute(() -> client.setScreen(new PythonEditorScreen()));
+                                    client.execute(() -> client.gui.setScreen(new PythonEditorScreen()));
                                     return 1;
                                 }))));
     }

@@ -14,7 +14,7 @@ import org.joml.Matrix3x2fc;
  * GUI element render state for one SDF rounded rectangle, drawn with
  * {@link TalosRenderPipelines#UI_ROUNDED_RECT}.
  *
- * <p>Submitted through the vanilla 1.21.11 GUI batcher: {@code GuiRenderer} groups
+ * <p>Submitted through the vanilla 26.2 GUI batcher: {@code GuiRenderer} groups
  * consecutive states by (pipeline, texture, scissor) and writes them into a shared
  * vertex buffer using this state's {@link #buildVertices}, so any number of these
  * rects per frame collapses into a single draw call.

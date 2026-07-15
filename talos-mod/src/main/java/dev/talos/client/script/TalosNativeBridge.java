@@ -429,16 +429,16 @@ public final class TalosNativeBridge {
     @HostAccess.Export public String screenName() {
         return await(game.submit(() -> {
             Minecraft client = requireWorld();
-            if (client.screen == null) return null;
-            if (client.screen instanceof AbstractContainerScreen<?> handled) {
+            if (client.gui.screen() == null) return null;
+            if (client.gui.screen() instanceof AbstractContainerScreen<?> handled) {
                 try {
                     return BuiltInRegistries.MENU.getKey(handled.getMenu().getType()).toString();
                 } catch (UnsupportedOperationException noType) {
                     return "minecraft:inventory"; // PlayerScreenHandler has no registered type
                 }
             }
-            String title = client.screen.getTitle().getString();
-            return title.isEmpty() ? client.screen.getClass().getSimpleName() : title;
+            String title = client.gui.screen().getTitle().getString();
+            return title.isEmpty() ? client.gui.screen().getClass().getSimpleName() : title;
         }));
     }
 
@@ -446,8 +446,8 @@ public final class TalosNativeBridge {
     @HostAccess.Export public void closeScreen() {
         await(game.submit(() -> {
             Minecraft client = requireWorld();
-            if (client.screen instanceof AbstractContainerScreen<?>) client.player.closeContainer();
-            else if (client.screen != null) client.setScreen(null);
+            if (client.gui.screen() instanceof AbstractContainerScreen<?>) client.player.closeContainer();
+            else if (client.gui.screen() != null) client.gui.setScreen(null);
             return null;
         }));
     }

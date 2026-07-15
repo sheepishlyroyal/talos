@@ -142,8 +142,8 @@ public final class GetCommand {
                 .getBlockState(player.blockPosition()).getBlock()).toString());
         map.put("looking_at", (client, player) -> client.hitResult == null ? "none"
                 : client.hitResult.toString());
-        map.put("screen", (client, player) -> client.screen == null ? "none"
-                : client.screen.getClass().getSimpleName());
+        map.put("screen", (client, player) -> client.gui.screen() == null ? "none"
+                : client.gui.screen().getClass().getSimpleName());
         map.put("difficulty", (client, player) ->
                 client.level.getDifficulty().getSerializedName());
         map.put("weather", (client, player) -> client.level.isThundering() ? "thunder"
