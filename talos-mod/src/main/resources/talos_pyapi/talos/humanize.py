@@ -24,15 +24,16 @@ def set_seed(seed):
     return _talos_host.setSeed(int(seed))
 
 def human(enabled=None):
-    """Toggle or query session-arc "Human mode".
+    """Toggle or query aim + session-arc "Human mode".
 
     human(True)/human(False) enables/disables it; human() with no argument
-    returns the current bool. When on, a wall-clock fatigue model drifts the
-    active profile over the session — reactions slow and spread, aim loosens
-    and overshoots more, the walk wobbles wider — plus idle micro-breaks that
-    pause pathing briefly. Best-effort obfuscation of the long-session
-    statistical fingerprint; NOT a guarantee of undetectability, and it never
-    makes wrong-target mistakes (only motor-level ones).
+    returns the current bool. When on, aim uses eased, non-instant cube
+    trajectories and a wall-clock fatigue model drifts the active profile over
+    the session — reactions slow and spread, aim loosens and overshoots more,
+    the walk wobbles wider — plus idle micro-breaks that pause pathing briefly.
+    When off, aim uses the direct snap path. Best-effort obfuscation of the
+    long-session statistical fingerprint; NOT a guarantee of undetectability,
+    and it never makes wrong-target mistakes (only motor-level ones).
     """
     if enabled is None:
         return bool(_talos_host.humanMode())

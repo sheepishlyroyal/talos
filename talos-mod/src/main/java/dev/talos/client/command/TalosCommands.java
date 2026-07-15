@@ -141,7 +141,7 @@ public final class TalosCommands {
                                         .executes(context -> GotoCommand.execute(
                                                 context, xzGoal(context))))))
                 .then(lookNode(registryAccess))
-                // `/talos human [on|off]` — toggle session-arc fatigue (see SessionArc).
+                // `/talos human [on|off]` — toggle eased aim and session-arc fatigue.
                 .then(ClientCommandManager.literal("human")
                         .executes(context -> setHuman(context,
                                 !dev.talos.client.TalosClient.humanizer().humanMode()))
@@ -298,18 +298,19 @@ public final class TalosCommands {
                                         context, StringArgumentType.getString(context, "args"))))));
     }
 
-    /** Toggles session-arc "Human mode" and reports the new state + fatigue. */
+    /** Toggles eased aim plus session-arc "Human mode" and reports the new state. */
     private static int setHuman(
             com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context,
             boolean enabled) {
         dev.talos.client.TalosClient.humanizer().setHumanMode(enabled);
         if (enabled) {
             context.getSource().sendFeedback(Text.literal(
-                    "§bTalos §7» §fHuman mode §aON§f — fatigue drifts reactions, aim and timing "
-                    + "over the session, with idle micro-breaks. Best-effort, not undetectable."));
+                    "§bTalos §7» §fHuman mode §aON§f — aim is eased (never a direct snap); "
+                    + "fatigue drifts reactions, aim and timing over the session, with idle "
+                    + "micro-breaks. Best-effort, not undetectable."));
         } else {
             context.getSource().sendFeedback(Text.literal(
-                    "§bTalos §7» §fHuman mode §cOFF§f — stationary "
+                    "§bTalos §7» §fHuman mode §cOFF§f — aim snaps directly; stationary "
                     + dev.talos.client.TalosClient.humanizer().baseProfile().name() + " profile."));
         }
         return 1;
