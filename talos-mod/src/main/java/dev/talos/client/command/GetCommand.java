@@ -19,6 +19,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * {@code /talos get <observable>} — instant readout of every value the rule engine can watch:
@@ -40,7 +41,8 @@ public final class GetCommand {
                             + "|container.N|saddle|horsearmor> | parameterized trigger usage: "
                             + "entity_* <selector> [radius], block_* <block> [radius], "
                             + "item_count/hotbar_item_count/held_enchant <id>, "
-                            + "entered_region/left_region <x1 y1 z1 x2 y2 z2>"));
+                            + "entered_region/left_region <x1 y1 z1 x2 y2 z2>; spatial getters "
+                            + "accept x y z using absolute, ~ feet-relative, or ^ look-relative"));
             return 1;
         }));
         get.then(ClientCommands.literal("entity")
@@ -83,7 +85,8 @@ public final class GetCommand {
                                         .getInteger(context, "id"))))));
         for (Map.Entry<String, BiFunction<Minecraft, LocalPlayer, String>> entry
                 : GETTERS.entrySet()) {
-            get.then(ClientCommands.literal(entry.getKey()).executes(context -> {
+            LiteralArgumentBuilder<FabricClientCommandSource> getterNode =
+                    ClientCommands.literal(entry.getKey()).executes(context -> {
                 Minecraft client = context.getSource().getClient();
                 if (client.player == null || client.level == null) {
                     context.getSource().sendError(Component.literal("No world is loaded"));
@@ -92,7 +95,13 @@ public final class GetCommand {
                 context.getSource().sendFeedback(Component.literal("§b" + entry.getKey() + "§f = "
                         + entry.getValue().apply(client, client.player)));
                 return 1;
-            }));
+            });
+            getterNode.then(ClientCommands.argument("args",
+                            com.mojang.brigadier.arguments.StringArgumentType.greedyString())
+                    .executes(context -> sendQuery(context.getSource(), entry.getKey(),
+                            words(com.mojang.brigadier.arguments.StringArgumentType
+                                    .getString(context, "args")).toArray(String[]::new))));
+            get.then(getterNode);
         }
         // Every trigger not already represented by a literal getter lands here. A greedy tail is
         // intentional: selector brackets and quoted names stay intact for the shared parser.
@@ -133,8 +142,39 @@ public final class GetCommand {
             throw new IllegalArgumentException("No world is loaded");
         }
         String name = requested.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+        args = expandArgs(args);
+
+        // String-valued spatial getters use the same coordinate grammar as numeric metrics.
+        if ((name.equals("biome") || name.equals("standing_on")
+                || name.equals("block_at_feet") || name.equals("block_above_head"))
+                && args.length > 0) {
+            Vec3 point = parsePoint(name, client.player, args, 0);
+            net.minecraft.core.BlockPos pos = net.minecraft.core.BlockPos.containing(point);
+            if (name.equals("biome")) return client.level.getBiome(pos).getRegisteredName();
+            if (name.equals("standing_on")) pos = pos.below();
+            if (name.equals("block_above_head")) pos = pos.above(2);
+            return BuiltInRegistries.BLOCK.getKey(
+                    client.level.getBlockState(pos).getBlock()).toString();
+        }
+
+        Trigger requestedTrigger = trigger(name);
+        if (requestedTrigger != null && requestedTrigger.kind == Kind.COMPARE
+                && EventRuleEngine.acceptsPoint(requestedTrigger)
+                && args.length > 0) {
+            Vec3 point = parsePoint(name, client.player, args, 0);
+            if (args.length > 3 && !EventRuleEngine.acceptsSpatialRadius(requestedTrigger)) {
+                throw new IllegalArgumentException(name + " accepts x y z but not a radius");
+            }
+            double radius = args.length > 3 ? parseDouble(name, args[3]) : -1.0;
+            return number(EventRuleEngine.metricValue(
+                    requestedTrigger, client, client.player, point, radius));
+        }
         BiFunction<Minecraft, LocalPlayer, String> getter = GETTERS.get(name);
-        if (getter != null) return getter.apply(client, client.player);
+        if (getter != null) {
+            if (args.length > 0) throw new IllegalArgumentException(
+                    name + " does not take a location or other arguments");
+            return getter.apply(client, client.player);
+        }
 
         if (name.equals("entity_location") || name.equals("mob_location")) {
             requireArgs(name, args, 1);
@@ -144,14 +184,13 @@ public final class GetCommand {
                 throw new IllegalArgumentException("entity_location needs a numeric mob/entity id");
             }
             var entity = client.level.getEntity(id);
-            if (entity == null) throw new IllegalArgumentException("No loaded entity with id " + id);
+            if (entity == null) return "-1";
             return String.format(Locale.ROOT, "%s @ %.3f %.3f %.3f",
                     EventRuleEngine.entityLabel(entity), entity.getX(), entity.getY(), entity.getZ());
         }
 
-        final Trigger trigger;
-        try { trigger = Trigger.valueOf(name.toUpperCase(Locale.ROOT)); }
-        catch (IllegalArgumentException exception) {
+        final Trigger trigger = requestedTrigger;
+        if (trigger == null) {
             throw new IllegalArgumentException("Unknown observable/trigger: " + requested);
         }
 
@@ -175,14 +214,16 @@ public final class GetCommand {
         if (trigger.kind == Kind.ENTITY_COUNT || trigger.kind == Kind.ENTITY_PRESENCE) {
             requireArgs(name, args, 1);
             double radius = args.length > 1 ? parseDouble(name, args[1]) : -1.0;
+            Vec3 point = args.length > 2 ? parsePoint(name, client.player, args, 2) : null;
             return number(EventRuleEngine.parameterValue(trigger, client, client.player,
-                    args[0], radius, null));
+                    args[0], radius, null, point));
         }
         if (trigger.kind == Kind.BLOCK_COUNT || trigger.kind == Kind.BLOCK_PRESENCE) {
             requireArgs(name, args, 1);
             double radius = args.length > 1 ? parseDouble(name, args[1]) : 16.0;
+            Vec3 point = args.length > 2 ? parsePoint(name, client.player, args, 2) : null;
             return number(EventRuleEngine.parameterValue(trigger, client, client.player,
-                    args[0], radius, null));
+                    args[0], radius, null, point));
         }
         if (trigger.kind == Kind.ITEM_COUNT) {
             requireArgs(name, args, 1);
@@ -192,7 +233,10 @@ public final class GetCommand {
         if (trigger.kind == Kind.REGION) {
             requireArgs(name, args, 6);
             double[] region = new double[6];
-            for (int i = 0; i < 6; i++) region[i] = parseDouble(name, args[i]);
+            Vec3 first = parsePoint(name, client.player, args, 0);
+            Vec3 second = parsePoint(name, client.player, args, 3);
+            region[0] = first.x; region[1] = first.y; region[2] = first.z;
+            region[3] = second.x; region[4] = second.y; region[5] = second.z;
             double inside = EventRuleEngine.parameterValue(trigger, client, client.player,
                     "", 0, region);
             return Boolean.toString(trigger == Trigger.LEFT_REGION ? inside == 0 : inside != 0);
@@ -210,6 +254,50 @@ public final class GetCommand {
         catch (NumberFormatException exception) {
             throw new IllegalArgumentException(name + ": expected a number, got " + raw);
         }
+    }
+
+    private static Trigger trigger(String name) {
+        try { return Trigger.valueOf(name.toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException exception) { return null; }
+    }
+
+    private static String[] expandArgs(String[] args) {
+        List<String> expanded = new ArrayList<>();
+        for (String arg : args) expanded.addAll(words(arg));
+        return expanded.toArray(String[]::new);
+    }
+
+    /** Resolve absolute, feet-relative ~, or eye/look-relative ^ coordinates. */
+    private static Vec3 parsePoint(String name, LocalPlayer player, String[] args, int start) {
+        if (args.length < start + 3) throw new IllegalArgumentException(
+                name + " needs x y z (absolute, ~ relative, or ^ local)");
+        String[] raw = {args[start], args[start + 1], args[start + 2]};
+        boolean local = java.util.Arrays.stream(raw).anyMatch(value -> value.startsWith("^"));
+        boolean relative = java.util.Arrays.stream(raw).anyMatch(value -> value.startsWith("~"));
+        if (local && relative) throw new IllegalArgumentException(
+                name + ": cannot mix ^ local and ~ relative coordinates");
+        try {
+            if (local) {
+                return RaycastMath.local(player.getEyePosition(), player.getYRot(), player.getXRot(),
+                        coordinateTail(raw[0], '^'), coordinateTail(raw[1], '^'),
+                        coordinateTail(raw[2], '^'));
+            }
+            Vec3 feet = player.position();
+            return new Vec3(resolveAxis(raw[0], feet.x), resolveAxis(raw[1], feet.y),
+                    resolveAxis(raw[2], feet.z));
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(name + ": invalid coordinate triplet "
+                    + String.join(" ", raw));
+        }
+    }
+
+    private static double resolveAxis(String raw, double base) {
+        return raw.startsWith("~") ? base + coordinateTail(raw, '~') : Double.parseDouble(raw);
+    }
+
+    private static double coordinateTail(String raw, char prefix) {
+        String tail = raw.startsWith(Character.toString(prefix)) ? raw.substring(1) : raw;
+        return tail.isEmpty() ? 0.0 : Double.parseDouble(tail);
     }
 
     private static String number(double value) {
@@ -296,6 +384,8 @@ public final class GetCommand {
                 .getBlockState(player.blockPosition().below()).getBlock()).toString());
         map.put("block_at_feet", (client, player) -> BuiltInRegistries.BLOCK.getKey(client.level
                 .getBlockState(player.blockPosition()).getBlock()).toString());
+        map.put("block_above_head", (client, player) -> BuiltInRegistries.BLOCK.getKey(client.level
+                .getBlockState(player.blockPosition().above(2)).getBlock()).toString());
         map.put("looking_at", (client, player) -> client.hitResult == null ? "none"
                 : client.hitResult.toString());
         map.put("screen", (client, player) -> client.gui.screen() == null ? "none"

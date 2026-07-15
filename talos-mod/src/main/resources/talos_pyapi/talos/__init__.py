@@ -2,7 +2,8 @@
 
 from .errors import (TalosError, PathFailedError, OutOfReachError, NotFoundError,
                      TargetLostError, ActionCancelledError, WorldClosedError)
-from .actions import (goto, goto_near, goto_xz, goto_block, follow, set_node_count,
+from .actions import (goto, goto_near, goto_xz, goto_block, killprocess, kill_process,
+                      process_time, time_exceeds, follow, set_node_count,
                       find_block, find_entity, get,
                       find_item, players, nearest_player, entities, angle_to,
                       place_block, place_look, break_block, mine, mine_looking_at,
@@ -159,7 +160,8 @@ def __getattr__(name):
     raise AttributeError(f"module 'talos' has no attribute {name!r}")
 
 __all__ = ["args", "require",
-           "goto", "goto_near", "goto_xz", "goto_block", "follow",
+           "goto", "goto_near", "goto_xz", "goto_block", "killprocess", "kill_process",
+           "process_time", "time_exceeds", "follow",
            "set_node_count", "find_block", "find_entity", "get",
            "find_item", "players", "nearest_player", "entities", "angle_to",
            "place_block", "place_look", "break_block", "mine", "mine_looking_at",

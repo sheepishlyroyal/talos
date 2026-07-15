@@ -222,6 +222,34 @@ def goto_block(block_id, radius=64):
     (up to 5) when one proves unreachable. Raises PathFailedError if none work."""
     return _call(_talos_host.gotoBlockType, _id(block_id), int(radius))
 
+def killprocess(name):
+    """Cancel one named automation process without stopping the script.
+
+    Path names are ``goto``, ``goto_block``, ``follow``, ``path`` and
+    ``pathing``. Other names are matched against scheduled Talos task names.
+    Returns True when a running process was found and cancellation was requested.
+    ``kill_process`` is the equivalent snake_case spelling.
+    """
+    return bool(_call(_talos_host.killProcess, str(name)))
+
+def kill_process(name):
+    """Snake-case alias of killprocess(name)."""
+    return killprocess(name)
+
+def process_time(name):
+    """Seconds a named path process has run, or -1 when it is not running."""
+    return float(_call(_talos_host.processSeconds, str(name)))
+
+def time_exceeds(name, seconds):
+    """True once a named process has run longer than ``seconds``.
+
+    This is non-blocking and is intended for an ``@talos.on_tick`` watchdog or
+    a second async task while the action itself uses ``await talos.aio.goto``.
+    A process that is not running has time -1 and therefore never exceeds.
+    """
+    elapsed = process_time(name)
+    return elapsed >= 0.0 and elapsed > float(seconds)
+
 def follow(target, distance=3.0):
     """Follow any entity, keeping ~distance blocks, until following ENDS.
 
@@ -255,11 +283,24 @@ def get(name, *args):
     Names accept underscores or spaces. Parameterized examples:
     ``get("entity_count", "@e[type=zombie]", 32)``,
     ``get("block_count", "minecraft:diamond_ore", 16)``, and
-    ``get("entity_location", 123)``. Numeric and boolean results become Python
-    values; descriptive and latest-event payloads remain strings.
+    ``get("entity_location", 123)``. Spatial examples include
+    ``get("light_level", "~ ~1 ~")`` and
+    ``get("block_count", "stone", 8, "^ ^ ^12")``. Coordinates may be
+    absolute, ``~`` feet-relative, or ``^`` eye/look-relative. Numeric and
+    boolean results become Python values; descriptive and latest-event payloads
+    remain strings. Missing numeric values use -1, never invented 999/100
+    sentinels.
     """
-    raw = str(_call(_talos_host.getObservable, str(name),
-                    "\x1f".join(str(arg) for arg in args)))
+    packed = []
+    for arg in args:
+        point = getattr(arg, "pos", arg)
+        if callable(point):
+            point = point()
+        if all(hasattr(point, axis) for axis in ("x", "y", "z")):
+            packed.extend(str(_axis(point, axis)) for axis in ("x", "y", "z"))
+        else:
+            packed.append(str(arg))
+    raw = str(_call(_talos_host.getObservable, str(name), "\x1f".join(packed)))
     lowered = raw.lower()
     if lowered == "true":
         return True

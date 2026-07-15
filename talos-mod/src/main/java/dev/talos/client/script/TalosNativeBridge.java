@@ -73,6 +73,9 @@ public final class TalosNativeBridge {
     private final java.util.Set<CompletableFuture<?>> inFlight = ConcurrentHashMap.newKeySet();
     private final java.util.Queue<CommandInvocation> pendingCommands =
             new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private volatile String activePathProcess;
+    private volatile long activePathStartedNanos = -1L;
+    private volatile CompletableFuture<?> activePathFuture;
     private Random random = new Random();
 
     public TalosNativeBridge(GameThreadExecutor game, EventDispatcher events) {
@@ -81,57 +84,57 @@ public final class TalosNativeBridge {
     }
 
     @HostAccess.Export public String gotoBlock(int x, int y, int z) {
-        return await(pathFuture(new GoalBlock(x, y, z)));
+        return await(pathFuture("goto", new GoalBlock(x, y, z)));
     }
     @HostAccess.Export public String gotoNear(int x, int y, int z, int range) {
-        return await(pathFuture(new GoalNear(x, y, z, range)));
+        return await(pathFuture("goto", new GoalNear(x, y, z, range)));
     }
     @HostAccess.Export public String gotoXZ(int x, int z) {
-        return await(pathFuture(new GoalXZ(x, z)));
+        return await(pathFuture("goto", new GoalXZ(x, z)));
     }
 
     @HostAccess.Export public FutureHandle submitGoto(int x, int y, int z) {
-        return handle(pathFuture(new GoalBlock(x, y, z)));
+        return handle(pathFuture("goto", new GoalBlock(x, y, z)));
     }
     @HostAccess.Export public FutureHandle submitGotoNear(int x, int y, int z, int range) {
-        return handle(pathFuture(new GoalNear(x, y, z, range)));
+        return handle(pathFuture("goto", new GoalNear(x, y, z, range)));
     }
     @HostAccess.Export public FutureHandle submitGotoXZ(int x, int z) {
-        return handle(pathFuture(new GoalXZ(x, z)));
+        return handle(pathFuture("goto", new GoalXZ(x, z)));
     }
     @HostAccess.Export public FutureHandle submitFindBlock(String predicate, int radius) {
         return handle(game.submit(() -> scheduleBlockScan(predicate, radius)).thenCompose(f -> f));
     }
     @HostAccess.Export public String gotoBlockType(String blockId, int radius) {
-        return await(game.submit(() -> dev.talos.client.pathing.talos.BlockGoalNavigator
+        return await(trackPath("goto_block", game.submit(() -> dev.talos.client.pathing.talos.BlockGoalNavigator
                         .navigate(Minecraft.getInstance(), blockId, radius))
-                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath));
+                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath)));
     }
     @HostAccess.Export public String follow(String selector, double distance) {
-        return await(game.submit(() -> {
+        return await(trackPath("follow", game.submit(() -> {
                     Minecraft client = requireWorld();
                     net.minecraft.world.entity.Entity target =
                             dev.talos.client.command.EntitySelectors.resolve(client, selector, true);
                     return dev.talos.client.pathing.talos.FollowTask.start(client, target, distance);
                 })
-                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath));
+                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath)));
     }
 
     /** talos.aio.goto_block: nearest matching block, blacklist-and-retry on unreachable. */
     @HostAccess.Export public FutureHandle submitGotoBlockType(String blockId, int radius) {
-        return handle(game.submit(() -> dev.talos.client.pathing.talos.BlockGoalNavigator
+        return handle(trackPath("goto_block", game.submit(() -> dev.talos.client.pathing.talos.BlockGoalNavigator
                         .navigate(Minecraft.getInstance(), blockId, radius))
-                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath));
+                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath)));
     }
     /** talos.aio.follow: selector/name/type resolved client-side; ends only when following ends. */
     @HostAccess.Export public FutureHandle submitFollow(String selector, double distance) {
-        return handle(game.submit(() -> {
+        return handle(trackPath("follow", game.submit(() -> {
                     Minecraft client = requireWorld();
                     net.minecraft.world.entity.Entity target =
                             dev.talos.client.command.EntitySelectors.resolve(client, selector, true);
                     return dev.talos.client.pathing.talos.FollowTask.start(client, target, distance);
                 })
-                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath));
+                .thenCompose(f -> f).thenApply(TalosNativeBridge::requirePath)));
     }
     @HostAccess.Export public FutureHandle submitPlaceBlock(int x, int y, int z) {
         return handle(actionFuture(new PlaceBlockAction(new BlockPos(x, y, z)), "place"));
@@ -149,10 +152,55 @@ public final class TalosNativeBridge {
         return handle(killFuture(radius));
     }
 
-    private CompletableFuture<String> pathFuture(Goal goal) {
-        return game.submit(() -> TalosClient.pathingEngine().goTo(goal, PathingOptions.DEFAULT))
+    private CompletableFuture<String> pathFuture(String name, Goal goal) {
+        return trackPath(name, game.submit(() -> TalosClient.pathingEngine().goTo(goal, PathingOptions.DEFAULT))
                 .thenCompose(f -> f)
-                .thenApply(TalosNativeBridge::requirePath);
+                .thenApply(TalosNativeBridge::requirePath));
+    }
+
+    private <T> CompletableFuture<T> trackPath(String name, CompletableFuture<T> future) {
+        activePathProcess = name;
+        activePathStartedNanos = System.nanoTime();
+        activePathFuture = future;
+        future.whenComplete((result, error) -> {
+            if (activePathFuture == future) {
+                activePathFuture = null;
+                activePathProcess = null;
+                activePathStartedNanos = -1L;
+            }
+        });
+        return future;
+    }
+
+    /** Cancel one named automation process without stopping the Python session. */
+    @HostAccess.Export public boolean killProcess(String requested) {
+        String name = requested == null ? "" : requested.trim().toLowerCase(Locale.ROOT)
+                .replace('-', '_').replace(' ', '_');
+        return await(game.submit(() -> {
+            String active = activePathProcess;
+            boolean anyPath = name.equals("path") || name.equals("pathing");
+            boolean gotoFamily = (name.equals("goto") || name.equals("goto_near")
+                    || name.equals("goto_xz")) && active != null && active.startsWith("goto");
+            boolean path = active != null && (anyPath || gotoFamily || name.equals(active));
+            int cancelled = 0;
+            if (path && TalosClient.pathingEngine().isPathing()) {
+                TalosClient.pathingEngine().cancel();
+                cancelled++;
+            }
+            cancelled += TalosClient.taskScheduler().cancel(name);
+            return cancelled > 0;
+        }));
+    }
+
+    /** Seconds the named path process has been active, or -1 when it is not running. */
+    @HostAccess.Export public double processSeconds(String requested) {
+        String name = requested == null ? "" : requested.trim().toLowerCase(Locale.ROOT)
+                .replace('-', '_').replace(' ', '_');
+        String active = activePathProcess;
+        boolean gotoFamily = name.equals("goto") && active != null && active.startsWith("goto");
+        if (active == null || (!name.equals(active) && !gotoFamily
+                && !name.equals("path") && !name.equals("pathing"))) return -1.0;
+        return Math.max(0.0, (System.nanoTime() - activePathStartedNanos) / 1_000_000_000.0);
     }
     private static String requirePath(PathResult result) {
         if (!result.successful()) throw new IllegalStateException("Path failed: " + result.detail());

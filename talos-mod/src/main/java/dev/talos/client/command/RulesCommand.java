@@ -37,7 +37,8 @@ public final class RulesCommand {
             Trigger.VILLAGER_LEVEL_CHANGED, Trigger.PLAYER_HELD_CHANGED,
             Trigger.PLAYER_OFFHAND_CHANGED, Trigger.PLAYER_ARMOR_CHANGED,
             Trigger.ENTITY_SPAWNED, Trigger.ENTITY_REMOVED, Trigger.ENTITY_UNLOADED,
-            Trigger.ITEM_PICKED_UP, Trigger.PROJECTILE_LAUNCHED, Trigger.PEARL_THROWN,
+            Trigger.ITEM_SPAWNED, Trigger.ITEM_PICKED_UP, Trigger.ITEM_DESPAWNED,
+            Trigger.ITEM_UNLOADED, Trigger.PROJECTILE_LAUNCHED, Trigger.PEARL_THROWN,
             Trigger.PEARL_LANDED, Trigger.POTION_SPLASHED, Trigger.POTION_DRANK,
             Trigger.TOTEM_POPPED, Trigger.ENTITY_STATUS, Trigger.LOOKING_AT_ENTITY,
             Trigger.ATTACK_ENTITY, Trigger.USE_ENTITY, Trigger.PROJECTILE_HIT,
@@ -61,11 +62,14 @@ public final class RulesCommand {
                             case ITEM_COUNT -> " <item> above|below|equals <n>";
                             case REGION -> " <x1> <y1> <z1> <x2> <y2> <z2>";
                             case NONE -> "";
-                        });
+                        })
+                        .append(EventRuleEngine.acceptsPoint(trigger)
+                                ? " [at <x> <y> <z>]" : "");
             }
             context.getSource().sendFeedback(Component.literal("Events: " + names));
             context.getSource().sendFeedback(Component.literal(
                     "Placeholders: {value} {health} {hunger} {air} {x} {y} {z}; "
+                            + "coordinates accept absolute, ~ feet-relative, and ^ look-relative; "
                             + "prefix 'chat ' to send chat instead of a command"));
             return 1;
         }));
@@ -89,52 +93,62 @@ public final class RulesCommand {
                                     .then(countTail(trigger, (context, rule) ->
                                             rule.filter = StringArgumentType.getString(context, "filter")))));
                 }
-                case COMPARE -> attachComparisons(node, trigger, (context, rule) -> { });
-                case ENTITY_COUNT -> node.then(
-                        ClientCommands.argument("selector", SelectorArgumentType.selector())
-                                .then(ClientCommands.literal("radius")
-                                        .then(attachComparisons(
-                                                ClientCommands.argument("radius",
-                                                        DoubleArgumentType.doubleArg(-1.0, 512.0)),
-                                                trigger, RulesCommand::readEntityArgs))));
-                case ENTITY_PRESENCE -> node.then(
-                        ClientCommands.argument("selector", SelectorArgumentType.selector())
-                                .then(ClientCommands.literal("radius")
-                                        .then(ClientCommands.argument("radius",
-                                                        DoubleArgumentType.doubleArg(-1.0, 512.0))
-                                                .then(run(trigger, RulesCommand::readEntityArgs)))));
-                case BLOCK_COUNT -> node.then(
-                        ClientCommands.argument("block", IdArgumentType.blockId())
-                                .then(ClientCommands.literal("radius")
-                                        .then(attachComparisons(
-                                                ClientCommands.argument("radius",
-                                                        IntegerArgumentType.integer(1, EventRuleEngine.MAX_BLOCK_RADIUS)),
-                                                trigger, RulesCommand::readBlockArgs))));
-                case BLOCK_PRESENCE -> node.then(
-                        ClientCommands.argument("block", IdArgumentType.blockId())
-                                .then(ClientCommands.literal("radius")
-                                        .then(ClientCommands.argument("radius",
-                                                        IntegerArgumentType.integer(1, EventRuleEngine.MAX_BLOCK_RADIUS))
-                                                .then(run(trigger, RulesCommand::readBlockArgs)))));
+                case COMPARE -> {
+                    attachComparisons(node, trigger, (context, rule) -> { });
+                    if (EventRuleEngine.acceptsPoint(trigger)) {
+                        node.then(atComparisons(trigger, (context, rule) -> { }));
+                    }
+                }
+                case ENTITY_COUNT -> {
+                    var radius = ClientCommands.argument("radius",
+                            DoubleArgumentType.doubleArg(-1.0, 512.0));
+                    attachComparisons(radius, trigger, RulesCommand::readEntityArgs);
+                    radius.then(atComparisons(trigger, RulesCommand::readEntityArgs));
+                    node.then(ClientCommands.argument("selector", SelectorArgumentType.selector())
+                            .then(ClientCommands.literal("radius").then(radius)));
+                }
+                case ENTITY_PRESENCE -> {
+                    var radius = ClientCommands.argument("radius",
+                            DoubleArgumentType.doubleArg(-1.0, 512.0));
+                    radius.then(run(trigger, RulesCommand::readEntityArgs));
+                    radius.then(atRun(trigger, RulesCommand::readEntityArgs));
+                    node.then(ClientCommands.argument("selector", SelectorArgumentType.selector())
+                            .then(ClientCommands.literal("radius").then(radius)));
+                }
+                case BLOCK_COUNT -> {
+                    var radius = ClientCommands.argument("radius",
+                            IntegerArgumentType.integer(1, EventRuleEngine.MAX_BLOCK_RADIUS));
+                    attachComparisons(radius, trigger, RulesCommand::readBlockArgs);
+                    radius.then(atComparisons(trigger, RulesCommand::readBlockArgs));
+                    node.then(ClientCommands.argument("block", IdArgumentType.blockId())
+                            .then(ClientCommands.literal("radius").then(radius)));
+                }
+                case BLOCK_PRESENCE -> {
+                    var radius = ClientCommands.argument("radius",
+                            IntegerArgumentType.integer(1, EventRuleEngine.MAX_BLOCK_RADIUS));
+                    radius.then(run(trigger, RulesCommand::readBlockArgs));
+                    radius.then(atRun(trigger, RulesCommand::readBlockArgs));
+                    node.then(ClientCommands.argument("block", IdArgumentType.blockId())
+                            .then(ClientCommands.literal("radius").then(radius)));
+                }
                 case ITEM_COUNT -> node.then(attachComparisons(
                         ClientCommands.argument("item", IdArgumentType.itemId()),
                         trigger, (context, rule) ->
                                 rule.block = StringArgumentType.getString(context, "item")));
-                case REGION -> node.then(
-                        ClientCommands.argument("x1", IntegerArgumentType.integer())
-                                .then(ClientCommands.argument("y1", IntegerArgumentType.integer())
-                                        .then(ClientCommands.argument("z1", IntegerArgumentType.integer())
-                                                .then(ClientCommands.argument("x2", IntegerArgumentType.integer())
-                                                        .then(ClientCommands.argument("y2", IntegerArgumentType.integer())
-                                                                .then(ClientCommands.argument("z2", IntegerArgumentType.integer())
-                                                                        .then(run(trigger, (context, rule) ->
-                                                                                rule.region = new double[] {
-                                                                                        IntegerArgumentType.getInteger(context, "x1"),
-                                                                                        IntegerArgumentType.getInteger(context, "y1"),
-                                                                                        IntegerArgumentType.getInteger(context, "z1"),
-                                                                                        IntegerArgumentType.getInteger(context, "x2"),
-                                                                                        IntegerArgumentType.getInteger(context, "y2"),
-                                                                                        IntegerArgumentType.getInteger(context, "z2")}))))))));
+                case REGION -> {
+                    var z2 = localCoordinate("z2");
+                    z2.then(run(trigger, (context, rule) -> {
+                        var first = resolvePoint(context, "1");
+                        var second = resolvePoint(context, "2");
+                        rule.region = new double[] {first.x, first.y, first.z,
+                                second.x, second.y, second.z};
+                    }));
+                    var y2 = localCoordinate("y2").then(z2);
+                    var x2 = localCoordinate("x2").then(y2);
+                    var z1 = localCoordinate("z1").then(x2);
+                    var y1 = localCoordinate("y1").then(z1);
+                    node.then(localCoordinate("x1").then(y1));
+                }
             }
             // Subject-entity triggers: 'on potion_drank @e[type=player] run ...' — the
             // selector is tested against the event's entity, composable with 'matching'.
@@ -162,6 +176,71 @@ public final class RulesCommand {
     private static void readBlockArgs(CommandContext<FabricClientCommandSource> context, Rule rule) {
         rule.block = StringArgumentType.getString(context, "block");
         rule.radius = IntegerArgumentType.getInteger(context, "radius");
+    }
+
+    private static LiteralArgumentBuilder<FabricClientCommandSource> atComparisons(Trigger trigger,
+            BiConsumer<CommandContext<FabricClientCommandSource>, Rule> reader) {
+        var at = ClientCommands.literal("at");
+        BiConsumer<CommandContext<FabricClientCommandSource>, Rule> pointReader = (context, rule) -> {
+            reader.accept(context, rule);
+            var point = resolvePoint(context, "at_");
+            rule.point = new double[] {point.x, point.y, point.z};
+        };
+        var z = localCoordinate("at_z");
+        attachComparisons(z, trigger, pointReader);
+        if (EventRuleEngine.acceptsSpatialRadius(trigger)) {
+            z.then(ClientCommands.literal("radius").then(attachComparisons(
+                    ClientCommands.argument("at_radius", DoubleArgumentType.doubleArg(0.0, 512.0)),
+                    trigger, (context, rule) -> {
+                        pointReader.accept(context, rule);
+                        rule.radius = DoubleArgumentType.getDouble(context, "at_radius");
+                    })));
+        }
+        at.then(localCoordinate("at_x").then(localCoordinate("at_y").then(z)));
+        return at;
+    }
+
+    private static LiteralArgumentBuilder<FabricClientCommandSource> atRun(Trigger trigger,
+            BiConsumer<CommandContext<FabricClientCommandSource>, Rule> reader) {
+        var at = ClientCommands.literal("at");
+        at.then(localCoordinate("at_x").then(localCoordinate("at_y").then(
+                localCoordinate("at_z").then(run(trigger, (context, rule) -> {
+                    reader.accept(context, rule);
+                    var point = resolvePoint(context, "at_");
+                    rule.point = new double[] {point.x, point.y, point.z};
+                })))));
+        return at;
+    }
+
+    private static com.mojang.brigadier.builder.RequiredArgumentBuilder<
+            FabricClientCommandSource, LocalCoordinateArgumentType.Axis> localCoordinate(String name) {
+        return ClientCommands.argument(name, LocalCoordinateArgumentType.localCoordinate());
+    }
+
+    private static net.minecraft.world.phys.Vec3 resolvePoint(
+            CommandContext<FabricClientCommandSource> context, String marker) {
+        String xName = marker.equals("1") || marker.equals("2") ? "x" + marker : marker + "x";
+        String yName = marker.equals("1") || marker.equals("2") ? "y" + marker : marker + "y";
+        String zName = marker.equals("1") || marker.equals("2") ? "z" + marker : marker + "z";
+        var x = context.getArgument(xName, LocalCoordinateArgumentType.Axis.class);
+        var y = context.getArgument(yName, LocalCoordinateArgumentType.Axis.class);
+        var z = context.getArgument(zName, LocalCoordinateArgumentType.Axis.class);
+        boolean local = x.type() == LocalCoordinateArgumentType.Type.LOCAL
+                || y.type() == LocalCoordinateArgumentType.Type.LOCAL
+                || z.type() == LocalCoordinateArgumentType.Type.LOCAL;
+        boolean relative = x.type() == LocalCoordinateArgumentType.Type.RELATIVE
+                || y.type() == LocalCoordinateArgumentType.Type.RELATIVE
+                || z.type() == LocalCoordinateArgumentType.Type.RELATIVE;
+        if (local && relative) throw new IllegalArgumentException(
+                "Cannot mix ^ local and ~ relative coordinates");
+        var player = context.getSource().getPlayer();
+        if (local) return RaycastMath.local(player.getEyePosition(), player.getYRot(),
+                player.getXRot(), x.value(), y.value(), z.value());
+        var feet = player.position();
+        return new net.minecraft.world.phys.Vec3(
+                x.type() == LocalCoordinateArgumentType.Type.RELATIVE ? feet.x + x.value() : x.value(),
+                y.type() == LocalCoordinateArgumentType.Type.RELATIVE ? feet.y + y.value() : y.value(),
+                z.type() == LocalCoordinateArgumentType.Type.RELATIVE ? feet.z + z.value() : z.value());
     }
 
     /**
