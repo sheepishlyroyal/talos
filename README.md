@@ -170,7 +170,8 @@ Each axis of `get` accepts three modes, matching vanilla:
 /talos track stop
 ```
 
-With **Human mode on** (`/talos human on` or `talos.human(True)`), target-based aim runs through the
+With **Human mode on** (`/talos human on` or `talos.human(True)`), command and Python aim—including
+absolute angles, coordinates, blocks and entities—runs through the
 humanized cube-aim controller (`AimController`, no direct snap): a 1×1m yellow guide cube is rendered
 **off-grid**, centered exactly on the intended point. The
 actual aim spot — the red X — lands on a visible face chosen with probability proportional to that
