@@ -54,6 +54,7 @@ import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import dev.talos.client.command.RaycastMath;
+import dev.talos.client.command.GetCommand;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.screen.slot.Slot;
 import net.minecraft.item.ItemStack;
@@ -180,6 +181,12 @@ public final class TalosNativeBridge {
 
     @HostAccess.Export public EntityInfo findItem(String item, double radius) {
         return await(game.submit(() -> findEntityOnGameThread(item, radius, true)));
+    }
+
+    @HostAccess.Export public String getObservable(String name, String packedArgs) {
+        String[] args = packedArgs == null || packedArgs.isEmpty()
+                ? new String[0] : packedArgs.split("\u001f", -1);
+        return await(game.submit(() -> GetCommand.value(requireWorld(), name, args)));
     }
 
     /**

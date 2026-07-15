@@ -229,7 +229,8 @@ Instant readouts through the exact same evaluation path rules use.
 
 ```
 /talos get health                              # numeric metric
-/talos get list                                # enumerate every observable
+/talos get server_tps                          # same live value used by server_tps rules
+/talos get list                                # every observable + all 206 trigger names
 /talos get position                            # string readout
 /talos get slot hotbar.1                        # named slot contents
 /talos get entity @e[type=zombie] -1            # 0-based/negative index; -1 = furthest match
@@ -240,11 +241,43 @@ Instant readouts through the exact same evaluation path rules use.
 /talos get crosshair_particles                 # particles near the look ray in the last 2s
 /talos get block ~ ~-1 ~                        # block id at ~-relative coords
 /talos get block direction ^ ^                  # block id along a ^-relative raycast
+/talos get entity_location 123                  # mob/entity runtime id -> xyz, exactly 3dp
+/talos get entity_count @e[type=zombie] 32      # exact loaded count within 32 blocks
+/talos get block_count minecraft:diamond_ore 16 # exact cube count, same calculator as rules
+/talos get item_count minecraft:diamond         # exact inventory item count
+/talos get villager_profession_changed          # latest old -> new change + exact villager id
 ```
 
 `get entity`/`get blockpos` use Python-style 0-based indexing (`0` = nearest, `-1` = furthest).
 `slot` names: `hotbar.1`–`hotbar.9`, `inv.1`–`inv.27`, `head`/`chest`/`legs`/`feet`, `offhand`,
 `held`, `cursor`, `container.N`, `saddle`, `horsearmor`.
+
+The getter catalog is a strict superset of the trigger catalog: **every one of the 206 names accepted
+by `/talos on` is accepted by `/talos get` and `talos.get()`**. Both surfaces call the same Java
+catalog, so they cannot have different names or calculations. Underscores and spaces are equivalent
+in Python (`talos.get("server_tps")` = `talos.get("server tps")`); commands use underscores.
+
+| Trigger kind | Getter arguments | Returned value |
+|---|---|---|
+| `COMPARE` | none | Current numeric metric through the rule engine's exact calculator. This includes `server_tps`. |
+| threshold `NUMBER` | none | Current underlying value (`health_below`/`health_above` → health, `hunger_below` → hunger, `air_below` → air, `xp_level_above` → XP level); `tick_every` returns the current Talos tick. |
+| `ENTITY_COUNT` / `ENTITY_PRESENCE` | `<selector> [radius=-1]` | Exact matching loaded-entity count. `entity_near` and `entity_gone` deliberately return the count, not a lossy boolean. All selector identities and filters work. |
+| `BLOCK_COUNT` / `BLOCK_PRESENCE` | `<block> [radius=16]` | Exact matching block count in the same cube scan used by rules. |
+| `ITEM_COUNT` | `<item-or-enchantment>` | Exact inventory/hotbar count, or held enchantment level for `held_enchant`. |
+| `REGION` | `<x1> <y1> <z1> <x2> <y2> <z2>` | Whether the player is currently inside (`entered_region`) or outside (`left_region`). |
+| state/string/event (`NONE` / `TEXT`) | none | A live hand-written state where one exists (for example `sneaking`); otherwise the latest occurrence, its payload, and age. Entity-subject events also include runtime `entity_id`, UUID, type and `pos=x y z` at 3dp. Before an occurrence the result is `never observed`. |
+
+Examples of event retrieval: `villager_profession_changed` returns the old and new profession and
+the precise villager identity/location; `villager_level_changed` returns old → new level and the
+same identity fields; `item_picked_up` identifies the collector; projectile/entity lifecycle events
+identify their subject. Packet, particle, scoreboard and per-entity observations are retained even
+when no rule is armed, specifically so a later getter is truthful. Event getters report the latest
+occurrence (not an invented current value); client-inaccessible facts such as closed villager
+inventories remain unavailable.
+
+`entity_location` (alias `mob_location` in Python) takes the client runtime/network entity ID shown
+by entity-trigger payloads and returns `type#id[/name] @ x.xxx y.yyy z.zzz`. It errors if that entity
+is not currently loaded; runtime IDs are session-scoped and can be reused after entities unload.
 
 ### Event rules
 
@@ -431,7 +464,18 @@ None` (first block/entity along the look, sub-block precise, entity-aware) ·
 ### Position & sensing
 
 `player_pos()` → eye `Pos` · `player_feet()` → feet `Pos` · `block_at(x, y=None, z=None)` → block id
-· `on_edge(margin=0.3)` → `bool` (feet near a cell boundary).
+· `on_edge(margin=0.3)` → `bool` (feet near a cell boundary) · `get(name, *args)` → the shared
+trigger/observable catalog described above. Numeric results are returned as `int`/`float`, booleans
+as `bool`, and descriptive/latest-event results as `str`.
+
+```python
+talos.get("server_tps")
+talos.get("server tps")                         # same name; spaces normalize to underscores
+talos.get("entity_count", "@e[tag=guard]", 48)
+talos.get("block_near", "minecraft:lava", 8)  # exact count, not merely True/False
+talos.get("villager_profession_changed")        # old -> new + id/UUID/type/3dp position
+talos.get("entity_location", 123)               # type#123 @ x.xxx y.yyy z.zzz
+```
 
 ### Input
 
