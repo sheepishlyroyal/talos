@@ -1,4 +1,4 @@
-# Talos
+    # Talos
 
 Talos is a **client-side** Minecraft **1.21.11** Fabric automation mod. It gives you a
 physics-simulated pathfinder that mines/bridges/pillars/parkours through obstacles, a ~206-family
@@ -104,6 +104,8 @@ gaps, digs vertical shafts, nerdpoles up and parkours across, all through the sa
 planner, never as fixed "modes" you choose. `follow` ends via `/talos stop`, when another goto takes
 over, or after the target stays gone ~15s.
 
+`/talos goto` may be edited with /talos example goto and saves in your scripts.
+Then, `/talos goto` reads off the saved/running script, instead of the default /talos goto.
 ### Raytrace & local coordinates
 
 `/talos raytrace` is the look-relative coordinate + raycast primitive.
@@ -357,59 +359,215 @@ In Python, coordinate-taking calls accept the same tokens as strings — `talos.
 
 ---
 
-## Trigger catalog (~206 unique families)
+## `talos.get()` and trigger return-value catalog
 
-`Trigger` enum: `talos-mod/src/main/java/dev/talos/client/rules/EventRuleEngine.java`. Grouped as
-documented there:
+There is no separate `talos.trigger()` Python function: “trigger” below means a name accepted by
+`/talos on <trigger> …`. All 206 trigger names are also accepted by `talos.get(name, *args)` and
+`/talos get <name> …`. Python accepts either canonical underscores or spaces, but underscores are
+recommended: `talos.get("server_tps")`.
 
-- **Vitals** — health/hunger/air thresholds, damage taken, healed, death, respawn, XP level.
-- **Player state** — on fire, falling, sneaking, sprinting, swimming, gliding, underwater,
-  sleeping/woke, mounted/dismounted, moving/stopped, climbing, blocking, using item, collided, hurt,
-  freezing, jumped, landed, incoming projectile, window focus, screen opened/closed, offhand
-  changed, looking at entity, entity spawned/removed, chat mention, hotbar empty, armor missing,
-  container full/empty.
-- **Items & screens** — held item changed, tool broken, inventory full, slot changed, container
-  opened/closed, effect added/removed, item gained/lost, item/hotbar item count.
-- **Entities** — `entity_count`/`entity_near`/`entity_gone` with full selector support
-  (`@e[type=,tag=,name=]`/`@a`/`@p`/`@s`), radius `-1` = whole loaded world.
-- **Blocks** — `block_count`/`block_near` (1 Hz staggered cube scans, radius ≤16), plus
-  looking-at/standing-on/at-feet/above-head change events.
-- **World** — dimension changed, world loaded/unloaded, day/night, rain/clear, player joined/left,
-  biome changed, chunk changed, entered/left a region.
-- **Text & sound** — chat, title, subtitle, actionbar (with `matching`/`count within`), every sound
-  instance the client plays.
-- **Interactions** — attack/use block, attack/use entity, use item.
-- **Per-entity tracking** — every loaded entity is diffed per tick: held/offhand/armor changed,
-  hurt, died, damaged/healed (with amount), started burning, mounted/dismounted, sneaking,
-  sprinting, using item, blocking, gliding, swimming, sleeping, baby grown, villager
-  profession/level changed, other players' held/offhand/armor/gamemode changed, item
-  spawned/picked-up (exact collector + item via the vanilla pickup packet)/despawned, projectile
-  launched.
-- **Containers** — open-container item gained/lost (per-slot diff — the chest-indexing primitive),
-  container title.
-- **Network wave** — every S2C packet by id, explosions, boss bar shown/updated/removed + percent
-  metric, scoreboard sidebar appeared/removed/title/score/line add/remove.
-- **Held-item detail** — enchant level, enchanted, has custom name, name changed.
-- **Unload vs. gone** — entity/item unloaded vs. despawned/removed, disambiguated by a chunk-loaded
-  test at last known position (no timers).
-- **Combat/consumables** — totem popped, pearl thrown/landed, teleported (>12 blocks same-dimension
-  jump), potion splashed/drank.
-- **Projectile lifecycle** — generic `projectile_hit`/`projectile_stopped` (any throwable via
-  `matching`) plus named sugar: snowball/egg thrown/hit.
-- **Block-entity content** — sign text changed, item frame contents changed.
-- **~40 numeric metrics** (`COMPARE` kind — all support instant, `for <seconds>` sustained and
-  `changes … within <seconds>` windowed-delta modes): health, hunger, air, XP level/progress,
-  armor/held durability, FPS, ping, chunks loaded, light level, x/y/z position, speed, saturation,
-  absorption, armor points, fall distance, time ticks, entity total, players online, idle seconds,
-  velocity Y, moon phase, day count, empty/occupied slots, container items, memory used %, nearest
-  player/hostile/animal/item distance, dropped items/XP orbs/arrows near, crosshair distance, spawn
-  distance, fire/frozen ticks, hurt time, stuck arrows, vehicle speed, effect count, world border
-  distance, server TPS, yaw, pitch, held count, max health, world age, boss bar percent.
-- **Clock** — `tick_every <n>`.
+Return conventions:
 
-Four generic catch-alls exist so nothing is un-triggerable: `packet_received matching <id>` (any S2C
-packet), `entity_status` (any status byte), `particle_seen` (any particle, id + position), `sound`
-(any sound instance).
+- Numeric and boolean getters become Python `int`/`float`/`bool`; descriptive values are `str`.
+- Numeric triggers place the shown value in `{value}`. In `changes … within …` mode, `{value}` is
+  the net change over the window instead of the absolute metric.
+- Event getters return the latest event payload followed by `[N.NNs ago]`, or `never observed`.
+  Entity-subject event getters additionally append runtime `entity_id`, UUID, type, and the event
+  position at three decimal places. The trigger's `{value}` is the raw payload shown below.
+- `entity label` means `minecraft:type#runtime_id[/custom-or-player-name]`. Runtime IDs last only
+  for the current connection and may be reused after an entity unloads.
+- A payload marked `empty` intentionally sets `{value}` to `""`; the trigger itself is the fact.
+
+### Live numeric metrics (53)
+
+| Name | `talos.get()` and trigger `{value}` |
+|---|---|
+| `health` / `max_health` / `absorption` | Current health / maximum health / absorption hearts. |
+| `hunger` / `saturation` / `air` | Food points / saturation / remaining air ticks. |
+| `xp_level` / `xp_progress` | Integer XP level / progress toward the next level (`0.0`–`1.0`). |
+| `armor_points` | Current armor defense points. |
+| `armor_durability` | Lowest remaining durability percentage among worn damageable armor; `100` if none is damageable. |
+| `held_durability` / `held_count` | Main-hand remaining durability percentage (`100` if not damageable) / stack count. |
+| `fps` / `ping` | Client FPS / local tab-list latency in milliseconds (`0` if unavailable). |
+| `chunks_loaded` | Number of chunks currently held by the client chunk source. |
+| `light_level` | Maximum local raw brightness at the player's block. |
+| `x_position` / `y_position` / `z_position` | Exact player coordinate on that axis. |
+| `speed` / `velocity_y` | Horizontal blocks per second / vertical blocks per second. |
+| `fall_distance` | Current accumulated fall distance in blocks. |
+| `time_ticks` / `world_age` | Overworld clock modulo 24,000 / current world game time. |
+| `moon_phase` / `day_count` | Moon phase `0`–`7` / elapsed Minecraft day number. |
+| `entity_total` / `players_online` | Render-loaded entity count / tab-list player count. |
+| `idle_seconds` | Seconds since the player's block position last changed. |
+| `empty_slots` / `occupied_slots` | Empty / occupied slots in the player inventory container. |
+| `container_items` | Number of non-empty slots belonging to the currently open external container. |
+| `memory_used_percent` | JVM used heap as a percentage of maximum heap. |
+| `nearest_player_distance` | Distance to the nearest other loaded player, or `999` if none. |
+| `nearest_hostile_distance` | Distance to the nearest loaded `Monster`, or `999` if none. |
+| `nearest_animal_distance` | Distance to the nearest loaded `Animal`, or `999` if none. |
+| `nearest_item_distance` | Distance to the nearest dropped item entity, or `999` if none. |
+| `dropped_items_near` / `xp_orbs_near` / `arrows_near` | Count of that entity category within 16 blocks. |
+| `crosshair_distance` | Eye-to-hit distance for the current block/entity hit, or `999` on a miss. |
+| `spawn_distance` | Distance from the player's block to the client world's respawn position. |
+| `fire_ticks` / `frozen_ticks` / `hurt_time` | Remaining fire ticks / accumulated frozen ticks / current hurt animation ticks. |
+| `stuck_arrows` | Arrows visibly stuck in the local player. |
+| `vehicle_speed` | Mounted vehicle horizontal blocks per second, or `0` when unmounted. |
+| `effect_count` | Number of active status effects. |
+| `world_border_distance` | Shortest distance from the player to the world border. |
+| `server_tps` | Client estimate of server TPS from world-time advance over a rolling five-client-second window, capped at `20`. |
+| `yaw` / `pitch` | Wrapped yaw in degrees / pitch in degrees. |
+| `bossbar_percent` | Most recently updated boss-bar progress as `0`–`100`; `0` after removal. |
+
+### Parameterized live values (9)
+
+| Name | Getter call | Getter return | Trigger `{value}` |
+|---|---|---|---|
+| `entity_count` | `get("entity_count", selector, radius=-1)` | Exact matching loaded-entity count. | The count which satisfied the comparison. |
+| `entity_near` | `get("entity_near", selector, radius=-1)` | Exact count, deliberately not a lossy boolean. | Count when it changes from zero to nonzero. |
+| `entity_gone` | `get("entity_gone", selector, radius=-1)` | Exact count. | `0` when the count changes to zero. |
+| `block_count` | `get("block_count", block, radius=16)` | Exact count in the same centered cube used by rules; radius is capped at 16. | The count which satisfied the comparison. |
+| `block_near` | `get("block_near", block, radius=16)` | Exact count in that cube. | Count when it changes from zero to nonzero. |
+| `item_count` | `get("item_count", item)` | Total matching item count in the player inventory. | The count which satisfied the comparison. |
+| `hotbar_item_count` | `get("hotbar_item_count", item)` | Total matching item count in hotbar slots 1–9. | The count which satisfied the comparison. |
+| `held_enchant` | `get("held_enchant", enchantment)` | Main-hand enchantment level, or `0`. | The level which satisfied the comparison. |
+| `entered_region` / `left_region` | `get(name, x1, y1, z1, x2, y2, z2)` | Whether currently inside / outside the inclusive cuboid. | `0` on the corresponding boundary crossing. |
+
+Selectors support `@e`, `@a`, `@p`, `@s`, `@r`, and `@n`, including bracket filters. Radius `-1`
+means the whole loaded client world.
+
+### Threshold and clock triggers (6)
+
+| Name | `talos.get()` return | Trigger `{value}` |
+|---|---|---|
+| `health_below` / `health_above` | Current health. | Health at the threshold crossing. |
+| `hunger_below` | Current food points. | Food points at the threshold crossing. |
+| `air_below` | Current remaining air ticks. | Air ticks at the threshold crossing. |
+| `xp_level_above` | Current XP level. | XP level at the threshold crossing. |
+| `tick_every` | Current Talos client tick counter. | Tick counter on each requested interval. |
+
+### Player, inventory, and world transition triggers
+
+Unless a live getter override is explicitly stated, `talos.get()` returns the latest raw payload
+shown here plus its age.
+
+| Trigger name | Fires when | Raw `{value}` / getter payload |
+|---|---|---|
+| `damage_taken` / `healed` | Local health decreases / increases. | Positive amount lost / gained, one decimal place. |
+| `death` / `respawn` | Local player dies / becomes alive. | Empty. |
+| `on_fire`, `falling`, `sneaking`, `sprinting`, `swimming`, `gliding`, `underwater`, `sleeping` | Local player enters that state. | Empty. Same-name getters return the current boolean where available (`falling` remains latest-event). |
+| `woke_up` | Sleeping changes to awake. | Empty. |
+| `mounted` / `dismounted` | Local vehicle changes. | Vehicle registry ID entered / left. |
+| `moving` / `stopped` | Horizontal motion starts / stops. | Empty. `moving` getter returns the current boolean. |
+| `climbing`, `blocking`, `using_item`, `collided`, `hurt`, `freezing` | Local player enters that state. | Empty. Same-name getters return current booleans for `climbing`, `blocking`, `using_item`, and `hurt`; the others retain their latest occurrence. |
+| `jumped` | Leaves ground with upward velocity above `0.2`. | Empty. |
+| `landed` | Returns to the ground. | Fall distance immediately before landing, one decimal place. |
+| `projectile_incoming` | A moving arrow within 12 blocks is travelling toward the player's eyes. | Empty. |
+| `window_focused` / `window_unfocused` | Game window gains / loses focus. | Empty. `window_focused` getter returns current focus. |
+| `screen_opened` / `screen_closed` | Screen class changes. | Opened / closed screen class simple name. |
+| `offhand_changed` | Local offhand stack type changes. | New item registry ID. |
+| `looking_at_entity` | Crosshair entity type changes to a non-empty hit. | Entity type registry ID. |
+| `mention` | Visible text contains the local player's name, case-insensitive. | Full message text. |
+| `hotbar_empty` / `armor_missing` | Hotbar becomes empty / any armor slot becomes empty. | Empty. |
+| `container_full` / `container_empty` | All / none of the external container slots are occupied. | Empty. |
+| `held_changed` / `tool_broken` | Main-hand type changes / a damageable held item disappears as air. | New held item ID / broken item ID. |
+| `inventory_full` | Player inventory has no free slot. | Empty; getter returns current boolean. |
+| `slot_changed` | Selected hotbar slot changes. | New one-based slot number (`1`–`9`). |
+| `container_opened` / `container_closed` | An external container opens / closes. | Empty. |
+| `effect_added` / `effect_removed` | Local active-effect ID appears / disappears. | Effect registry ID. |
+| `item_gained` / `item_lost` | Player inventory count changes. | `item_id xamount` delta. |
+| `looking_at_block` | Crosshair block ID changes to a non-miss. | Block registry ID. |
+| `standing_on` / `block_at_feet` / `block_above_head` | The corresponding sampled block changes. | New block registry ID. `standing_on` and `block_at_feet` getters return the current ID. |
+| `dimension_changed` | Dimension registry key changes. | New dimension ID. |
+| `world_loaded` / `world_unloaded` | Client world appears / disappears. | Empty. A getter requires an active world, so `world_unloaded` cannot be queried after disconnection. |
+| `time_day` / `time_night` | Overworld clock crosses into day / night. | Empty. |
+| `weather_rain` / `weather_clear` | Rain begins / ends. | Empty. |
+| `player_joined` / `player_left` | Tab-list name appears / disappears. | Player name. |
+| `biome_changed` | Player block's biome changes. | Biome registry ID. |
+| `chunk_changed` | Player crosses a chunk boundary. | `chunkX chunkZ`. |
+| `chat` / `actionbar` | Chat/game message / overlay message is received. | Full rendered plain text. |
+| `title` / `subtitle` | HUD title / subtitle is set. | Full rendered plain text. |
+| `sound` | Client sound engine plays a sound. | Sound registry ID. |
+| `attack_block` / `use_block` | Local client attacks / uses a block. | Block position as `x, y, z`. |
+| `attack_entity` / `use_entity` | Local client attacks / uses an entity. | Entity label; getter also carries entity metadata. |
+| `use_item` | Local client uses an item. | Item registry ID. |
+| `held_enchanted` / `held_has_name` | Held item becomes enchanted / gains a custom name. | Empty / custom name. |
+| `held_name_changed` | Non-empty held custom name changes. | New custom name. |
+| `sign_seen` | Text of the sign under the crosshair changes to non-empty. | Front text joined with ` / `. |
+
+### Entity, item, and projectile lifecycle triggers
+
+| Trigger name | Fires when | Raw `{value}` |
+|---|---|---|
+| `entity_spawned` / `entity_removed` / `entity_unloaded` | Entity first appears / disappears in a still-loaded chunk / disappears because its chunk unloaded. | Entity label. |
+| `entity_held_changed` / `entity_offhand_changed` | Tracked living entity's hand / offhand item changes. | `entity label: item_id`. |
+| `entity_armor_changed` | Tracked living entity's armor summary changes. | `entity label: comma-separated armor IDs`. |
+| `entity_hurt` / `entity_died` / `entity_started_burning` | Tracked entity enters hurt state / reaches zero health or disappears dead / begins burning. | Entity label. |
+| `entity_damaged` / `entity_healed` | Tracked living health changes. | `entity label: -amount` / `entity label: +amount`, one decimal place. |
+| `entity_mounted` / `entity_dismounted` | Tracked entity's vehicle changes. | `entity label -> vehicle_id` / `entity label <- vehicle_id`. |
+| `entity_sneaking`, `entity_sprinting`, `entity_blocking`, `entity_gliding`, `entity_swimming`, `entity_sleeping` | Tracked entity enters that state. | Entity label. |
+| `entity_using_item` | Tracked entity begins using an item. | `entity label: held_item_id`. |
+| `entity_baby_grown` | Tracked baby entity becomes adult. | Entity label. |
+| `villager_profession_changed` | Synced villager profession changes. | `villager label: old_profession -> new_profession`. |
+| `villager_level_changed` | Synced villager level changes. | `villager label: old_level -> new_level`. |
+| `player_held_changed` / `player_offhand_changed` / `player_armor_changed` | Same tracked equipment changes, restricted to players. | Same payload as the corresponding `entity_*` trigger. |
+| `player_gamemode_changed` | Tab-list game mode changes. | `player_name: lowercase_gamemode`. |
+| `item_spawned` / `item_despawned` / `item_unloaded` | Dropped stack appears / vanishes in a loaded chunk / unloads with its chunk. | `item_id xcount`. |
+| `item_picked_up` | Vanilla pickup packet identifies a collector. | `item_id xamount by entity label`; getter metadata identifies the collector. |
+| `projectile_launched` | Any tracked projectile first appears. | `projectile label [by owner label]`; selector attribution is the owner when known. |
+| `pearl_thrown`, `snowball_thrown`, `egg_thrown` | Named projectile first appears. | Same launch payload. |
+| `projectile_hit` | Projectile vanishes in a still-loaded chunk. | `projectile label @ x y z [by owner label]`, block-rounded coordinates. |
+| `pearl_landed` / `potion_splashed` / `snowball_hit` / `egg_hit` | Corresponding projectile vanishes in a loaded chunk. | `x y z [by owner label]`, block-rounded coordinates. |
+| `projectile_stopped` | Tracked projectile speed falls from above `0.2` to below `0.05`. | `projectile label @ x y z`, block-rounded coordinates. |
+| `potion_drank` | Tracked entity completes use while its previous hand item contains `potion`. | `entity label: potion_item_id`. |
+| `totem_popped` | Entity status byte `35` is received. | Entity label. |
+| `entity_status` | Any entity status byte is received. | `entity label: signed_status_byte`. |
+| `teleported` | Same-dimension position jump exceeds 12 blocks in one client tick. | Rounded jump distance. |
+| `particle_seen` | Particle packet is observed. | `particle_id @ x y z`, coordinates rounded to whole blocks. |
+| `item_frame_changed` | Non-empty tracked item-frame content changes. | `item_frame label: item_id`. |
+
+### Container, boss-bar, scoreboard, and packet triggers
+
+| Trigger name | Fires when | Raw `{value}` |
+|---|---|---|
+| `container_title` | External container opens. | Current screen title. |
+| `container_item_gained` / `container_item_lost` | Aggregate open-container count increases / decreases. | `item_id xamount` delta. |
+| `packet_received` | Any S2C packet reaches the client. | Packet type ID. |
+| `explosion` | Explosion packet is decoded. | Rounded center `x y z`. |
+| `bossbar_shown` | Boss bar is added. | Boss-bar display name. |
+| `bossbar_updated` | Boss-bar progress or name changes. | Rounded percentage such as `75%`, or the new name. |
+| `bossbar_removed` | Boss bar is removed. | Empty. |
+| `sidebar_appeared` / `sidebar_title_changed` | Sidebar appears / title changes. | Sidebar title. |
+| `sidebar_removed` | Sidebar disappears. | Empty. |
+| `sidebar_score_changed` | Existing sidebar owner score changes. | `owner: score`. |
+| `sidebar_line_added` / `sidebar_line_removed` | Sidebar owner appears / disappears. | Owner string. |
+
+The four generic catch-alls are therefore fully inspectable: `packet_received`, `entity_status`,
+`particle_seen`, and `sound`.
+
+### Additional current-value getters and live overrides
+
+These are available to both `/talos get` and `talos.get()`. Most are convenience names with no
+matching `/talos on` trigger; where a name does match a trigger (for example `sneaking` or
+`standing_on`), the getter deliberately returns the current value rather than the latest event.
+
+| Getter | Return |
+|---|---|
+| `position` / `block_position` | Player exact `x y z` to two decimals / integer block position. |
+| `dimension` / `biome` | Current dimension / biome registry ID. |
+| `held_item` / `offhand_item` | Main-hand `item_id xcount` / offhand item ID. |
+| `armor` | Head, chest, legs, and feet item paths, comma-separated. |
+| `hotbar` / `selected_slot` | All nine one-based hotbar entries / selected one-based slot. |
+| `vehicle` | Mounted vehicle registry ID, or `none`. |
+| `standing_on` / `block_at_feet` | Current block registry ID at that sample point. |
+| `looking_at` | Current vanilla hit-result string, or `none`. |
+| `screen` | Current screen class simple name, or `none`. |
+| `difficulty` / `weather` / `time` | Serialized difficulty / `thunder`, `rain`, or `clear` / `ticks (day|night)`. |
+| `effects` | Active effect IDs, levels, and remaining seconds, or `none`. |
+| `players` | Comma-separated tab-list player names, or `none`. |
+| `spawn_point` | Client world's respawn block position. |
+| `sounds` / `particles` / `crosshair_particles` | Distinct sound IDs from 5s / particle IDs from 3s / particles near the look ray from 2s. |
+| `sign`, `lectern`, `skull`, `banner`, `campfire`, `item_frame` | Detail for the corresponding block/entity currently under the crosshair. |
+| `sneaking`, `sprinting`, `swimming`, `gliding`, `underwater`, `on_fire`, `on_ground`, `climbing`, `blocking`, `using_item`, `sleeping`, `frozen`, `hurt`, `moving`, `window_focused`, `raining`, `day`, `inventory_full`, `container_open` | Current boolean state. |
+| `entity_location` (alias `mob_location`) | `get(name, runtime_id)` → `entity label @ x.xxx y.yyy z.zzz`; errors if the entity is not currently loaded. |
 
 ---
 
