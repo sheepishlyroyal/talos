@@ -221,9 +221,8 @@ final class LookCommand {
     }
 
     private static void aim(LocalPlayer player, float yaw, float pitch) {
-        player.setYRot(yaw);
-        player.setXRot(pitch);
-        player.setYHeadRot(yaw);
-        player.setYBodyRot(yaw);
+        dev.talos.client.action.AimController.startTask(
+                net.minecraft.client.Minecraft.getInstance(), yaw, pitch,
+                Float.floatToIntBits(yaw) * 31L ^ Float.floatToIntBits(pitch) ^ player.tickCount);
     }
 }

@@ -570,15 +570,13 @@ public final class TalosNativeBridge {
         }));
     }
 
-    /** Set the view rotation to absolute yaw/pitch degrees (yaw also turns head and body). */
+    /** Aim at absolute yaw/pitch through the Human-mode-controlled aim path. */
     @HostAccess.Export public void setLook(float yaw, float pitch) {
         await(game.submit(() -> {
             Minecraft client = requireWorld();
             float clamped = net.minecraft.util.Mth.clamp(pitch, -90.0f, 90.0f);
-            client.player.setYRot(yaw);
-            client.player.setYHeadRot(yaw);
-            client.player.setYBodyRot(yaw);
-            client.player.setXRot(clamped);
+            dev.talos.client.action.AimController.startTask(
+                    client, yaw, clamped, System.nanoTime());
             return null;
         }));
     }
@@ -608,9 +606,8 @@ public final class TalosNativeBridge {
     @HostAccess.Export public void lookAt(double x, double y, double z) {
         await(game.submit(() -> {
             Minecraft client = requireWorld();
-            float[] angles = RotationHumanizer.yawPitchTo(client.player.getEyePosition(), new Vec3(x, y, z));
-            client.player.setYRot(angles[0]);
-            client.player.setXRot(angles[1]);
+            dev.talos.client.action.AimController.startTask(
+                    client, new Vec3(x, y, z), System.nanoTime());
             return null;
         }));
     }
