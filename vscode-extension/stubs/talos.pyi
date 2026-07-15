@@ -236,6 +236,22 @@ def goto_block(block_id: str, radius: int = 64) -> str:
     (up to 5) when one proves unreachable. Raises PathFailedError if none work."""
     ...
 
+def killprocess(name: str) -> bool:
+    """Cancel a named automation process without stopping the script."""
+    ...
+
+def kill_process(name: str) -> bool:
+    """Snake-case alias of killprocess()."""
+    ...
+
+def process_time(name: str) -> float:
+    """Seconds a named path process has run, or -1 when not running."""
+    ...
+
+def time_exceeds(name: str, seconds: float) -> bool:
+    """Whether a running named process is older than seconds."""
+    ...
+
 def follow(target: str, distance: float = 3.0) -> str:
     """Follow any entity, keeping ~distance blocks, until following ENDS.
 
