@@ -353,19 +353,8 @@ public final class GetCommand {
         String[] error = new String[1];
         EntitySelector selector = EntitySelector.parse(token, error);
         if (selector == null) { source.sendError(Component.literal(error[0])); return 0; }
-        java.util.List<net.minecraft.world.entity.Entity> matches = new java.util.ArrayList<>();
-        for (net.minecraft.world.entity.Entity entity : client.level.entitiesForRendering()) {
-            if (entity == player && selector.kind() != EntitySelector.Kind.SELF) continue;
-            boolean playersOnly = selector.kind() == EntitySelector.Kind.PLAYERS_ALL
-                    || selector.kind() == EntitySelector.Kind.PLAYER_NEAREST;
-            if (playersOnly && !(entity instanceof net.minecraft.world.entity.player.Player)) continue;
-            if (selector.kind() == EntitySelector.Kind.SELF && entity != player) continue;
-            if (selector.kind() == EntitySelector.Kind.ENTITIES
-                    && !selector.matchesFilters(entity)) continue;
-            if (!selector.withinDistance(Math.sqrt(entity.distanceToSqr(player)))) continue;
-            matches.add(entity);
-        }
-        matches.sort(java.util.Comparator.comparingDouble(player::distanceToSqr));
+        java.util.List<net.minecraft.world.entity.Entity> matches =
+                selector.select(client, selector.kind() != EntitySelector.Kind.SELF);
         net.minecraft.world.entity.Entity target = Indexed.select(matches, index);
         if (target == null) {
             source.sendError(Component.literal("entity[" + index + "]: "

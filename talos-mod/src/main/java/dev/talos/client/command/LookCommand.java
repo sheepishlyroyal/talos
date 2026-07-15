@@ -177,52 +177,28 @@ final class LookCommand {
             return 0;
         }
 
-        return switch (selector.kind()) {
-            case SELF -> {
-                source.sendFeedback(Component.literal("@s is you — no aim change"));
-                yield 1;
-            }
-            case PLAYER_NEAREST -> aimAtNth(source, player,
-                    playerCandidates(client, player, false), selector, n, "player");
-            case PLAYERS_ALL -> aimAtNth(source, player,
-                    playerCandidates(client, player, true), selector, n, "player");
-            case ENTITIES -> {
-                AABB box = player.getBoundingBox().inflate(ENTITY_SEARCH_RADIUS);
-                List<Entity> candidates = client.level.getEntitiesOfClass(Entity.class, box,
-                        entity -> entity.isAlive() && selector.matchesFilters(entity));
-                yield aimAtNth(source, player, candidates, selector, n, "entity");
-            }
-        };
-    }
-
-    private static List<Entity> playerCandidates(Minecraft client, LocalPlayer self, boolean includeSelf) {
-        List<Entity> players = new java.util.ArrayList<>();
-        for (AbstractClientPlayer other : client.level.players()) {
-            if (includeSelf || other != self) {
-                players.add(other);
-            }
+        List<Entity> candidates = selector.select(client, false).stream()
+                .filter(Entity::isAlive)
+                .toList();
+        if (selector.kind() == EntitySelector.Kind.SELF && !candidates.isEmpty()) {
+            source.sendFeedback(Component.literal("@s is you — no aim change"));
+            return 1;
         }
-        return players;
+        return aimAtNth(source, player, candidates, n,
+                selector.kind() == EntitySelector.Kind.PLAYERS_ALL
+                        || selector.kind() == EntitySelector.Kind.PLAYER_NEAREST
+                        || selector.kind() == EntitySelector.Kind.PLAYER_RANDOM
+                        ? "player" : "entity");
     }
 
     /** Filters by distance, sorts (nearest by default, furthest if requested), applies {@code limit=} then picks the Nth match. */
     private static int aimAtNth(FabricClientCommandSource source, LocalPlayer player,
-            List<Entity> candidates, EntitySelector selector, int n, String noun) {
-        Comparator<Entity> byDistance = Comparator.comparingDouble(player::distanceToSqr);
-        List<Entity> filtered = candidates.stream()
-                .filter(entity -> selector.withinDistance(Math.sqrt(player.distanceToSqr(entity))))
-                .sorted(selector.furthest() ? byDistance.reversed() : byDistance)
-                .toList();
-        Integer limit = selector.limit();
-        if (limit != null && filtered.size() > limit) {
-            filtered = filtered.subList(0, Math.max(limit, 0));
-        }
-
-        Entity target = Indexed.select(filtered, n);
+            List<Entity> candidates, int n, String noun) {
+        Entity target = Indexed.select(candidates, n);
         if (target == null) {
             source.sendError(Component.literal("Index %d out of range: %d matching %s%s (%s)"
-                    .formatted(n, filtered.size(), noun, filtered.size() == 1 ? "" : "s",
-                            Indexed.rangeHint(filtered.size()))));
+                    .formatted(n, candidates.size(), noun, candidates.size() == 1 ? "" : "s",
+                            Indexed.rangeHint(candidates.size()))));
             return 0;
         }
         aimAt(player, target.getEyePosition());
