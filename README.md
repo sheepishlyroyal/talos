@@ -170,8 +170,9 @@ Each axis of `get` accepts three modes, matching vanilla:
 /talos track stop
 ```
 
-All aim runs through the humanized cube-aim controller by default (`AimController`, no instant
-snap): a 1×1m yellow guide cube is rendered **off-grid**, centered exactly on the intended point. The
+With **Human mode on** (`/talos human on` or `talos.human(True)`), target-based aim runs through the
+humanized cube-aim controller (`AimController`, no direct snap): a 1×1m yellow guide cube is rendered
+**off-grid**, centered exactly on the intended point. The
 actual aim spot — the red X — lands on a visible face chosen with probability proportional to that
 face's visible flat area, center-biased. Rotation draws a random fast sensitivity far out and a
 random slow sensitivity for the final approach, blending smoothly (never instantly) once the look ray
@@ -659,15 +660,17 @@ when the script stops). `hud_remove(id="hud")` · `hud_clear()`.
 
 `wait(a, b=None)` / `wait_between(a, b)` (right-skewed random pause) · `set_profile(name)` (aim/timing
 profile: raw/natural/paranoid categories) · `set_seed(seed)` (reproducible runs) ·
-`human(enabled=None)` (toggle/query session-arc fatigue) · `fatigue()` (0–1) · `on_break()` ·
+`human(enabled=None)` (toggle/query eased aim + session-arc fatigue) · `fatigue()` (0–1) · `on_break()` ·
 `sleep(seconds)` · `ticks(n)` · `next_tick()` · `tick_count()`.
 
 #### Human mode (session-arc)
 
-`/talos human [on|off]` (or `talos.human(True)`) enables **session-arc humanization**: on top of the
-stationary raw/natural/paranoid profile, a wall-clock **fatigue** model drifts your behaviour over the
-session — reactions slow and spread, aim loosens and overshoots more, the walk wobbles wider — and
-injects **idle micro-breaks** that pause pathing briefly (more often, and longer, as fatigue rises).
+`/talos human [on|off]` (or `talos.human(True/False)`) is the single Human-mode toggle. **On** bundles
+the eased, non-instant cube-aim path with session-arc humanization; **off** uses direct snap aiming and
+disables the session drift. On top of the stationary raw/natural/paranoid profile, a wall-clock
+**fatigue** model drifts your behaviour over the session — reactions slow and spread, aim loosens and
+overshoots more, the walk wobbles wider — and injects **idle micro-breaks** that pause pathing briefly
+(more often, and longer, as fatigue rises).
 The HUD shows a `human » fatigue N% (Mm)` line while it's on.
 
 The point: the fixed-parameter profiles are themselves a fingerprint a server can find over hours,

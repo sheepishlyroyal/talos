@@ -25,8 +25,6 @@ import net.minecraft.world.phys.Vec3;
  * old snap.
  */
 public final class AimController {
-    /** Escape hatch: false = legacy instant snap (no cube, no easing). */
-    public static boolean HUMANIZE = true;
     private static final float AIM_EPSILON_DEGREES = 1.25F;
     private static final double SLOW_ZONE_METERS = 0.4;
     private static final double REPLAN_DISTANCE_SQUARED = 0.35 * 0.35;
@@ -85,7 +83,10 @@ public final class AimController {
     /** Advances one tick of rotation toward the mark. Call every tick until isAimed(). */
     public void tick() {
         if (client.player == null || center == null) return;
-        if (!HUMANIZE) { snapTo(center); return; }
+        if (!dev.talos.client.TalosClient.humanizer().humanizedAim()) {
+            snapTo(center);
+            return;
+        }
         renderVisuals();
 
         Vec3 eye = client.player.getEyePosition();
@@ -134,7 +135,7 @@ public final class AimController {
 
     public boolean isAimed() {
         if (client.player == null || center == null) return false;
-        if (!HUMANIZE) return true;
+        if (!dev.talos.client.TalosClient.humanizer().humanizedAim()) return true;
         float[] desired = RotationHumanizer.yawPitchTo(client.player.getEyePosition(), mark);
         return Math.abs(Mth.wrapDegrees(desired[0] - client.player.getYRot()))
                 <= AIM_EPSILON_DEGREES
@@ -258,6 +259,12 @@ public final class AimController {
     public static void startTask(Minecraft client, Vec3 target, long seed) {
         AimController controller = new AimController(client, null, null, seed);
         controller.aimAt(target);
+        // A snap-mode controller is already logically complete according to isAimed(), so
+        // apply its one tick here rather than enqueueing a task whose body would never run.
+        if (!dev.talos.client.TalosClient.humanizer().humanizedAim()) {
+            controller.tick();
+            return;
+        }
         dev.talos.client.TalosClient.taskScheduler().addTask("talos-look",
                 new dev.talos.client.task.TalosTask() {
                     private int ticks;

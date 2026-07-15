@@ -26,7 +26,10 @@ public final class Humanizer {
     public SessionArc sessionArc() { return sessionArc; }
     public boolean humanMode() { return humanMode; }
 
-    /** Enable/disable session-arc fatigue. Enabling restarts the arc from a fresh session. */
+    /** Human mode owns eased cube aiming as well as session-arc modulation. */
+    public boolean humanizedAim() { return humanMode; }
+
+    /** Enable/disable humanized aim and session-arc fatigue. Enabling starts a fresh session. */
     public void setHumanMode(boolean enabled) {
         if (enabled && !humanMode) sessionArc.reset();
         humanMode = enabled;
