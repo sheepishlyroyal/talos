@@ -221,9 +221,8 @@ final class LookCommand {
     }
 
     private static void aim(ClientPlayerEntity player, float yaw, float pitch) {
-        player.setYaw(yaw);
-        player.setPitch(pitch);
-        player.setHeadYaw(yaw);
-        player.setBodyYaw(yaw);
+        dev.talos.client.action.AimController.startTask(
+                net.minecraft.client.MinecraftClient.getInstance(), yaw, pitch,
+                Float.floatToIntBits(yaw) * 31L ^ Float.floatToIntBits(pitch) ^ player.age);
     }
 }

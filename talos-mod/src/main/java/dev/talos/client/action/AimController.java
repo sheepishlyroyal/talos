@@ -31,6 +31,8 @@ public final class AimController {
     private static final int CUBE_COLOR = 0xFFE14D;   // yellow guide cube
     private static final int MARK_COLOR = 0xFF3333;   // the red X
     private static final int VISUAL_TTL = 15;
+    private static AimController standaloneController;
+    private static boolean standaloneScheduled;
 
     private final MinecraftClient client;
     private final SeededRng rng;
@@ -257,6 +259,11 @@ public final class AimController {
 
     /** Runs a standalone aim session as a scheduled task until converged (for /talos look). */
     public static void startTask(MinecraftClient client, Vec3d target, long seed) {
+        if (dev.talos.client.TalosClient.humanizer().humanizedAim()
+                && standaloneScheduled && standaloneController != null) {
+            standaloneController.aimAt(target);
+            return;
+        }
         AimController controller = new AimController(client, null, null, seed);
         controller.aimAt(target);
         // A snap-mode controller is already logically complete according to isAimed(), so
@@ -277,7 +284,22 @@ public final class AimController {
                     @Override public java.util.Set<Object> getMutexKeys() {
                         return java.util.Set.of("talos-aim");
                     }
+                    @Override public void onCompleted() {
+                        if (standaloneController == controller) {
+                            standaloneController = null;
+                            standaloneScheduled = false;
+                        }
+                    }
                 });
+        standaloneController = controller;
+        standaloneScheduled = true;
+    }
+
+    /** Aim toward an absolute yaw/pitch using the same Human-mode-controlled path. */
+    public static void startTask(MinecraftClient client, float yaw, float pitch, long seed) {
+        if (client.player == null) return;
+        Vec3d target = client.player.getEyePos().add(lookVector(yaw, pitch).multiply(32.0));
+        startTask(client, target, seed);
     }
 
     private void snapTo(Vec3d point) {
