@@ -353,19 +353,8 @@ public final class GetCommand {
         String[] error = new String[1];
         EntitySelector selector = EntitySelector.parse(token, error);
         if (selector == null) { source.sendError(Text.literal(error[0])); return 0; }
-        java.util.List<net.minecraft.entity.Entity> matches = new java.util.ArrayList<>();
-        for (net.minecraft.entity.Entity entity : client.world.getEntities()) {
-            if (entity == player && selector.kind() != EntitySelector.Kind.SELF) continue;
-            boolean playersOnly = selector.kind() == EntitySelector.Kind.PLAYERS_ALL
-                    || selector.kind() == EntitySelector.Kind.PLAYER_NEAREST;
-            if (playersOnly && !(entity instanceof net.minecraft.entity.player.PlayerEntity)) continue;
-            if (selector.kind() == EntitySelector.Kind.SELF && entity != player) continue;
-            if (selector.kind() == EntitySelector.Kind.ENTITIES
-                    && !selector.matchesFilters(entity)) continue;
-            if (!selector.withinDistance(Math.sqrt(entity.squaredDistanceTo(player)))) continue;
-            matches.add(entity);
-        }
-        matches.sort(java.util.Comparator.comparingDouble(player::squaredDistanceTo));
+        java.util.List<net.minecraft.entity.Entity> matches =
+                selector.select(client, selector.kind() != EntitySelector.Kind.SELF);
         net.minecraft.entity.Entity target = Indexed.select(matches, index);
         if (target == null) {
             source.sendError(Text.literal("entity[" + index + "]: "

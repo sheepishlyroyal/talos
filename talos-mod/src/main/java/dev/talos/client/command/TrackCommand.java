@@ -155,18 +155,7 @@ public final class TrackCommand {
         private Vec3d entityTarget() {
             var player = client.player;
             if (selector.kind() == EntitySelector.Kind.SELF) return null; // nothing to track
-            java.util.List<Entity> matches = new java.util.ArrayList<>();
-            for (Entity entity : client.world.getEntities()) {
-                if (entity == player) continue;
-                boolean playersOnly = selector.kind() == EntitySelector.Kind.PLAYERS_ALL
-                        || selector.kind() == EntitySelector.Kind.PLAYER_NEAREST;
-                if (playersOnly && !(entity instanceof PlayerEntity)) continue;
-                if (selector.kind() == EntitySelector.Kind.ENTITIES
-                        && !selector.matchesFilters(entity)) continue;
-                if (!selector.withinDistance(Math.sqrt(entity.squaredDistanceTo(player)))) continue;
-                matches.add(entity);
-            }
-            matches.sort(java.util.Comparator.comparingDouble(player::squaredDistanceTo));
+            java.util.List<Entity> matches = selector.select(client, true);
             Entity target = Indexed.select(matches, index);
             return target == null ? null : target.getBoundingBox().getCenter();
         }

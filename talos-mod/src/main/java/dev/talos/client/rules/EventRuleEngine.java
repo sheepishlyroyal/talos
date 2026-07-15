@@ -849,16 +849,7 @@ public final class EventRuleEngine {
         }
         EntitySelector selector = rule.parsedSelector;
         ClientPlayerEntity self = MinecraftClient.getInstance().player;
-        if (self != null
-                && !selector.withinDistance(Math.sqrt(subject.squaredDistanceTo(self)))) {
-            return false;
-        }
-        return switch (selector.kind()) {
-            case SELF -> subject == self;
-            case PLAYERS_ALL -> subject instanceof PlayerEntity;
-            case PLAYER_NEAREST -> subject instanceof PlayerEntity && subject != self;
-            case ENTITIES -> selector.matchesFilters(subject);
-        };
+        return self != null && selector.matches(subject, self);
     }
 
     private static boolean compare(Rule rule, double value) {
@@ -1035,18 +1026,10 @@ public final class EventRuleEngine {
         }
         EntitySelector selector = rule.parsedSelector;
         double radiusSquared = rule.radius < 0 ? Double.MAX_VALUE : rule.radius * rule.radius;
-        if (selector.kind() == EntitySelector.Kind.SELF) return 1;
         int count = 0;
-        for (Entity entity : client.world.getEntities()) {
-            if (entity == player) continue;
-            boolean playersOnly = selector.kind() == EntitySelector.Kind.PLAYERS_ALL
-                    || selector.kind() == EntitySelector.Kind.PLAYER_NEAREST;
-            if (playersOnly && !(entity instanceof PlayerEntity)) continue;
-            if (selector.kind() == EntitySelector.Kind.ENTITIES
-                    && !selector.matchesFilters(entity)) continue;
+        for (Entity entity : selector.select(client, false)) {
             if (entity.squaredDistanceTo(player) > radiusSquared) continue;
             count++;
-            if (selector.kind() == EntitySelector.Kind.PLAYER_NEAREST && count > 0) break;
         }
         return count;
     }

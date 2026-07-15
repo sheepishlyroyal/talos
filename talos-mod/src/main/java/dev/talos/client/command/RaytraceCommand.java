@@ -162,21 +162,11 @@ final class RaytraceCommand {
         }
         RaycastMath.Hit hit = RaycastMath.cast(player, world, maxDist);
         boolean match = hit.type() == RaycastMath.HitType.ENTITY
-                && selectorMatches(selector, hit.entity(), player);
+                && selector.select(context.getSource().getClient(), false).contains(hit.entity());
         context.getSource().sendFeedback(Text.literal(match
                 ? "§apass§f: looking at " + hit.id()
                 : "§cfail§f: first hit is " + describe(hit)));
         return match ? 1 : 0;
-    }
-
-    /** Whether one already-identified entity satisfies a selector's kind and filters. */
-    private static boolean selectorMatches(EntitySelector selector, Entity entity,
-                                           ClientPlayerEntity player) {
-        return switch (selector.kind()) {
-            case SELF -> entity == player;
-            case PLAYERS_ALL, PLAYER_NEAREST -> entity instanceof PlayerEntity;
-            case ENTITIES -> selector.matchesFilters(entity);
-        };
     }
 
     private static String describe(RaycastMath.Hit hit) {
