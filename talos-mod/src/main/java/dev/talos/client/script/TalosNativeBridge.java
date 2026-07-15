@@ -58,6 +58,7 @@ import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import dev.talos.client.command.RaycastMath;
+import dev.talos.client.command.GetCommand;
 import dev.talos.client.render.RenderQueue;
 import org.graalvm.polyglot.HostAccess;
 import org.slf4j.Logger;
@@ -180,6 +181,13 @@ public final class TalosNativeBridge {
 
     @HostAccess.Export public EntityInfo findItem(String item, double radius) {
         return await(game.submit(() -> findEntityOnGameThread(item, radius, true)));
+    }
+
+    /** Exact same observable/trigger catalog as /talos get, marshalled onto the game thread. */
+    @HostAccess.Export public String getObservable(String name, String packedArgs) {
+        String[] args = packedArgs == null || packedArgs.isEmpty()
+                ? new String[0] : packedArgs.split("\u001f", -1);
+        return await(game.submit(() -> GetCommand.value(requireWorld(), name, args)));
     }
 
     /**

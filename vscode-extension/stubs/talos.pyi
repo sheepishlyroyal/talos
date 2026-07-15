@@ -262,6 +262,14 @@ def find_item(item: str, radius: float = 64.0) -> Optional[Entity]:
     """Nearest dropped item of a registry id, or None."""
     ...
 
+def get(name: str, *args: object) -> int | float | bool | str:
+    """Read the same 206-trigger/observable catalog as `/talos get`.
+
+    Names may use spaces or underscores. Parameterized triggers take the same subject plus an
+    optional radius; `get("entity_location", runtime_id)` returns a 3dp location string.
+    """
+    ...
+
 def players(radius: float = 128.0) -> list[Player]:
     """All OTHER players within radius, nearest first (never the local player).
     Positions are exact doubles; .distance is feet-to-feet from the local player."""

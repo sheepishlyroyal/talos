@@ -9,6 +9,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.StringJoiner;
 import java.util.function.BiFunction;
+import java.util.ArrayList;
+import java.util.List;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.minecraft.client.Minecraft;
@@ -33,9 +35,12 @@ public final class GetCommand {
         LiteralArgumentBuilder<FabricClientCommandSource> get = ClientCommands.literal("get");
         get.then(ClientCommands.literal("list").executes(context -> {
             context.getSource().sendFeedback(Component.literal(
-                    "Observables: " + String.join(", ", GETTERS.keySet())
+                    "Observables/triggers: " + String.join(", ", catalogNames())
                             + " | slot <hotbar.1-9|inv.1-27|head|chest|legs|feet|offhand|cursor"
-                            + "|container.N|saddle|horsearmor>"));
+                            + "|container.N|saddle|horsearmor> | parameterized trigger usage: "
+                            + "entity_* <selector> [radius], block_* <block> [radius], "
+                            + "item_count/hotbar_item_count/held_enchant <id>, "
+                            + "entered_region/left_region <x1 y1 z1 x2 y2 z2>"));
             return 1;
         }));
         get.then(ClientCommands.literal("entity")
@@ -70,6 +75,12 @@ public final class GetCommand {
                         .executes(context -> slot(context.getSource(),
                                 com.mojang.brigadier.arguments.StringArgumentType
                                         .getString(context, "name")))));
+        get.then(ClientCommands.literal("entity_location")
+                .then(ClientCommands.argument("id",
+                                com.mojang.brigadier.arguments.IntegerArgumentType.integer(0))
+                        .executes(context -> sendQuery(context.getSource(), "entity_location",
+                                Integer.toString(com.mojang.brigadier.arguments.IntegerArgumentType
+                                        .getInteger(context, "id"))))));
         for (Map.Entry<String, BiFunction<Minecraft, LocalPlayer, String>> entry
                 : GETTERS.entrySet()) {
             get.then(ClientCommands.literal(entry.getKey()).executes(context -> {
@@ -83,7 +94,152 @@ public final class GetCommand {
                 return 1;
             }));
         }
+        // Every trigger not already represented by a literal getter lands here. A greedy tail is
+        // intentional: selector brackets and quoted names stay intact for the shared parser.
+        get.then(ClientCommands.argument("query",
+                        com.mojang.brigadier.arguments.StringArgumentType.greedyString())
+                .executes(context -> {
+                    List<String> words = words(com.mojang.brigadier.arguments.StringArgumentType
+                            .getString(context, "query"));
+                    if (words.isEmpty()) return 0;
+                    return sendQuery(context.getSource(), words.getFirst(),
+                            words.subList(1, words.size()).toArray(String[]::new));
+                }));
         return get;
+    }
+
+    /** Stable union used by list output and regression tests. */
+    public static java.util.Set<String> catalogNames() {
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>(GETTERS.keySet());
+        for (Trigger trigger : Trigger.values()) names.add(trigger.id());
+        names.add("entity_location");
+        return java.util.Collections.unmodifiableSet(names);
+    }
+
+    private static int sendQuery(FabricClientCommandSource source, String name, String... args) {
+        try {
+            String value = value(source.getClient(), name, args);
+            source.sendFeedback(Component.literal("§b" + name.replace(' ', '_') + "§f = " + value));
+            return 1;
+        } catch (IllegalArgumentException exception) {
+            source.sendError(Component.literal(exception.getMessage()));
+            return 0;
+        }
+    }
+
+    /** Shared catalog entry point used by both Brigadier and the GraalPy bridge. */
+    public static String value(Minecraft client, String requested, String... args) {
+        if (client.player == null || client.level == null) {
+            throw new IllegalArgumentException("No world is loaded");
+        }
+        String name = requested.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+        BiFunction<Minecraft, LocalPlayer, String> getter = GETTERS.get(name);
+        if (getter != null) return getter.apply(client, client.player);
+
+        if (name.equals("entity_location") || name.equals("mob_location")) {
+            requireArgs(name, args, 1);
+            final int id;
+            try { id = Integer.parseInt(args[0]); }
+            catch (NumberFormatException exception) {
+                throw new IllegalArgumentException("entity_location needs a numeric mob/entity id");
+            }
+            var entity = client.level.getEntity(id);
+            if (entity == null) throw new IllegalArgumentException("No loaded entity with id " + id);
+            return String.format(Locale.ROOT, "%s @ %.3f %.3f %.3f",
+                    EventRuleEngine.entityLabel(entity), entity.getX(), entity.getY(), entity.getZ());
+        }
+
+        final Trigger trigger;
+        try { trigger = Trigger.valueOf(name.toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException("Unknown observable/trigger: " + requested);
+        }
+
+        if (trigger.kind == Kind.COMPARE) {
+            return number(EventRuleEngine.metricValue(trigger, client, client.player));
+        }
+        if (trigger.kind == Kind.NUMBER) {
+            return switch (trigger) {
+                case HEALTH_BELOW, HEALTH_ABOVE -> number(EventRuleEngine.metricValue(
+                        Trigger.HEALTH, client, client.player));
+                case HUNGER_BELOW -> number(EventRuleEngine.metricValue(
+                        Trigger.HUNGER, client, client.player));
+                case AIR_BELOW -> number(EventRuleEngine.metricValue(
+                        Trigger.AIR, client, client.player));
+                case XP_LEVEL_ABOVE -> number(EventRuleEngine.metricValue(
+                        Trigger.XP_LEVEL, client, client.player));
+                case TICK_EVERY -> Integer.toString(EventRuleEngine.currentTick());
+                default -> EventRuleEngine.latestValue(trigger);
+            };
+        }
+        if (trigger.kind == Kind.ENTITY_COUNT || trigger.kind == Kind.ENTITY_PRESENCE) {
+            requireArgs(name, args, 1);
+            double radius = args.length > 1 ? parseDouble(name, args[1]) : -1.0;
+            return number(EventRuleEngine.parameterValue(trigger, client, client.player,
+                    args[0], radius, null));
+        }
+        if (trigger.kind == Kind.BLOCK_COUNT || trigger.kind == Kind.BLOCK_PRESENCE) {
+            requireArgs(name, args, 1);
+            double radius = args.length > 1 ? parseDouble(name, args[1]) : 16.0;
+            return number(EventRuleEngine.parameterValue(trigger, client, client.player,
+                    args[0], radius, null));
+        }
+        if (trigger.kind == Kind.ITEM_COUNT) {
+            requireArgs(name, args, 1);
+            return number(EventRuleEngine.parameterValue(trigger, client, client.player,
+                    args[0], 0, null));
+        }
+        if (trigger.kind == Kind.REGION) {
+            requireArgs(name, args, 6);
+            double[] region = new double[6];
+            for (int i = 0; i < 6; i++) region[i] = parseDouble(name, args[i]);
+            double inside = EventRuleEngine.parameterValue(trigger, client, client.player,
+                    "", 0, region);
+            return Boolean.toString(trigger == Trigger.LEFT_REGION ? inside == 0 : inside != 0);
+        }
+        return EventRuleEngine.latestValue(trigger);
+    }
+
+    private static void requireArgs(String name, String[] args, int count) {
+        if (args.length < count) throw new IllegalArgumentException(
+                name + " needs " + count + " argument" + (count == 1 ? "" : "s"));
+    }
+
+    private static double parseDouble(String name, String raw) {
+        try { return Double.parseDouble(raw); }
+        catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(name + ": expected a number, got " + raw);
+        }
+    }
+
+    private static String number(double value) {
+        return value == Math.floor(value) && Math.abs(value) < 1.0E12
+                ? Long.toString((long) value)
+                : String.format(Locale.ROOT, "%.3f", value);
+    }
+
+    /** Whitespace tokenizer that preserves quoted selector names and bracket expressions. */
+    private static List<String> words(String raw) {
+        List<String> result = new ArrayList<>();
+        StringBuilder word = new StringBuilder();
+        char quote = 0;
+        int brackets = 0;
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (quote != 0) {
+                word.append(c);
+                if (c == quote && (i == 0 || raw.charAt(i - 1) != '\\')) quote = 0;
+            } else if (c == '\'' || c == '"') {
+                quote = c;
+                word.append(c);
+            } else if (c == '[') { brackets++; word.append(c); }
+            else if (c == ']') { brackets = Math.max(0, brackets - 1); word.append(c); }
+            else if (Character.isWhitespace(c) && brackets == 0) {
+                if (!word.isEmpty()) { result.add(word.toString()); word.setLength(0); }
+            } else word.append(c);
+        }
+        if (!word.isEmpty()) result.add(word.toString());
+        return result;
     }
 
     private static Map<String, BiFunction<Minecraft, LocalPlayer, String>> build() {

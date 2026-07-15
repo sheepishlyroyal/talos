@@ -249,6 +249,30 @@ def find_item(item, radius=64.0):
     """Return the nearest dropped-item snapshot, or None."""
     return _wrap_entity(_call(_talos_host.findItem, str(item), float(radius)))
 
+def get(name, *args):
+    """Read the exact same trigger/observable catalog as ``/talos get``.
+
+    Names accept underscores or spaces. Parameterized examples:
+    ``get("entity_count", "@e[type=zombie]", 32)``,
+    ``get("block_count", "minecraft:diamond_ore", 16)``, and
+    ``get("entity_location", 123)``. Numeric and boolean results become Python
+    values; descriptive and latest-event payloads remain strings.
+    """
+    raw = str(_call(_talos_host.getObservable, str(name),
+                    "\x1f".join(str(arg) for arg in args)))
+    lowered = raw.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    try:
+        return int(raw)
+    except ValueError:
+        try:
+            return float(raw)
+        except ValueError:
+            return raw
+
 def players(radius=128.0):
     """All OTHER players within radius blocks, nearest first (never the local player).
 

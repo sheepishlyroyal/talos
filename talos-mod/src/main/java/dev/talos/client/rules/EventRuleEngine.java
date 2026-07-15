@@ -237,6 +237,26 @@ public final class EventRuleEngine {
     private static Map<String, Integer> sidebarScores = Map.of();
     /** Item-entity ids whose disappearance the pickup packet already explained. */
     private static final Set<Integer> explainedPickups = new HashSet<>();
+    /** Latest occurrence of every edge/event trigger, retained for /talos get and talos.get(). */
+    private static final Map<Trigger, ObservedEvent> LAST_EVENTS =
+            java.util.Collections.synchronizedMap(new java.util.EnumMap<>(Trigger.class));
+
+    public record ObservedEvent(int tick, String value, Integer entityId, String entityUuid,
+            String entityType, double x, double y, double z) {
+        public String describe(int now) {
+            StringBuilder result = new StringBuilder(value == null || value.isEmpty()
+                    ? "occurred" : value);
+            if (entityId != null) {
+                result.append(" [entity_id=").append(entityId)
+                        .append(", uuid=").append(entityUuid)
+                        .append(", type=").append(entityType)
+                        .append(String.format(Locale.ROOT, ", pos=%.3f %.3f %.3f", x, y, z))
+                        .append(']');
+            }
+            result.append(String.format(Locale.ROOT, " [%.2fs ago]", Math.max(0, now - tick) / 20.0));
+            return result.toString();
+        }
+    }
 
     private EventRuleEngine() {}
 
@@ -348,13 +368,9 @@ public final class EventRuleEngine {
         return java.util.List.copyOf(ids);
     }
 
-    /** Generic S2C packet trigger (netty thread; skipped entirely unless a rule wants it). */
+    /** Generic S2C packet trigger (also retained for the matching getter catalog). */
     public static void onPacket(net.minecraft.network.protocol.Packet<?> packet) {
-        boolean wanted = false;
-        for (Rule rule : RULES) {
-            if (rule.triggerType() == Trigger.PACKET_RECEIVED) { wanted = true; break; }
-        }
-        if (!wanted || packet == null) return;
+        if (packet == null) return;
         fireText(Trigger.PACKET_RECEIVED, packet.type().id().toString());
     }
 
@@ -396,11 +412,6 @@ public final class EventRuleEngine {
             RECENT_PARTICLES.addLast(new Object[] {tick, particleId, x, y, z});
             while (RECENT_PARTICLES.size() > 512) RECENT_PARTICLES.removeFirst();
         }
-        boolean wanted = false;
-        for (Rule rule : RULES) {
-            if (rule.triggerType() == Trigger.PARTICLE_SEEN) { wanted = true; break; }
-        }
-        if (!wanted) return; // particle packets are frequent; skip the string work
         fireText(Trigger.PARTICLE_SEEN, particleId + " @ "
                 + String.format(Locale.ROOT, "%.0f %.0f %.0f", x, y, z));
     }
@@ -489,6 +500,7 @@ public final class EventRuleEngine {
     }
 
     private static void fireFiltered(Trigger trigger, Entity subject, String value) {
+        observe(trigger, subject, value);
         for (Rule rule : RULES) {
             if (rule.triggerType() != trigger) continue;
             if (rule.selector != null && !rule.selector.isEmpty()
@@ -516,6 +528,22 @@ public final class EventRuleEngine {
             fire(rule, value);
         }
     }
+
+    private static void observe(Trigger trigger, Entity subject, String value) {
+        LAST_EVENTS.put(trigger, subject == null
+                ? new ObservedEvent(tick, value, null, null, null, 0, 0, 0)
+                : new ObservedEvent(tick, value, subject.getId(), subject.getStringUUID(),
+                        BuiltInRegistries.ENTITY_TYPE.getKey(subject.getType()).toString(),
+                        subject.getX(), subject.getY(), subject.getZ()));
+    }
+
+    /** Latest payload for edge/event triggers; returns a stable sentinel before the first event. */
+    public static String latestValue(Trigger trigger) {
+        ObservedEvent event = LAST_EVENTS.get(trigger);
+        return event == null ? "never observed" : event.describe(tick);
+    }
+
+    public static int currentTick() { return tick; }
 
     private static void fireState(Trigger trigger, boolean was, boolean is, String value) {
         if (was || !is) return; // fire on entering the state only
@@ -992,6 +1020,37 @@ public final class EventRuleEngine {
         return metric(trigger, client, player);
     }
 
+    /**
+     * Live value for a parameterized trigger family. This deliberately calls the same private
+     * calculators used by rule evaluation, keeping /talos get and talos.get numerically exact.
+     */
+    public static double parameterValue(Trigger trigger, Minecraft client, LocalPlayer player,
+            String subject, double radius, double[] region) {
+        Rule rule = new Rule();
+        rule.trigger = trigger.id();
+        rule.selector = subject;
+        rule.block = subject;
+        rule.radius = radius;
+        rule.region = region;
+        return switch (trigger.kind) {
+            case ENTITY_COUNT, ENTITY_PRESENCE -> entityCount(rule, client, player);
+            case BLOCK_COUNT, BLOCK_PRESENCE -> blockCount(rule, client, player);
+            case ITEM_COUNT -> trigger == Trigger.HELD_ENCHANT
+                    ? heldEnchantLevel(rule, player)
+                    : itemCount(rule, player, trigger == Trigger.HOTBAR_ITEM_COUNT);
+            case REGION -> {
+                if (region == null || region.length != 6) yield -1;
+                yield player.getX() >= Math.min(region[0], region[3])
+                        && player.getX() <= Math.max(region[0], region[3]) + 1
+                        && player.getY() >= Math.min(region[1], region[4])
+                        && player.getY() <= Math.max(region[1], region[4]) + 1
+                        && player.getZ() >= Math.min(region[2], region[5])
+                        && player.getZ() <= Math.max(region[2], region[5]) + 1 ? 1 : 0;
+            }
+            default -> throw new IllegalArgumentException(trigger.id() + " is not parameterized");
+        };
+    }
+
     private static double nearestDistance(Minecraft client, LocalPlayer player,
             java.util.function.Predicate<Entity> filter) {
         double best = 999.0;
@@ -1097,13 +1156,6 @@ public final class EventRuleEngine {
             Trigger.POTION_DRANK);
 
     private static void evaluateEntityEvents(Minecraft client, LocalPlayer player) {
-        boolean anyRule = false;
-        for (Rule rule : RULES) {
-            if (ENTITY_EVENT_TRIGGERS.contains(rule.triggerType())) { anyRule = true; break; }
-            if (rule.triggerType() == Trigger.PLAYER_GAMEMODE_CHANGED) { anyRule = true; break; }
-        }
-        if (!anyRule) { trackedEntities = Map.of(); playerGamemodes = Map.of(); return; }
-
         Map<Integer, TrackedEntity> now = new HashMap<>();
         for (Entity entity : client.level.entitiesForRendering()) {
             now.put(entity.getId(), track(entity));
@@ -1250,10 +1302,13 @@ public final class EventRuleEngine {
             fireEntity(Trigger.POTION_DRANK, subject, label + ": " + past.hand);
         }
         if (!past.profession.equals(now.profession) && !now.profession.isEmpty()) {
-            fireEntity(Trigger.VILLAGER_PROFESSION_CHANGED, subject, label + ": " + now.profession);
+            fireEntity(Trigger.VILLAGER_PROFESSION_CHANGED, subject,
+                    label + ": " + (past.profession.isEmpty() ? "none" : past.profession)
+                            + " -> " + now.profession);
         }
         if (past.level != now.level && now.level > 0) {
-            fireEntity(Trigger.VILLAGER_LEVEL_CHANGED, subject, label + ": " + now.level);
+            fireEntity(Trigger.VILLAGER_LEVEL_CHANGED, subject,
+                    label + ": " + past.level + " -> " + now.level);
         }
     }
 
@@ -1367,17 +1422,6 @@ public final class EventRuleEngine {
 
     /** Scoreboard sidebar: appearance, title, and per-line score diffs. */
     private static void evaluateSidebar(Minecraft client) {
-        boolean wanted = false;
-        for (Rule rule : RULES) {
-            switch (rule.triggerType()) {
-                case SIDEBAR_APPEARED, SIDEBAR_REMOVED, SIDEBAR_TITLE_CHANGED,
-                        SIDEBAR_SCORE_CHANGED, SIDEBAR_LINE_ADDED, SIDEBAR_LINE_REMOVED ->
-                        wanted = true;
-                default -> { }
-            }
-        }
-        if (!wanted) { sidebarTitle = null; sidebarScores = Map.of(); return; }
-
         net.minecraft.world.scores.Objective objective = client.level.getScoreboard()
                 .getDisplayObjective(net.minecraft.world.scores.DisplaySlot.SIDEBAR);
         if (objective == null) {
