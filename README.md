@@ -626,6 +626,10 @@ game tick thread never enters Python. Blocking calls block only the script, so r
 unaffected. `pip`, native packages, host classes, filesystem and environment access are
 unavailable — the API is a hardened capability surface, not full CPython.
 
+> **No `pip install talos`.** `talos` is provided by the mod's embedded GraalPy runtime — it is not a
+> PyPI package and cannot be pip-installed. You install nothing: drop a `.py` in
+> `.minecraft/talos/scripts/`, `import talos`, and run it with `/talos script run <name>`.
+
 ### Script metadata & libraries
 
 | Symbol | Description |

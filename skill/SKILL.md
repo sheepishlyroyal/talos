@@ -17,7 +17,9 @@ no server-side mod are needed. Write automations two ways: **`/talos` commands /
 
 ## Golden rules (read first)
 
-1. **`import talos`** is always in scope inside a script. `pip`, native packages, host classes, the
+1. **`import talos`** is always in scope inside a script. **There is no `pip install talos`** — `talos`
+   is provided by the mod's embedded GraalPy runtime, not a PyPI package; you install nothing, just put a
+   `.py` in `.minecraft/talos/scripts/` and `import talos`. `pip`, native packages, host classes, the
    filesystem, `os`/`env`, and sockets are **unavailable** — it's a hardened capability surface, not full
    CPython. Don't `import requests`, open files, or spawn processes.
 2. **Python runs on a worker thread**, never the game tick thread. Blocking calls (`talos.goto(...)`,
@@ -231,8 +233,10 @@ import talos
 
 @talos.on("chat")
 def greet(message, sender):
-    if sender is None or sender == talos.get("players").split(",")[0]:
-        return                      # skip system + (roughly) own lines
+    if sender is None:              # system line (not a player) — skip
+        return
+    # If your handler ever SENDS chat, also skip your own echoed lines here
+    # (compare `sender` to your username, or track a sentinel you sent).
     if "help" in message.lower():
         talos.log(f"{sender} asked for help")
 
@@ -249,13 +253,13 @@ talos.run()
 import talos
 
 @talos.command("harvest")
-async def harvest(*args):
+async def harvest(args):                 # args = list[str] from `/talos harvest 16`
     n = int(args[0]) if args else 8
     for _ in range(n):
         crop = talos.find_block("wheat", radius=32)
         if not crop: break
         await talos.aio.goto(crop); await talos.aio.mine(crop)
-        talos.wait_between(0.4, 1.1)
+        await talos.aio.wait_between(0.4, 1.1)   # aio form yields to other tasks
 talos.run()
 # then in-game:  /talos harvest 16
 ```
