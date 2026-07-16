@@ -111,14 +111,34 @@ def parallel(*callables):
                 handle.stop()
         raise
 
-def log(message):
-    """Write a message to the Talos log and the script console (stdout)."""
+def log(message, level="info"):
+    """Write a leveled message to the Talos log and script console (stdout)."""
     text = str(message)
-    _talos_host.log(text)
+    normalized_level = str(level).strip().lower()
+    _talos_host.logLevel(text, normalized_level)
     # Printed (not just logged host-side) so this reaches whatever LogSink the running
     # script was started with -- by default the in-game chat. See ScriptEngine.CHAT.
-    print(text)
+    if normalized_level != "debug" or _talos_host.debugMode():
+        print(text)
     return text
+
+def debug(message):
+    return log(message, "debug")
+
+def info(message):
+    return log(message, "info")
+
+def warn(message):
+    return log(message, "warn")
+
+def error(message):
+    return log(message, "error")
+
+def debug_mode(enabled=None):
+    """Toggle or query detailed engine/script debug logging."""
+    if enabled is None:
+        return bool(_talos_host.debugMode())
+    return _talos_host.setDebugMode(bool(enabled))
 
 def require(name):
     """Load another script from talos/scripts as a module and return it.
@@ -172,7 +192,7 @@ __all__ = ["args", "require",
            "on_edge", "input", "inventory", "hotbar", "selected_slot",
            "count", "has", "find_slot", "container_items", "deposit", "withdraw", "craft",
            "screen", "close_screen", "hud", "hud_remove", "hud_clear",
-           "Pos", "Entity", "Player", "Hit", "log",
+           "Pos", "Entity", "Player", "Hit", "log", "debug", "info", "warn", "error", "debug_mode",
            "wait", "wait_between", "set_profile", "set_seed", "human", "fatigue", "on_break",
            "on", "parallel", "spawn", "command",
            "on_start", "on_tick", "task", "every", "start", "run", "cancel_all",

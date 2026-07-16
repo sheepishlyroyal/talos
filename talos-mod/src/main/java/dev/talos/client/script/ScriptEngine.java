@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.graalvm.polyglot.Value;
 import dev.talos.client.hud.TalosHud;
+import dev.talos.client.log.TalosLog;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -168,6 +169,7 @@ public final class ScriptEngine {
     }
 
     public void stop() {
+        TalosLog.trace("script", "hard-stop requested for " + sessions.size() + " session(s)");
         for (Session current : List.copyOf(sessions.values())) current.stop();
     }
 
@@ -235,6 +237,7 @@ public final class ScriptEngine {
             int id = nextSessionId.getAndIncrement();
             Session created = new Session(id, sink, primary);
             sessions.put(id, created);
+            TalosLog.trace("script", "session " + id + " started (primary=" + primary + ")");
             return created;
         }
     }
@@ -294,7 +297,12 @@ public final class ScriptEngine {
         GameThreadExecutor.instance().submit(() -> {
             Minecraft client = Minecraft.getInstance();
             if (client == null || client.gui == null) return null;
-            ChatFormatting color = "error".equals(level) ? ChatFormatting.RED : ChatFormatting.GRAY;
+            ChatFormatting color = switch (level == null ? "info" : level.toLowerCase(java.util.Locale.ROOT)) {
+                case "error" -> ChatFormatting.RED;
+                case "warn" -> ChatFormatting.YELLOW;
+                case "debug" -> ChatFormatting.DARK_GRAY;
+                default -> ChatFormatting.GRAY;
+            };
             String prefix = "[Talos] ";
             String body = text;
             if (text.startsWith("[Talos:") && text.contains("] ")) {
@@ -389,6 +397,7 @@ public final class ScriptEngine {
 
         private void evaluate(Path file, LogSink logSink, String[] argv) throws IOException {
             if (!Files.isRegularFile(file)) throw new IOException("Script not found: " + file);
+            TalosLog.trace("script", "session " + id + " running " + file.getFileName());
             // Left wired after this call returns (not reset to null) so output/errors from
             // event handlers the script registers via talos.on(...) keep streaming to the
             // same sink for the rest of the session.
@@ -611,10 +620,12 @@ public final class ScriptEngine {
 
         private void stop() {
             if (!state.compareAndSet(State.RUNNING, State.STOPPING)) return;
+            TalosLog.trace("script", "session " + id + " stopping");
             TalosNativeBridge currentBridge = bridge;
             if (currentBridge != null) currentBridge.invalidate();
             Context currentContext = context;
             if (currentContext != null) {
+                TalosLog.trace("script", "session " + id + " hard-stopping Python context");
                 try { currentContext.close(true); } catch (RuntimeException ignored) { }
             }
             worker.shutdownNow();
@@ -626,6 +637,7 @@ public final class ScriptEngine {
             if (primary) TalosHud.clear();
             state.set(State.STOPPED);
             sessions.remove(id, this);
+            TalosLog.trace("script", "session " + id + " stopped");
         }
 
         private static final class LineOutput extends OutputStream {

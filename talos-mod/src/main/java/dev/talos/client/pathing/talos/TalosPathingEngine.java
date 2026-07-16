@@ -10,6 +10,7 @@ import dev.talos.client.pathing.PathResult;
 import dev.talos.client.pathing.PathingEngine;
 import dev.talos.client.pathing.PathingOptions;
 import dev.talos.client.script.ScriptGameEvents;
+import dev.talos.client.log.TalosLog;
 import dev.talos.client.task.TalosTask;
 import dev.talos.client.pathing.sim.CoarsePathfinder;
 import dev.talos.client.pathing.sim.MovementProfile;
@@ -117,6 +118,8 @@ public final class TalosPathingEngine implements PathingEngine {
 
         NavigationRun run = new NavigationRun(client, snapshot, options, future);
         activeRun = run;
+        TalosLog.trace("pathing", "plan start target=" + snapshot.target().toShortString()
+                + " allowMining=" + options.allowMining());
         ScriptGameEvents.onGotoStart(snapshot.target().getX(), snapshot.target().getY(),
                 snapshot.target().getZ());
         future.whenComplete((result, error) -> {
@@ -124,6 +127,9 @@ public final class TalosPathingEngine implements PathingEngine {
             if (activeTask == run.task) activeTask = null;
             ScriptGameEvents.onGotoDone(error == null && result != null && result.successful(),
                     error != null ? String.valueOf(error.getMessage()) : result.detail());
+            String outcome = error != null ? "fail: " + error.getMessage()
+                    : (result.successful() ? "success: " : "fail: ") + result.detail();
+            TalosLog.trace("pathing", outcome);
         });
         launchSegment(run);
     }
@@ -147,6 +153,7 @@ public final class TalosPathingEngine implements PathingEngine {
         AStarPathfinder.SearchResult result = pathfinder.find(
                 client.player.blockPosition(), run.snapshot.test(), run.snapshot.target());
         LOGGER.debug("Native path search attempt {}: {}", run.attempts, result.detail());
+        TalosLog.trace("pathing", "native search attempt " + run.attempts + ": " + result.detail());
         if (result.path().isEmpty()) { scheduleReplan(run); return; }
 
         double distance = squaredDistance(client.player.blockPosition(), run.snapshot.target());
@@ -313,6 +320,7 @@ public final class TalosPathingEngine implements PathingEngine {
             return;
         }
         LOGGER.debug("Simulation path search attempt {}: {}", run.attempts, route.detail());
+        TalosLog.trace("pathing", "simulation search attempt " + run.attempts + ": " + route.detail());
         // A partial plan is worth explaining out loud: WHY the planner stopped short (node
         // cap, time budget, frontier exhausted) is the difference between "needs a deeper
         // search" and "that goal is genuinely unreachable". Deliberate keep-moving cuts are
@@ -403,6 +411,7 @@ public final class TalosPathingEngine implements PathingEngine {
         if (error != null) { run.future.completeExceptionally(error); return; }
         if (segment.successful()) { run.future.complete(segment); return; }
         ScriptGameEvents.onGotoStuck(segment.detail());
+        TalosLog.trace("pathing", "follower stalled: " + segment.detail());
         // The follower is gone; an extension search still in flight was planned from the
         // DEAD route's tail. Abandon it, or launchSimSegment's one-planner guard silently
         // swallows the recovery replan and nobody owns the player (frozen until that stale
@@ -424,6 +433,7 @@ public final class TalosPathingEngine implements PathingEngine {
         if (error != null) { run.future.completeExceptionally(error); return; }
         if (segment.successful()) { run.future.complete(segment); return; }
         ScriptGameEvents.onGotoStuck(segment.detail());
+        TalosLog.trace("pathing", "native follower stalled: " + segment.detail());
         scheduleReplan(run);
     }
 
@@ -474,6 +484,7 @@ public final class TalosPathingEngine implements PathingEngine {
         if (run.coarsePlanner == task) run.coarsePlanner = null;
         if (run.cancelled || run.future.isDone()) return;
         LOGGER.debug("Coarse corridor search: {}", result.detail());
+        TalosLog.trace("pathing", "coarse corridor search: " + result.detail());
         if (result.reachedGoal() && result.corridor().size() > 1) {
             run.corridor = result.corridor();
             renderCorridorMarkers(run.corridor);
@@ -513,6 +524,7 @@ public final class TalosPathingEngine implements PathingEngine {
 
     private void scheduleReplan(NavigationRun run) {
         if (run.cancelled || run.future.isDone()) return;
+        TalosLog.trace("pathing", "replan scheduled after attempt " + run.attempts);
         TalosClient.taskScheduler().addTask("native-path-replan", new OneShotTask(
                 () -> launchSegment(run)));
     }
@@ -565,6 +577,8 @@ public final class TalosPathingEngine implements PathingEngine {
         BlockPos previous = run.snapshot.target();
         if (fresh.target().equals(previous)) return true; // same cell: nothing to do
         run.snapshot = fresh;
+        TalosLog.trace("pathing", "retarget " + previous.toShortString() + " -> "
+                + fresh.target().toShortString());
         SimFollowTask follower = run.follower;
         if (follower != null && follower.isActive()) follower.setGoal(fresh.test());
         // The corridor was sketched toward the OLD target; once the goal strays a few

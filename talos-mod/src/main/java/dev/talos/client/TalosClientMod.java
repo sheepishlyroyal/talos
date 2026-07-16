@@ -4,6 +4,7 @@ import dev.talos.client.command.TalosCommands;
 import dev.talos.client.bridge.TalosBridge;
 import dev.talos.client.config.TalosConfig;
 import dev.talos.client.config.TalosConfigManager;
+import dev.talos.client.log.TalosLog;
 import dev.talos.client.render.RenderQueue;
 import dev.talos.client.script.GameThreadExecutor;
 import dev.talos.client.script.ScriptEngine;
@@ -19,6 +20,7 @@ public final class TalosClientMod implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        TalosLog.init();
         // Load persisted settings before anything else touches Theme/Humanizer, so
         // subsystems start in the user's last-saved state.
         TalosConfig config = TalosConfigManager.load();

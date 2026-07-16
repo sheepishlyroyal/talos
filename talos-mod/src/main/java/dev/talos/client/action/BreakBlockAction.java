@@ -3,6 +3,7 @@ package dev.talos.client.action;
 import dev.talos.client.TalosClient;
 import dev.talos.client.humanize.HumanizationProfile;
 import dev.talos.client.humanize.SeededRng;
+import dev.talos.client.log.TalosLog;
 import dev.talos.client.scan.ScanTask;
 import dev.talos.client.task.SimpleTask;
 import java.util.Set;
@@ -52,7 +53,10 @@ public final class BreakBlockAction extends SimpleTask {
         if (++ticks > TIMEOUT_TICKS) { finish(false, "Timed out breaking " + target.toShortString()); return; }
         switch (state) {
             case PREPARE -> prepare(client);
-            case ACQUIRE -> { aim.aimAt(target); aim.tick(); if (aim.isAimed()) state = State.EXECUTE; }
+            case ACQUIRE -> { aim.aimAt(target); aim.tick(); if (aim.isAimed()) {
+                TalosLog.trace("actions", "break acquire->execute target=" + target.toShortString());
+                state = State.EXECUTE;
+            } }
             case EXECUTE -> execute(client);
             case OBSERVE -> observe(client);
             case BACKOFF -> { if (ticks >= waitUntil) state = State.ACQUIRE; }
@@ -61,6 +65,7 @@ public final class BreakBlockAction extends SimpleTask {
     }
 
     private void prepare(Minecraft client) {
+        TalosLog.trace("actions", "break prepare target=" + target.toShortString());
         original = client.level.getBlockState(target);
         // The desired end state (block gone) already holds — that's success, not an error.
         if (original.isAir()) { finish(true, "Block was already clear"); return; }
@@ -70,6 +75,7 @@ public final class BreakBlockAction extends SimpleTask {
         selectedTool = client.player.getMainHandItem();
         aim = new AimController(client, TalosClient.humanizer().rotation(), profile, rng.nextInt(Integer.MAX_VALUE));
         state = State.ACQUIRE;
+        TalosLog.trace("actions", "break prepare->acquire target=" + target.toShortString());
     }
 
     private void execute(Minecraft client) {
@@ -80,6 +86,7 @@ public final class BreakBlockAction extends SimpleTask {
         client.player.swing(InteractionHand.MAIN_HAND);
         if (!accepted) { retry("Server rejected break start"); return; }
         state = State.OBSERVE;
+        TalosLog.trace("actions", "break execute->verify target=" + target.toShortString());
     }
 
     private void observe(Minecraft client) {
@@ -122,6 +129,7 @@ public final class BreakBlockAction extends SimpleTask {
     private void finish(boolean success, String message) {
         if (state == State.RELEASE) return;
         state = State.RELEASE;
+        TalosLog.trace("actions", "break " + (success ? "success: " : "fail: ") + message);
         result.complete(new ActionResult(success, message));
         _break();
     }

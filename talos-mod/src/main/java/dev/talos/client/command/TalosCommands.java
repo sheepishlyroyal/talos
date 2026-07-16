@@ -5,6 +5,7 @@ import dev.talos.client.bridge.TalosBridge;
 import dev.talos.client.pathing.GoalBlock;
 import dev.talos.client.pathing.GoalNear;
 import dev.talos.client.pathing.GoalXZ;
+import dev.talos.client.log.TalosLog;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -149,6 +150,14 @@ public final class TalosCommands {
                                 .executes(context -> setHuman(context, true)))
                         .then(ClientCommands.literal("off")
                                 .executes(context -> setHuman(context, false))))
+                .then(ClientCommands.literal("debug")
+                        .executes(TalosCommands::debugStatus)
+                        .then(ClientCommands.literal("on")
+                                .executes(context -> setDebug(context, true)))
+                        .then(ClientCommands.literal("off")
+                                .executes(context -> setDebug(context, false)))
+                        .then(ClientCommands.literal("status")
+                                .executes(TalosCommands::debugStatus)))
                 .then(ClientCommands.literal("glow")
                         .then(coordinate("x")
                                 .then(coordinate("y")
@@ -313,6 +322,27 @@ public final class TalosCommands {
                     "§bTalos §7» §fHuman mode §cOFF§f — aim snaps directly; stationary "
                     + dev.talos.client.TalosClient.humanizer().baseProfile().name() + " profile."));
         }
+        return 1;
+    }
+
+    private static int setDebug(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context,
+            boolean enabled) {
+        TalosLog.setDebug(enabled);
+        String detail = enabled
+                ? " — engine trace now surfaces to chat and " + TalosLog.logFile()
+                : " — engine trace is hidden; info/warn/error continue in " + TalosLog.logFile();
+        context.getSource().sendFeedback(Component.literal(
+                "§bTalos §7» §fDetailed logging " + (enabled ? "§aON§f" : "§cOFF§f") + detail));
+        return 1;
+    }
+
+    private static int debugStatus(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
+        context.getSource().sendFeedback(Component.literal(
+                "§bTalos §7» §fDetailed logging "
+                        + (TalosLog.isDebug() ? "§aON§f" : "§cOFF§f")
+                        + " — log file: " + TalosLog.logFile()));
         return 1;
     }
 

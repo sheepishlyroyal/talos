@@ -3,6 +3,7 @@ package dev.talos.client.action;
 import dev.talos.client.TalosClient;
 import dev.talos.client.humanize.HumanizationProfile;
 import dev.talos.client.humanize.SeededRng;
+import dev.talos.client.log.TalosLog;
 import dev.talos.client.scan.ScanTask;
 import dev.talos.client.task.SimpleTask;
 import java.util.Set;
@@ -66,18 +67,23 @@ public final class KillEntityAction extends SimpleTask {
     }
 
     private void prepare(Minecraft client, Entity entity) {
+        TalosLog.trace("actions", "kill prepare entity=" + entityId);
         if (!withinReach(client, entity)) { finish(false, "Entity is out of attack reach"); return; }
         WeaponSelector.select(client, WeaponSelector.findBestMeleeHotbarSlot(client.player));
         aim = new AimController(client, TalosClient.humanizer().rotation(), profile,
                 rng.nextInt(Integer.MAX_VALUE));
         state = State.ACQUIRE;
+        TalosLog.trace("actions", "kill prepare->acquire entity=" + entityId);
     }
 
     private void acquire(Minecraft client, Entity entity) {
         aim.aimAt(entity);
         aim.tick();
         if (!withinReach(client, entity)) { finish(false, "Entity moved out of attack reach"); return; }
-        if (aim.isAimed()) state = State.EXECUTE;
+        if (aim.isAimed()) {
+            TalosLog.trace("actions", "kill acquire->execute entity=" + entityId);
+            state = State.EXECUTE;
+        }
     }
 
     private void execute(Minecraft client, Entity entity) {
@@ -93,6 +99,7 @@ public final class KillEntityAction extends SimpleTask {
         nextAttackTick = ticks + Math.max(1,
                 TalosClient.humanizer().timing().sampleDelayTicks(profile, 0.7, rng));
         state = State.BACKOFF;
+        TalosLog.trace("actions", "kill execute->verify entity=" + entityId);
     }
 
     private void observe(Minecraft client, Entity entity) {
@@ -114,6 +121,7 @@ public final class KillEntityAction extends SimpleTask {
     private void finish(boolean success, String message) {
         if (state == State.RELEASE) return;
         state = State.RELEASE;
+        TalosLog.trace("actions", "kill " + (success ? "success: " : "fail: ") + message);
         result.complete(new ActionResult(success, message));
         _break();
     }
