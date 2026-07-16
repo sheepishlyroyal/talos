@@ -1,5 +1,7 @@
 package dev.talos.client.rules;
 
+import dev.talos.client.log.TalosLog;
+
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
@@ -586,7 +588,10 @@ public final class EventRuleEngine {
     private static void fire(Rule rule, String value) {
         if (tick - rule.lastFiredTick < RULE_COOLDOWN_TICKS) return;
         rule.lastFiredTick = tick;
-        runCommand(substitute(rule.command, value));
+        String resolved = substitute(rule.command, value);
+        TalosLog.trace("rules", "rule " + rule.id + " fired trigger=" + rule.triggerType().id()
+                + " value=" + String.valueOf(value) + " resolved=" + resolved);
+        runCommand(resolved);
     }
 
     private static String substitute(String command, String value) {

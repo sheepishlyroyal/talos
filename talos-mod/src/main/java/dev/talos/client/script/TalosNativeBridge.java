@@ -7,6 +7,7 @@ import dev.talos.client.action.KillEntityAction;
 import dev.talos.client.action.PlaceBlockAction;
 import dev.talos.client.hud.TalosHud;
 import dev.talos.client.humanize.HumanizationProfile;
+import dev.talos.client.log.TalosLog;
 import dev.talos.client.pathing.Goal;
 import dev.talos.client.pathing.GoalBlock;
 import dev.talos.client.pathing.GoalNear;
@@ -60,12 +61,9 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.entity.EquipmentSlot;
 import dev.talos.client.render.RenderQueue;
 import org.graalvm.polyglot.HostAccess;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /** Default-deny host capability object exposed to Python. */
 public final class TalosNativeBridge {
-    private static final Logger LOGGER = LoggerFactory.getLogger("Talos Script");
     private final GameThreadExecutor game;
     private final EventDispatcher events;
     private final AtomicBoolean valid = new AtomicBoolean(true);
@@ -750,7 +748,17 @@ public final class TalosNativeBridge {
                     client.world.getBlockState(new BlockPos(x, y, z)).getBlock()).toString();
         }));
     }
-    @HostAccess.Export public void log(String message) { LOGGER.info("[Python] {}", message); }
+    @HostAccess.Export public void log(String message) { logLevel(message, "info"); }
+    @HostAccess.Export public void logLevel(String message, String level) {
+        TalosLog.Level parsed;
+        try {
+            parsed = TalosLog.Level.valueOf(level == null ? "INFO" : level.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException error) {
+            parsed = TalosLog.Level.INFO;
+        }
+        // chat=false: the Python wrapper print()s to the session's own sink already.
+        TalosLog.log(parsed, "script", message, false);
+    }
     @HostAccess.Export public void waitBetween(double a, double b) throws InterruptedException {
         checkValid();
         if (!Double.isFinite(a) || !Double.isFinite(b) || a < 0 || b < a)
@@ -765,6 +773,12 @@ public final class TalosNativeBridge {
     }
     @HostAccess.Export public boolean humanMode() {
         return await(game.submit(TalosClient.humanizer()::humanMode));
+    }
+    @HostAccess.Export public void setDebugMode(boolean enabled) {
+        await(game.submit(() -> { TalosLog.setDebug(enabled); return null; }));
+    }
+    @HostAccess.Export public boolean debugMode() {
+        return await(game.submit(TalosLog::isDebug));
     }
     @HostAccess.Export public double humanFatigue() {
         return await(game.submit(() -> TalosClient.humanizer().sessionArc().fatigue()));
