@@ -3,6 +3,7 @@ package dev.talos.client.action;
 import dev.talos.client.TalosClient;
 import dev.talos.client.humanize.HumanizationProfile;
 import dev.talos.client.humanize.SeededRng;
+import dev.talos.client.log.TalosLog;
 import dev.talos.client.scan.ScanTask;
 import dev.talos.client.task.SimpleTask;
 import java.util.Set;
@@ -59,7 +60,10 @@ public final class PlaceBlockAction extends SimpleTask {
         if (++ticks > TIMEOUT_TICKS) { finish(false, "Timed out placing at " + target.toShortString()); return; }
         switch (state) {
             case PREPARE -> prepare(client);
-            case ACQUIRE -> { aim.aimAt(hitPosition()); aim.tick(); if (aim.isAimed()) state = State.EXECUTE; }
+            case ACQUIRE -> { aim.aimAt(hitPosition()); aim.tick(); if (aim.isAimed()) {
+                TalosLog.trace("actions", "place acquire->execute target=" + target.toShortString());
+                state = State.EXECUTE;
+            } }
             case EXECUTE -> execute(client);
             case OBSERVE -> observe(client);
             case BACKOFF -> { if (ticks >= waitUntil) state = State.ACQUIRE; }
@@ -68,6 +72,7 @@ public final class PlaceBlockAction extends SimpleTask {
     }
 
     private void prepare(Minecraft client) {
+        TalosLog.trace("actions", "place prepare target=" + target.toShortString());
         if (!client.level.getBlockState(target).canBeReplaced()) {
             finish(false, "Target is not replaceable"); return;
         }
@@ -83,6 +88,7 @@ public final class PlaceBlockAction extends SimpleTask {
         aim = new AimController(client, TalosClient.humanizer().rotation(), profile,
                 rng.nextInt(Integer.MAX_VALUE));
         state = State.ACQUIRE;
+        TalosLog.trace("actions", "place prepare->acquire target=" + target.toShortString());
     }
 
     private void execute(Minecraft client) {
@@ -93,6 +99,7 @@ public final class PlaceBlockAction extends SimpleTask {
         if (!interaction.consumesAction()) { retry("Placement interaction was rejected"); return; }
         waitUntil = ticks + TalosClient.humanizer().timing().sampleDelayTicks(profile, 0.35, rng);
         state = State.OBSERVE;
+        TalosLog.trace("actions", "place execute->verify target=" + target.toShortString());
     }
 
     private void observe(Minecraft client) {
@@ -131,6 +138,7 @@ public final class PlaceBlockAction extends SimpleTask {
     private void finish(boolean success, String message) {
         if (state == State.RELEASE) return;
         state = State.RELEASE;
+        TalosLog.trace("actions", "place " + (success ? "success: " : "fail: ") + message);
         result.complete(new ActionResult(success, message));
         _break();
     }
