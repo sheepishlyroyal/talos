@@ -661,9 +661,217 @@ public final class TalosCommands {
             talos.log("example_follow loaded: /talos follow overridden, /talos shadow added")
             """;
 
+    /**
+     * Reference script for {@code /talos example lumberjack}: a practical loop — find a
+     * log of any wood type, walk to it, mine the trunk column upward, repeat.
+     */
+    private static final String EXAMPLE_LUMBERJACK = """
+            # example_lumberjack.py -- fell nearby trees: find a log, walk to it, mine
+            # the trunk column upward, then look for the next one. Reference material:
+            # /talos example lumberjack rewrites it.
+            #
+            # Run:    /talos script run example_lumberjack [maxTrees]   (0/omitted = forever)
+            # Stop:   /talos script stop
+
+            import talos
+
+            LOGS = ["minecraft:oak_log", "minecraft:birch_log", "minecraft:spruce_log",
+                    "minecraft:jungle_log", "minecraft:acacia_log", "minecraft:dark_oak_log",
+                    "minecraft:mangrove_log", "minecraft:cherry_log"]
+
+
+            def nearest_log(radius=48):
+                # find_block returns the nearest of ONE id; scan every log type and keep
+                # the closest hit across them all.
+                best = None
+                feet = talos.player_feet()
+                for log in LOGS:
+                    pos = talos.find_block(log, radius)
+                    if pos is None:
+                        continue
+                    d = ((pos.x - feet.x) ** 2 + (pos.y - feet.y) ** 2 + (pos.z - feet.z) ** 2) ** 0.5
+                    if best is None or d < best[0]:
+                        best = (d, pos)
+                return best[1] if best else None
+
+
+            @talos.task
+            async def chop():
+                goal = int(talos.args[0]) if talos.args else 0   # 0 = run until stopped
+                felled = 0
+                while goal == 0 or felled < goal:
+                    tree = nearest_log()
+                    if tree is None:
+                        talos.hud("§6lumberjack §7» no trees in range, waiting...", id="lj")
+                        await talos.aio.wait(2.0, 4.0)
+                        continue
+
+                    tx, ty, tz = int(tree.x), int(tree.y), int(tree.z)
+                    talos.hud(f"§6lumberjack §7» felling tree at {tx} {ty} {tz}", id="lj")
+                    await talos.aio.goto_near(tx, ty, tz, 2)
+
+                    # Mine straight up the trunk: same X/Z column, block by block, for as
+                    # long as the block there is a log.
+                    y = ty
+                    while True:
+                        here = talos.block_at(tx, y, tz)
+                        if "log" not in here:
+                            break
+                        await talos.aio.mine(tx, y, tz)
+                        await talos.aio.wait(0.15, 0.4)   # humanized swing cadence
+                        y += 1
+
+                    felled += 1
+                    logs = talos.count("minecraft:oak_log") + talos.count("minecraft:birch_log")
+                    talos.hud(f"§6lumberjack §7» felled {felled} · logs carried {logs}", id="lj")
+                    await talos.aio.wait(0.5, 1.2)
+                talos.log(f"lumberjack: done, felled {felled} trees")
+
+            talos.run()
+            """;
+
+    /**
+     * Reference script for {@code /talos example events}: registers a handler for every
+     * {@code talos.on(...)} push event so the live event stream is visible.
+     */
+    private static final String EXAMPLE_EVENTS = """
+            # example_events.py -- subscribe to EVERY talos.on(...) event and print what
+            # fires, so you can watch the live event stream. Reference material:
+            # /talos example events rewrites it.
+            #
+            # Run:    /talos script run example_events
+            # Stop:   /talos script stop
+            #
+            # NOTE: talos.on(...) push events (below) are a small set of worker-thread
+            # callbacks. They are NOT the 206 /talos on <trigger> rule names -- every one
+            # of those is readable instead via talos.get(name, *args); see example_sensors.
+
+            import talos
+
+            @talos.on("tick")
+            def _tick():
+                # Fires ~20x/second. Keep it cheap. Here it does nothing but prove it runs.
+                pass
+
+            @talos.on("chat")
+            def _chat(message, sender):
+                # sender = a player name, or None for system lines. YOUR OWN messages echo
+                # back here too -- always guard against reacting to yourself.
+                who = sender if sender is not None else "<system>"
+                talos.log(f"[chat] {who}: {message}")
+
+            @talos.on("health")
+            def _health(health):
+                talos.hud(f"§chealth §f{health:.1f}", id="ev_health")
+
+            @talos.on("entity_hurt")
+            def _entity_hurt(type_id, entity_id, x, y, z):
+                talos.log(f"[entity_hurt] {type_id} #{entity_id} @ {x:.1f} {y:.1f} {z:.1f}")
+
+            @talos.on("item_pickup")
+            def _pickup(item_id, amount):
+                talos.log(f"[item_pickup] +{amount} {item_id}")
+
+            @talos.on("death")
+            def _death():
+                talos.hud("§4you died", id="ev_death")
+
+            @talos.on("goto_start")
+            def _goto_start(x, y, z):
+                talos.log(f"[goto_start] planning to {x} {y} {z}")
+
+            @talos.on("goto_done")
+            def _goto_done(success, detail):
+                talos.log(f"[goto_done] success={success} -- {detail}")
+
+            @talos.on("goto_stuck")
+            def _goto_stuck(detail):
+                talos.log(f"[goto_stuck] replanning -- {detail}")
+
+            @talos.on("disconnect")
+            def _disconnect():
+                talos.log("[disconnect] left the world")
+
+            talos.hud("§aevent monitor armed §7» watch the log", id="ev_title")
+            talos.run()
+            """;
+
+    /**
+     * Reference script for {@code /talos example sensors}: a live dashboard built entirely
+     * from {@code talos.get()}, demonstrating every getter family across the 206-name catalog.
+     */
+    private static final String EXAMPLE_SENSORS = """
+            # example_sensors.py -- a live dashboard built entirely from talos.get(). Every
+            # one of the 206 /talos on triggers is ALSO a getter: talos.get(name, *args).
+            # Numbers come back as int/float, booleans as bool, everything else as str.
+            # Reference material: /talos example sensors rewrites it.
+            #
+            # Run:    /talos script run example_sensors
+            # Stop:   /talos script stop
+            # See:    /talos get list   (dumps every observable + all 206 trigger names)
+
+            import talos
+
+            def dump_catalog_demo():
+                # A guided tour of the getter FAMILIES, printed once at startup.
+                talos.log("== talos.get() families ==")
+
+                # 1) plain live numeric metrics (no args)
+                for name in ("health", "hunger", "air", "xp_level", "armor_points",
+                             "speed", "server_tps", "fps", "ping", "light_level"):
+                    talos.log(f"  {name} = {talos.get(name)}")
+
+                # 2) descriptive string getters
+                for name in ("position", "dimension", "biome", "held_item", "weather", "time"):
+                    talos.log(f"  {name} = {talos.get(name)}")
+
+                # 3) boolean state getters
+                for name in ("sneaking", "sprinting", "on_ground", "moving", "inventory_full"):
+                    talos.log(f"  {name} = {talos.get(name)}")
+
+                # 4) spatial getters accept coords: absolute, ~ feet-relative, or ^ local frame
+                talos.log(f"  light_level(^ ^ ^8 ahead) = {talos.get('light_level', '^ ^ ^8')}")
+                talos.log("  block_count(diamond_ore r16, 4 below) = "
+                          f"{talos.get('block_count', 'minecraft:diamond_ore', 16, '~', '~-4', '~')}")
+
+                # 5) parameterized getters: selectors, items, enchants, regions
+                talos.log(f"  entity_count(@e[type=zombie] r32) = {talos.get('entity_count', '@e[type=zombie]', 32)}")
+                talos.log(f"  item_count(diamond) = {talos.get('item_count', 'minecraft:diamond')}")
+                talos.log(f"  held_enchant(efficiency) = {talos.get('held_enchant', 'minecraft:efficiency')}")
+                talos.log(f"  entered_region(100 60 100..120 80 120) = "
+                          f"{talos.get('entered_region', 100, 60, 100, 120, 80, 120)}")
+
+                # 6) event getters: latest occurrence + '[N.NNs ago]', or 'never observed'
+                for name in ("damage_taken", "item_picked_up", "villager_profession_changed",
+                             "sound", "explosion", "block_at_feet"):
+                    talos.log(f"  {name} = {talos.get(name)}")
+
+            dump_catalog_demo()
+
+            @talos.every(ticks=5)
+            def dashboard():
+                # A compact vitals HUD refreshed 4x/second, every value straight from get().
+                hp = talos.get("health"); food = talos.get("hunger")
+                tps = talos.get("server_tps"); spd = talos.get("speed")
+                hostile = talos.get("nearest_hostile_distance")
+                talos.hud(f"§chp§f {hp:.0f}  §6food§f {food:.0f}  §aTPS§f {tps:.1f}  "
+                          f"§dspd§f {spd:.1f}  §chostile§f {hostile:.1f}m", id="dash_vitals")
+                talos.hud(f"§7{talos.get('position')} · {talos.get('dimension')} · "
+                          f"{talos.get('biome')}", id="dash_where")
+                talos.hud(f"§7looking at §f{talos.get('looking_at')}", id="dash_look")
+
+            talos.hud("§asensor dashboard live §7» /talos get list for all 206", id="dash_title")
+            talos.run()
+            """;
+
     /** Embedded reference scripts served by {@code /talos example <name>}. */
-    private static final Map<String, String> EXAMPLES =
-            Map.of("goto", EXAMPLE_GOTO, "farm", EXAMPLE_FARM, "follow", EXAMPLE_FOLLOW);
+    private static final Map<String, String> EXAMPLES = Map.of(
+            "goto", EXAMPLE_GOTO,
+            "farm", EXAMPLE_FARM,
+            "follow", EXAMPLE_FOLLOW,
+            "lumberjack", EXAMPLE_LUMBERJACK,
+            "events", EXAMPLE_EVENTS,
+            "sensors", EXAMPLE_SENSORS);
 
     /**
      * Writes the named reference script to {@code <gameDir>/talos/scripts/example_<name>.py}
