@@ -91,6 +91,7 @@ no server-side mod are needed. Write automations two ways: **`/talos` commands /
 /talos py <code>                    # one-liner; trailing expr echoes repr
 /talos example [name]               # list / write example_<name>.py
 /talos human [on|off]               # session-arc fatigue + eased cube-aim
+/talos debug [on|off|status]        # detailed logging: engine trace + talos.debug() lines → chat + ~/.talos/logs/
 /talos bridge allow | status        # VS Code WebSocket bridge
 ```
 
@@ -169,8 +170,15 @@ aim + session fatigue) · `fatigue()` → 0–1 · `on_break()` → bool · `sle
 `next_tick()` · `tick_count()`.
 
 **Metadata & libs** — `talos.args` → `list[str]` from `/talos script run <name> args…` · `talos.require("lib")`
-imports another `talos/scripts/` file as a module · `talos.log(msg)` (logger, not chat) · `talos.state`
-(persistent per-script dict).
+imports another `talos/scripts/` file as a module · `talos.state` (persistent per-script dict).
+
+**Logging** — `talos.log(msg, level="info")` writes to the session log file (`~/.talos/logs/`), the mod
+log, and the script console (chat / VS Code) · shorthands `talos.debug(msg)` / `info(msg)` / `warn(msg)` /
+`error(msg)` (`warn` = yellow, `error` = red in chat) · `talos.debug_mode(enabled=None)` queries/toggles the
+master debug switch — same as `/talos debug on|off`. `debug`-level lines only surface (console AND file)
+while that switch is on; it also streams the engine's own trace (pathing plans/replans/stalls, rule fires,
+action state transitions, script lifecycle) to chat + file, which makes it the first diagnostic step when a
+goto stalls or a rule doesn't fire.
 
 **Events** — `@talos.on("<event>")` registers on the worker thread:
 

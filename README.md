@@ -379,6 +379,7 @@ session only), `/talos on list` (dumps every trigger's grammar).
 | `/talos script editor` | Open the in-game Python editor screen. |
 | `/talos bridge allow` / `/talos bridge status` | Allow / inspect the VS Code WebSocket bridge for this session. |
 | `/talos human [on\|off]` | Toggle session-arc "Human mode" — wall-clock fatigue drift + idle micro-breaks (see Humanization). |
+| `/talos debug [on\|off\|status]` | Master switch for detailed logging (see Detailed logging below). Bare form / `status` reports the state and the session log-file path. |
 | `/talos ui` | Open the Talos UI screen. |
 | `/talos stop` (alias `/talos stop all`) | Stop pathing, follow, aim and any running task. |
 
@@ -636,7 +637,9 @@ unavailable — the API is a hardened capability surface, not full CPython.
 |---|---|
 | `talos.args` | `list[str]` of the args passed to `/talos script run <name> args…`. Always fresh per run. |
 | `talos.require("mylib")` | Import another script in `talos/scripts/` as a module (CPython import semantics: caching, cycle handling; each library gets its own first-run trust summary). |
-| `talos.log(msg)` | Log to the mod logger (not chat). |
+| `talos.log(msg, level="info")` | Leveled log line — written to the session log file, the mod logger, and the script console. `level` is `"debug"`/`"info"`/`"warn"`/`"error"`; `talos.log("x")` behaves exactly as before. |
+| `talos.debug(msg)` / `talos.info(msg)` / `talos.warn(msg)` / `talos.error(msg)` | Shorthands for `talos.log(msg, level=…)`. `debug` lines only reach the console/chat while `/talos debug` is on (they're also skipped in the file when off). |
+| `talos.debug_mode(enabled=None)` | Query (no arg) or toggle the same master switch as `/talos debug`. |
 | `talos.state` | A persistent dict (`state["key"] = …`) saved per-script across runs. |
 
 ### Movement & pathing
@@ -813,6 +816,39 @@ talos.run()
 
 ---
 
+## Detailed logging
+
+One master switch controls how loud Talos is: `/talos debug on|off|status` (or
+`talos.debug_mode(True)` from a script). Everything shares a single rotating sink at
+`~/.talos/logs/session-<timestamp>.log` — a new file per game launch, newest 10 kept.
+
+**Always on** (regardless of the switch):
+
+- `talos.log(...)` / `talos.info/warn/error(...)` lines go to the session log file, the standard
+  mod log, and the script console (chat, or the VS Code output channel when run from the bridge).
+- `warn` is yellow and `error` is red in chat.
+
+**Only while `/talos debug` is on:**
+
+- `talos.debug(...)` lines surface (dark-gray in chat) and are written to the file.
+- **Engine trace** streams to chat + file: pathing plan starts, search attempts, replans, stalls
+  and outcomes; follow segment starts/retargets/route swaps; event-rule fires; break/place/kill
+  state transitions (`prepare → acquire → execute → verify`); and script session start/stop.
+
+That makes `/talos debug on` the first thing to reach for when a goto stalls, a rule doesn't fire,
+or a script misbehaves — you can watch exactly what the engine is deciding, live, and the file
+keeps the full transcript for later.
+
+```python
+import talos
+
+talos.debug_mode(True)                 # same switch as /talos debug on
+talos.debug(f"starting at {talos.player_feet()}")   # visible only in debug mode
+talos.warn("low durability")           # always visible, yellow in chat
+```
+
+---
+
 ## VS Code extension
 
 `vscode-extension/` pushes and runs Python scripts against the mod over a local WebSocket, with live
@@ -874,6 +910,7 @@ running scripts without leaving the game.
 | `~/.talos/rules.json` | Persisted event rules and schedules. |
 | `~/.talos/macros/` | Recorded input macros (JSON, per-tick frames). |
 | `~/.talos/token` | Per-session VS Code bridge auth token (regenerated every launch). |
+| `~/.talos/logs/` | Per-session detailed log files (`session-<timestamp>.log`, newest 10 kept). |
 | `.minecraft/talos/scripts/` | Python scripts run by `/talos script run` (and `require`'d libs). |
 
 ---
