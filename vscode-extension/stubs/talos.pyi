@@ -580,8 +580,32 @@ def on(event: str) -> Callable[[_EventHandler], _EventHandler]:
     messages echo back, so guard against replying to yourself."""
     ...
 
-def log(msg: object) -> str:
-    """Write a message to the script console (in-game chat / VS Code output)."""
+def log(message: object, level: str = "info") -> str:
+    """Write a leveled message to the Talos log and script console."""
+    ...
+
+def debug(message: object) -> str:
+    """Write a debug message when detailed logging is enabled."""
+    ...
+
+def info(message: object) -> str:
+    """Write an info message."""
+    ...
+
+def warn(message: object) -> str:
+    """Write a warning message."""
+    ...
+
+def error(message: object) -> str:
+    """Write an error message."""
+    ...
+
+@overload
+def debug_mode() -> bool: ...
+@overload
+def debug_mode(enabled: bool) -> None: ...
+def debug_mode(enabled: bool | None = None):
+    """Toggle or query detailed engine/script debug logging."""
     ...
 
 args: list[str]

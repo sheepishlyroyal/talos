@@ -4,6 +4,7 @@ import dev.talos.client.TalosClient;
 import dev.talos.client.humanize.HumanizationProfile;
 import dev.talos.client.humanize.RotationHumanizer;
 import dev.talos.client.humanize.SeededRng;
+import dev.talos.client.log.TalosLog;
 import dev.talos.client.pathing.PathResult;
 import dev.talos.client.render.RenderQueue;
 import dev.talos.client.task.TalosTask;
@@ -154,7 +155,12 @@ public final class SimFollowTask extends TalosTask {
     public void extensionSettled() { replanRequested = false; }
 
     /** Moving-goal retarget: refresh the arrival test so we stop at the NEW target. */
-    public void setGoal(Predicate<BlockPos> fresh) { if (fresh != null) this.goal = fresh; }
+    public void setGoal(Predicate<BlockPos> fresh) {
+        if (fresh != null) {
+            this.goal = fresh;
+            TalosLog.trace("movement", "follower retargeted at waypoint " + index);
+        }
+    }
 
     /** Hot-swap in a fresher plan without releasing keys; passed waypoints self-advance. */
     public void swapRoute(PlannedRoute replacement) {
@@ -201,6 +207,8 @@ public final class SimFollowTask extends TalosTask {
         // watchdog a few ticks before trusting drift numbers again.
         this.predictedNext = null;
         this.driftSuppressedUntil = ticks + DRIFT_SUPPRESS_TICKS;
+        TalosLog.trace("movement", "route swapped; resumed at waypoint " + index
+                + "/" + replacement.waypoints().size());
     }
 
     /**
@@ -228,7 +236,11 @@ public final class SimFollowTask extends TalosTask {
         status("resyncing (server correction)");
     }
 
-    @Override public void initialize() { activeFollower = this; }
+    @Override public void initialize() {
+        activeFollower = this;
+        TalosLog.trace("movement", "segment start with " + route.waypoints().size()
+                + " waypoints");
+    }
     @Override public boolean condition() { return !future.isDone(); }
     @Override public void increment() { ticks++; }
 
@@ -328,6 +340,7 @@ public final class SimFollowTask extends TalosTask {
         chunkWaitTicks = 0;
         updateProgress(new Vec3d(player.getX(), player.getY(), player.getZ()), waypoint.position());
         if (ticks - lastProgressTick > STUCK_TICKS) {
+            TalosLog.trace("movement", "segment stalled near waypoint " + index);
             finish(false, "Pathing is stuck near route waypoint " + index + dominantCause());
             return;
         }
@@ -1263,6 +1276,7 @@ public final class SimFollowTask extends TalosTask {
     public void cancel() { finish(false, "Pathing cancelled"); _break(); }
 
     private void finish(boolean success, String detail) {
+        TalosLog.trace("movement", (success ? "segment success: " : "segment fail: ") + detail);
         RouteRenderer.clear();
         releaseInputs();
         if (client.player != null) client.player.sendMessage(Text.literal(
