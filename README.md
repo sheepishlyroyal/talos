@@ -32,14 +32,14 @@ required.
 ---
 
 ## Requirements & install
-
+    
 | | |
 |---|---|
-| Minecraft | 1.21.11 |
+| Minecraft | 1.21.11 - 26.1 - 26.2 |
 | Fabric Loader | 0.19.3+ |
-| Fabric API | 0.141.4+1.21.11 |
+| Fabric API | 0.141.4+1.21.11 - 26.1 - 26.2 |
 | Java | 21 (build + run) |
-| Yarn mappings | 1.21.11+build.6 |
+
 | GraalPy | 24.2.2 (bundled into the jar) |
 
 Optional: the separately distributed `talos-pathing-baritone` adapter is picked up automatically if
@@ -670,7 +670,7 @@ as `bool`, and descriptive/latest-event results as `str`.
 
 ```python
 talos.get("server_tps")
-talos.get("server tps")                         # same name; spaces normalize to underscores
+talos.get("server tps")                         # same name; spaces normalize to underscores (*MOSTLY only for talos.get())
 talos.get("entity_count", "@e[tag=guard]", 48)
 talos.get("block_near", "minecraft:lava", 8)  # exact count, not merely True/False
 talos.get("villager_profession_changed")        # old -> new + id/UUID/type/3dp position
@@ -853,9 +853,6 @@ running scripts without leaving the game.
   client (equipment/profession/level are, and are covered by triggers); chest contents are only
   knowable while the chest screen is open; beacon effects only via the beacon screen. Honest ceilings
   on what a client mod can observe.
-- **A flat 5-block jump is honestly impossible** and the planner reports it — parkour clears 3-gaps
-  from near-standing, 4-gaps via edge takeoff, and the 5-block gap only with a snow-layer runway and
-  chained momentum hops. It won't fake physics vanilla can't do.
 - **Not a guaranteed anti-detection system.** Humanization varies trajectory *families* — best-effort
   obfuscation, not a guarantee against a determined observer or anti-cheat.
 - **Build-verified, not all battle-tested in-game.** The codebase compiles and behavior matches the
