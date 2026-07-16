@@ -31,15 +31,42 @@ required.
 
 ---
 
-## Requirements & install
+## Download
 
+Prebuilt jars for all three Minecraft versions ship on the
+[**Releases**](https://github.com/sheepishlyroyal/talos/releases) page:
+
+| Minecraft | Jar |
+|---|---|
+| 1.21.11 | `talos-mod-0.0.1-p0-mc1.21.11.jar` |
+| 26.1 | `talos-mod-0.0.1-p0-mc26.1.jar` |
+| 26.2 | `talos-mod-0.0.1-p0-mc26.2.jar` |
+
+Drop the matching jar into your Fabric `mods/` folder next to a matching Fabric API build, then launch.
+Or build from source (below).
+
+## Use Talos with an LLM
+
+Talos ships an **agent skill** ([`skill/SKILL.md`](skill/SKILL.md)) — the full authoring contract for
+Talos Python scripts, `/talos` commands and event rules, condensed for a model.
+
+- **Claude Code / Claude:** drop `skill/SKILL.md` into `~/.claude/skills/talos/SKILL.md` (it auto-loads
+  by name), or copy the repo folder into your project's `.claude/skills/`.
+- **Any other LLM (ChatGPT, Gemini, Cursor, local models):** paste the contents of `skill/SKILL.md` into
+  the system prompt / context. The model can then write correct Talos scripts and commands directly.
+
+See the [**wiki**](https://github.com/sheepishlyroyal/talos/wiki) for the full guide, including a
+dedicated **LLM usage** page.
+
+## Requirements & install
+    
 | | |
 |---|---|
-| Minecraft | 1.21.11 |
+| Minecraft | 1.21.11 - 26.1 - 26.2 |
 | Fabric Loader | 0.19.3+ |
-| Fabric API | 0.141.4+1.21.11 |
+| Fabric API | 0.141.4+1.21.11 - 26.1 - 26.2 |
 | Java | 21 (build + run) |
-| Yarn mappings | 1.21.11+build.6 |
+
 | GraalPy | 24.2.2 (bundled into the jar) |
 
 Optional: the separately distributed `talos-pathing-baritone` adapter is picked up automatically if
@@ -670,7 +697,7 @@ as `bool`, and descriptive/latest-event results as `str`.
 
 ```python
 talos.get("server_tps")
-talos.get("server tps")                         # same name; spaces normalize to underscores
+talos.get("server tps")                         # same name; spaces normalize to underscores (*MOSTLY only for talos.get())
 talos.get("entity_count", "@e[tag=guard]", 48)
 talos.get("block_near", "minecraft:lava", 8)  # exact count, not merely True/False
 talos.get("villager_profession_changed")        # old -> new + id/UUID/type/3dp position
@@ -853,9 +880,6 @@ running scripts without leaving the game.
   client (equipment/profession/level are, and are covered by triggers); chest contents are only
   knowable while the chest screen is open; beacon effects only via the beacon screen. Honest ceilings
   on what a client mod can observe.
-- **A flat 5-block jump is honestly impossible** and the planner reports it — parkour clears 3-gaps
-  from near-standing, 4-gaps via edge takeoff, and the 5-block gap only with a snow-layer runway and
-  chained momentum hops. It won't fake physics vanilla can't do.
 - **Not a guaranteed anti-detection system.** Humanization varies trajectory *families* — best-effort
   obfuscation, not a guarantee against a determined observer or anti-cheat.
 - **Build-verified, not all battle-tested in-game.** The codebase compiles and behavior matches the
