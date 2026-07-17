@@ -75,38 +75,77 @@
       spans.forEach(function (s, i) {
         s.style.transitionDelay = (i * step) + "ms";
         requestAnimationFrame(function () { s.classList.add("bt-in"); });
-        s.addEventListener("transitionend", function () {
-          s.style.transitionDelay = "";
-          s.style.willChange = "auto";
-        }, { once: true });
+      });
+    }
+    function resetSpans(spans) {
+      spans.forEach(function (s) {
+        s.style.transitionDelay = "";
+        s.classList.remove("bt-in", "bt-static");
       });
     }
 
-    // Sidebar: word-level on load, staggered per link.
-    var sideEls = document.querySelectorAll(".nav-group-title, .nav-group a");
-    var sideSpans = [];
-    sideEls.forEach(function (el) { sideSpans = sideSpans.concat(splitWords(el)); });
-    reveal(sideSpans, 24);
+    // Sidebar: word-level, but only once per browser session — navigating
+    // between pages must not replay it.
+    var sideDone = false;
+    try { sideDone = sessionStorage.getItem("talos-docs-side-anim") === "1"; } catch (e) {}
+    if (!sideDone) {
+      var sideEls = document.querySelectorAll(".nav-group-title, .nav-group a");
+      var sideSpans = [];
+      sideEls.forEach(function (el) { sideSpans = sideSpans.concat(splitWords(el)); });
+      reveal(sideSpans, 24);
+      try { sessionStorage.setItem("talos-docs-side-anim", "1"); } catch (e) {}
+    }
 
-    // Headings: word-level as they enter the viewport. Body blocks: whole-element.
+    // Main content. Rules:
+    //  - anything visible at page load shows instantly (no replay on navigation),
+    //  - anything scrolled INTO view animates — on the way down and the way up,
+    //  - after an element fully leaves the viewport it re-arms, so it animates
+    //    again the next time it enters.
     var wordTargets = document.querySelectorAll(".prose h1, .prose h2, .prose h3");
     var blockTargets = document.querySelectorAll(
-      ".prose p, .prose ul, .prose ol, .prose table, .prose pre, .prose blockquote, .os-tabs, .cta-large, .pager, .toc");
+      ".prose p, .prose ul, .prose ol, .prose table, .prose pre, .prose blockquote, .os-tabs, .pager");
     var pending = new Map();
-    wordTargets.forEach(function (el) { pending.set(el, splitWords(el)); });
-    blockTargets.forEach(function (el) { el.classList.add("bl-el"); });
+    var shown = new WeakSet();
 
-    var seen = new WeakSet();
+    function initiallyVisible(el) {
+      var r = el.getBoundingClientRect();
+      return r.top < window.innerHeight && r.bottom > 0;
+    }
+
+    wordTargets.forEach(function (el) {
+      var spans = splitWords(el);
+      pending.set(el, spans);
+      if (initiallyVisible(el)) {
+        spans.forEach(function (s) { s.classList.add("bt-static"); });
+        shown.add(el);
+      }
+    });
+    blockTargets.forEach(function (el) {
+      el.classList.add("bl-el");
+      if (initiallyVisible(el)) {
+        el.classList.add("bl-static");
+        shown.add(el);
+      }
+    });
+
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
-        if (!entry.isIntersecting || seen.has(entry.target)) return;
-        seen.add(entry.target);
-        io.unobserve(entry.target);
-        var spans = pending.get(entry.target);
-        if (spans) reveal(spans, 40);
-        else requestAnimationFrame(function () { entry.target.classList.add("bl-in"); });
+        var el = entry.target;
+        var spans = pending.get(el);
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.1) {
+          if (shown.has(el)) return;
+          shown.add(el);
+          if (spans) reveal(spans, 40);
+          else requestAnimationFrame(function () { el.classList.add("bl-in"); });
+        } else if (!entry.isIntersecting && entry.intersectionRatio === 0) {
+          // Fully out of view: re-arm so the next entry animates again.
+          if (!shown.has(el)) return;
+          shown.delete(el);
+          if (spans) resetSpans(spans);
+          else el.classList.remove("bl-in", "bl-static");
+        }
       });
-    }, { threshold: 0.1, rootMargin: "0px 0px -5% 0px" });
+    }, { threshold: [0, 0.1] });
     wordTargets.forEach(function (el) { io.observe(el); });
     blockTargets.forEach(function (el) { io.observe(el); });
   })();

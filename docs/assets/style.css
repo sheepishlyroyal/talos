@@ -388,12 +388,21 @@ body {
   transition: opacity 0.5s var(--ease), filter 0.5s var(--ease), transform 0.5s var(--ease);
 }
 .bl-el.bl-in { opacity: 1; filter: blur(0); transform: none; }
+/* Instant reveal (already-visible content on page load — no re-animation). */
+.bt-word.bt-static, .bl-el.bl-static {
+  opacity: 1;
+  filter: none;
+  transform: none;
+  transition: none;
+}
 @media (prefers-reduced-motion: reduce) {
   .bt-word, .bl-el { opacity: 1 !important; filter: none !important; transform: none !important; transition: none !important; }
 }
 
-/* ---- sidebar hover indicator --------------------------------------------- */
-.sidebar { position: relative; }
+/* ---- sidebar hover indicator ---------------------------------------------
+   NOTE: the sidebar keeps position:sticky from its base rule (sticky is a
+   positioning context, so the absolute indicator anchors to it) — do not
+   override position here or the sidebar scrolls out of view. */
 #nav-indicator {
   position: absolute;
   left: 0;
