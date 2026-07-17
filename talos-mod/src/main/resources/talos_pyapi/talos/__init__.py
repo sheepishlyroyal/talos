@@ -140,6 +140,32 @@ def debug_mode(enabled=None):
         return bool(_talos_host.debugMode())
     return _talos_host.setDebugMode(bool(enabled))
 
+def chat(message):
+    """Send a chat message to the server. A leading "/" runs it as a command instead.
+
+    Note: your own messages echo back into the "chat" event -- guard handlers that
+    call chat() against reacting to their own output, or you will loop. While a
+    script is blocked in talos.input(), a plain chat() message is consumed as that
+    input answer (it stays local and is never sent).
+    """
+    text = str(message)
+    if text.startswith("/"):
+        _talos_host.sendCommand(text)
+    else:
+        _talos_host.sendChat(text)
+    return text
+
+def run_command(command):
+    """Run a command (with or without the leading "/").
+
+    /talos ... client commands dispatch locally; anything unhandled is sent to the
+    server as a normal /command. Not to be confused with @talos.command(name),
+    which REGISTERS a new /talos subcommand.
+    """
+    text = str(command)
+    _talos_host.sendCommand(text)
+    return text
+
 def require(name):
     """Load another script from talos/scripts as a module and return it.
 
@@ -193,6 +219,7 @@ __all__ = ["args", "require",
            "count", "has", "find_slot", "container_items", "deposit", "withdraw", "craft",
            "screen", "close_screen", "hud", "hud_remove", "hud_clear",
            "Pos", "Entity", "Player", "Hit", "log", "debug", "info", "warn", "error", "debug_mode",
+           "chat", "run_command",
            "wait", "wait_between", "set_profile", "set_seed", "human", "fatigue", "on_break",
            "on", "parallel", "spawn", "command",
            "on_start", "on_tick", "task", "every", "start", "run", "cancel_all",

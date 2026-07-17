@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""talos — terminal client for the Talos Minecraft mod.
+
+Talks to the mod's loopback WebSocket bridge (the same one the VS Code
+extension uses; see vscode-extension/PROTOCOL.md). Python 3.8+, standard
+library only — no pip installs.
+
+Usage:
+  talos <script.py> [args...]        push a local file into the game and run it
+  talos run <script.py> [args...]    same, explicit
+  talos py <script.py>               same, via the py alias
+  talos py -c 'code'                 run a one-liner (shares a running script's
+  talos -c 'code'                    globals; trailing expression echoes repr)
+  talos python  -c 'code'|file.py    python/python3 are accepted aliases
+  talos python3 -c 'code'|file.py
+  talos stop                         hard-stop the running script
+  talos status                       bridge reachability + run state
+  talos logs [-f]                    print (or follow) the newest session log
+                                     from ~/.talos/logs/
+
+Options:
+  --port N      bridge port (default: probe 43077-43080)
+  --token FILE  token file (default: ~/.talos/token)
+  --no-color    disable ANSI colors
+
+Exit codes: 0 script succeeded · 1 script failed · 2 usage · 3 cannot connect/auth.
+
+First run: scripts pushed from a terminal are gated until you type
+`/talos bridge allow` once in-game (persisted afterwards). The CLI waits.
+"""
+
+import base64
+import json
+import os
+import re
+import secrets
+import socket
+import struct
+import sys
+import time
+from pathlib import Path
+
+PROTOCOL_VERSION = 1
+DEFAULT_PORTS = (43077, 43078, 43079, 43080)
+TOKEN_FILE = Path.home() / ".talos" / "token"
+LOGS_DIR = Path.home() / ".talos" / "logs"
+
+USE_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+COLORS = {"debug": "\x1b[2m", "warn": "\x1b[33m", "error": "\x1b[31m"}
+RESET = "\x1b[0m"
+
+
+def emit(level, text):
+    stream = sys.stderr if level in ("warn", "error") else sys.stdout
+    if USE_COLOR and level in COLORS:
+        stream.write(f"{COLORS[level]}{text}{RESET}\n")
+    else:
+        prefix = "" if level == "info" else f"[{level}] "
+        stream.write(f"{prefix}{text}\n")
+    stream.flush()
+
+
+def fail(message, code=3):
+    emit("error", f"talos: {message}")
+    sys.exit(code)
+
+
+# ---------------------------------------------------------------------------
+# Minimal RFC 6455 WebSocket client (text frames only, client-masked).
+# ---------------------------------------------------------------------------
+class WebSocketClient:
+    def __init__(self, host, port, timeout=3.0):
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        key = base64.b64encode(secrets.token_bytes(16)).decode()
+        handshake = (
+            f"GET / HTTP/1.1\r\nHost: {host}:{port}\r\n"
+            "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        )
+        self.sock.sendall(handshake.encode())
+        response = b""
+        while b"\r\n\r\n" not in response:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("connection closed during handshake")
+            response += chunk
+        status = response.split(b"\r\n", 1)[0]
+        if b"101" not in status:
+            raise ConnectionError(f"handshake rejected: {status.decode(errors='replace')}")
+        self.buffer = response.split(b"\r\n\r\n", 1)[1]
+        self.sock.settimeout(None)
+
+    def _read_exact(self, n):
+        while len(self.buffer) < n:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise ConnectionError("connection closed")
+            self.buffer += chunk
+        data, self.buffer = self.buffer[:n], self.buffer[n:]
+        return data
+
+    def send_text(self, text):
+        payload = text.encode()
+        mask = secrets.token_bytes(4)
+        header = b"\x81"  # FIN + text opcode
+        n = len(payload)
+        if n < 126:
+            header += bytes([0x80 | n])
+        elif n < 65536:
+            header += bytes([0x80 | 126]) + struct.pack(">H", n)
+        else:
+            header += bytes([0x80 | 127]) + struct.pack(">Q", n)
+        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        self.sock.sendall(header + mask + masked)
+
+    def recv_text(self, timeout=None):
+        """Next text frame as str; None on clean close. Raises socket.timeout."""
+        self.sock.settimeout(timeout)
+        try:
+            while True:
+                first, second = self._read_exact(2)
+                opcode, masked = first & 0x0F, second & 0x80
+                length = second & 0x7F
+                if length == 126:
+                    length = struct.unpack(">H", self._read_exact(2))[0]
+                elif length == 127:
+                    length = struct.unpack(">Q", self._read_exact(8))[0]
+                mask = self._read_exact(4) if masked else b""
+                payload = self._read_exact(length)
+                if mask:
+                    payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+                if opcode == 0x1:
+                    return payload.decode()
+                if opcode == 0x9:  # ping -> pong
+                    pong_mask = secrets.token_bytes(4)
+                    body = bytes(b ^ pong_mask[i % 4] for i, b in enumerate(payload))
+                    self.sock.sendall(bytes([0x8A, 0x80 | len(payload)]) + pong_mask + body)
+                elif opcode == 0x8:  # close
+                    return None
+                # 0xA pong / continuation frames: ignore (server sends whole frames)
+        finally:
+            self.sock.settimeout(None)
+
+    def close(self):
+        try:
+            mask = secrets.token_bytes(4)
+            self.sock.sendall(bytes([0x88, 0x80]) + mask)
+            self.sock.close()
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Bridge session
+# ---------------------------------------------------------------------------
+def read_token(token_path):
+    try:
+        return token_path.read_text().strip()
+    except OSError:
+        fail(f"no token at {token_path} — launch Minecraft with Talos first (the mod writes it on startup)")
+
+
+def connect(ports, token_path):
+    token = read_token(token_path)
+    last_error = None
+    for port in ports:
+        try:
+            ws = WebSocketClient("127.0.0.1", port)
+        except OSError as error:
+            last_error = error
+            continue
+        ws.send_text(json.dumps({"v": PROTOCOL_VERSION, "type": "auth", "token": token}))
+        try:
+            reply = json.loads(ws.recv_text(timeout=5) or "{}")
+        except (socket.timeout, ConnectionError, json.JSONDecodeError):
+            ws.close()
+            continue
+        if reply.get("type") == "auth_ok":
+            return ws, port
+        reason = reply.get("reason", "authentication failed")
+        ws.close()
+        fail(f"bridge on port {port} rejected auth: {reason}")
+    fail(f"could not reach the Talos bridge on 127.0.0.1:{ports[0]}-{ports[-1]} "
+         f"(is Minecraft running with Talos?){f' — {last_error}' if last_error else ''}")
+
+
+def stream_until_done(ws):
+    """Print log frames until script_done; return its success flag."""
+    try:
+        while True:
+            raw = ws.recv_text()
+            if raw is None:
+                emit("error", "talos: bridge closed the connection")
+                return False
+            try:
+                message = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            kind = message.get("type")
+            if kind == "log":
+                emit(message.get("level", "info"), message.get("text", ""))
+            elif kind == "script_done":
+                if not message.get("success") and message.get("message"):
+                    emit("error", message["message"])
+                return bool(message.get("success"))
+    except KeyboardInterrupt:
+        emit("warn", "^C — stopping the script...")
+        ws.send_text(json.dumps({"v": PROTOCOL_VERSION, "type": "stop"}))
+        deadline = time.monotonic() + 3
+        try:
+            while time.monotonic() < deadline:
+                raw = ws.recv_text(timeout=max(0.1, deadline - time.monotonic()))
+                if raw is None:
+                    break
+                if json.loads(raw).get("type") == "script_done":
+                    break
+        except (socket.timeout, ConnectionError, json.JSONDecodeError):
+            pass
+        sys.exit(130)
+
+
+def cmd_run(path, args, ports, token_path):
+    script = Path(path)
+    if not script.is_file():
+        fail(f"no such file: {script}", 2)
+    name = script.name
+    if not name.endswith(".py"):
+        fail(f"expected a .py file, got: {name}", 2)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", name) or ".." in name:
+        fail(f"script name may only use letters, digits, _ . - : {name}", 2)
+    source = script.read_text(encoding="utf-8")
+    ws, _port = connect(ports, token_path)
+    ws.send_text(json.dumps({"v": PROTOCOL_VERSION, "type": "push_script",
+                             "name": name, "source": source}))
+    run = {"v": PROTOCOL_VERSION, "type": "run", "name": name}
+    if args:
+        run["args"] = [str(a) for a in args]
+    ws.send_text(json.dumps(run))
+    success = stream_until_done(ws)
+    ws.close()
+    sys.exit(0 if success else 1)
+
+
+def cmd_eval(code, ports, token_path):
+    ws, _port = connect(ports, token_path)
+    ws.send_text(json.dumps({"v": PROTOCOL_VERSION, "type": "eval", "code": code}))
+    success = stream_until_done(ws)
+    ws.close()
+    sys.exit(0 if success else 1)
+
+
+def cmd_stop(ports, token_path):
+    ws, port = connect(ports, token_path)
+    ws.send_text(json.dumps({"v": PROTOCOL_VERSION, "type": "stop"}))
+    try:
+        while True:
+            raw = ws.recv_text(timeout=3)
+            if raw is None:
+                break
+            if json.loads(raw).get("type") == "status":
+                emit("info", f"stopped (bridge on port {port})")
+                break
+    except (socket.timeout, ConnectionError, json.JSONDecodeError):
+        emit("info", "stop sent")
+    ws.close()
+
+
+def cmd_status(ports, token_path):
+    ws, port = connect(ports, token_path)
+    state = "unknown"
+    try:
+        raw = ws.recv_text(timeout=3)
+        if raw:
+            message = json.loads(raw)
+            if message.get("type") == "status":
+                state = message.get("state", "unknown")
+    except (socket.timeout, ConnectionError, json.JSONDecodeError):
+        pass
+    emit("info", f"connected to 127.0.0.1:{port}, state: {state}")
+    ws.close()
+
+
+def cmd_logs(follow):
+    if not LOGS_DIR.is_dir():
+        fail(f"no logs directory at {LOGS_DIR} — launch Minecraft with Talos first")
+    sessions = sorted(LOGS_DIR.glob("session-*.log"))
+    if not sessions:
+        fail(f"no session logs in {LOGS_DIR}")
+    latest = sessions[-1]
+    emit("debug", f"-- {latest} --")
+    with latest.open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            sys.stdout.write(line)
+        sys.stdout.flush()
+        if not follow:
+            return
+        try:
+            while True:
+                line = handle.readline()
+                if line:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                else:
+                    time.sleep(0.25)
+        except KeyboardInterrupt:
+            pass
+
+
+def main(argv):
+    ports = list(DEFAULT_PORTS)
+    token_path = TOKEN_FILE
+    rest = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--port":
+            i += 1
+            ports = [int(argv[i])]
+        elif arg == "--token":
+            i += 1
+            token_path = Path(argv[i])
+        elif arg == "--no-color":
+            global USE_COLOR
+            USE_COLOR = False
+        elif arg in ("-h", "--help"):
+            print(__doc__.strip())
+            return
+        else:
+            rest.append(arg)
+        i += 1
+
+    if not rest:
+        print(__doc__.strip())
+        sys.exit(2)
+
+    # Strip a python-ish alias so `talos python3 -c ...` and `talos py file.py` work.
+    if rest[0] in ("run", "py", "python", "python3", "exec"):
+        rest = rest[1:]
+        if not rest:
+            fail("expected a script file or -c 'code'", 2)
+
+    if rest[0] == "-c":
+        if len(rest) < 2:
+            fail("-c needs code to run", 2)
+        cmd_eval(rest[1], ports, token_path)
+    elif rest[0] == "stop":
+        cmd_stop(ports, token_path)
+    elif rest[0] == "status":
+        cmd_status(ports, token_path)
+    elif rest[0] == "logs":
+        cmd_logs(follow="-f" in rest[1:])
+    else:
+        cmd_run(rest[0], rest[1:], ports, token_path)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
