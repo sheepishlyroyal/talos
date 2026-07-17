@@ -92,7 +92,7 @@
       var sideEls = document.querySelectorAll(".nav-group-title, .nav-group a");
       var sideSpans = [];
       sideEls.forEach(function (el) { sideSpans = sideSpans.concat(splitWords(el)); });
-      reveal(sideSpans, 24);
+      reveal(sideSpans, 32);
       try { sessionStorage.setItem("talos-docs-side-anim", "1"); } catch (e) {}
     }
 
@@ -135,7 +135,7 @@
         if (entry.isIntersecting && entry.intersectionRatio >= 0.1) {
           if (shown.has(el)) return;
           shown.add(el);
-          if (spans) reveal(spans, 40);
+          if (spans) reveal(spans, 55);
           else requestAnimationFrame(function () { el.classList.add("bl-in"); });
         } else if (!entry.isIntersecting && entry.intersectionRatio === 0) {
           // Fully out of view: re-arm so the next entry animates again.

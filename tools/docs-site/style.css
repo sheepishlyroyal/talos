@@ -397,14 +397,14 @@ body {
   filter: blur(8px);
   transform: translateY(-12px);
   will-change: transform, filter, opacity;
-  transition: opacity 0.5s var(--ease), filter 0.5s var(--ease), transform 0.5s var(--ease);
+  transition: opacity 0.7s var(--ease), filter 0.7s var(--ease), transform 0.7s var(--ease);
 }
 .bt-word.bt-in { opacity: 1; filter: blur(0); transform: none; }
 .bl-el {
   opacity: 0;
   filter: blur(6px);
   transform: translateY(10px);
-  transition: opacity 0.5s var(--ease), filter 0.5s var(--ease), transform 0.5s var(--ease);
+  transition: opacity 0.7s var(--ease), filter 0.7s var(--ease), transform 0.7s var(--ease);
 }
 .bl-el.bl-in { opacity: 1; filter: blur(0); transform: none; }
 /* Instant reveal (already-visible content on page load — no re-animation). */
