@@ -679,6 +679,23 @@ def on_break() -> bool:
     """True while a Human-mode micro-break is pausing automation."""
     ...
 
+def draw_box(a: Any, b: Any = None, color: Union[str, int] = "green",
+             seconds: float = 10.0, id: Optional[str] = None) -> str:
+    """Outline a world-space box (single block when b is None). Positions are Pos
+    or (x, y, z). color: '#RRGGBB', int, or a name. Re-drawing the same id
+    replaces it (animate that way). Max 512 live overlays; auto-cleared when the
+    script stops. Returns the id."""
+    ...
+
+def draw_line(a: Any, b: Any, color: Union[str, int] = "green",
+              seconds: float = 10.0, id: Optional[str] = None) -> str:
+    """Draw a world-space line segment between two positions. Same semantics as draw_box."""
+    ...
+
+def draw_clear(id: Optional[str] = None) -> None:
+    """Remove one overlay by id, or all of this script's overlays when id is None."""
+    ...
+
 def intensity(value: Optional[float] = None) -> Optional[float]:
     """Query or set the global humanisation intensity (0 = near-robotic,
     1 = profile default, up to 3 = exaggerated). Persisted across sessions."""
