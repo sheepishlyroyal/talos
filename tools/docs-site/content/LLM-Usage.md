@@ -14,34 +14,25 @@ There are two ways to use it: **install it** (best, for Claude Code) or **paste 
 
 ---
 
-## Option A — Install everything (recommended)
+## Option A — Install the skill + CLI (recommended)
 
-**This block installs three things at once:** the **Talos mod jar** into your Minecraft `mods/`
-folder, the **`talos` terminal CLI** into `~/.talos/bin/`, and the **Claude skill** into
-`~/.claude/skills/talos/` — the complete LLM + CLI setup in one paste. Set `MC` to your Minecraft
-version (`1.21.11`, `26.1` or `26.2`) first.
+**This block installs two things at once:** the **`talos` terminal CLI** into `~/.talos/bin/` and
+the **Claude skill** into `~/.claude/skills/talos/` — the complete LLM + CLI workflow in one paste.
+(It does **not** install the mod itself — get that from [Installation](Installation).)
 
 <div class="install-primary">
-<span class="install-label">Installs Talos + CLI + skill</span>
+<span class="install-label">Installs skill + CLI</span>
 
 :::os-tabs
 @macos
-MC=1.21.11   # or 26.1 / 26.2 — match your Minecraft
-MODS="$HOME/Library/Application Support/minecraft/mods"
-mkdir -p "$MODS" ~/.talos/bin ~/.claude/skills/talos
-curl -fsSL -o "$MODS/talos-mod-1.1.0-mc$MC.jar" \
-  "https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-mod-1.1.0-mc$MC.jar"
+mkdir -p ~/.talos/bin ~/.claude/skills/talos
 curl -fsSL -o ~/.talos/bin/talos \
   "https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli"
 chmod +x ~/.talos/bin/talos
 curl -fsSL -o ~/.claude/skills/talos/SKILL.md \
   "https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md"
 @linux
-MC=1.21.11   # or 26.1 / 26.2 — match your Minecraft
-MODS="$HOME/.minecraft/mods"
-mkdir -p "$MODS" ~/.talos/bin ~/.claude/skills/talos
-curl -fsSL -o "$MODS/talos-mod-1.1.0-mc$MC.jar" \
-  "https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-mod-1.1.0-mc$MC.jar"
+mkdir -p ~/.talos/bin ~/.claude/skills/talos
 curl -fsSL -o ~/.talos/bin/talos \
   "https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli"
 chmod +x ~/.talos/bin/talos
@@ -49,18 +40,16 @@ curl -fsSL -o ~/.claude/skills/talos/SKILL.md \
   "https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md"
 @windows
 # PowerShell
-$MC = "1.21.11"   # or 26.1 / 26.2 — match your Minecraft
-$Mods = "$env:APPDATA\.minecraft\mods"
-New-Item -ItemType Directory -Force $Mods, "$env:USERPROFILE\.talos\bin", "$env:USERPROFILE\.claude\skills\talos" | Out-Null
-Invoke-WebRequest "https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-mod-1.1.0-mc$MC.jar" -OutFile "$Mods\talos-mod-1.1.0-mc$MC.jar"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.talos\bin", "$env:USERPROFILE\.claude\skills\talos" | Out-Null
 Invoke-WebRequest "https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli" -OutFile "$env:USERPROFILE\.talos\bin\talos"
 Invoke-WebRequest "https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md" -OutFile "$env:USERPROFILE\.claude\skills\talos\SKILL.md"
 :::
 
 </div>
 
-Still needed on top: **Fabric Loader + Fabric API** (see [Installation](Installation)), and put the
-CLI on your PATH (see [Terminal CLI](Terminal-CLI)). One-time in-game: `/talos bridge allow`.
+Still needed on top: the **Talos mod + Fabric Loader + Fabric API** in Minecraft (see
+[Installation](Installation)), the CLI on your PATH (see [Terminal CLI](Terminal-CLI)), and a
+one-time in-game `/talos bridge allow`.
 
 ### Skill only
 
