@@ -1,13 +1,46 @@
-    # Talos
+# Talos — control your own Minecraft client with Python
 
-Talos is a **client-side** Minecraft **1.21.11** Fabric automation mod. It gives you a
-physics-simulated pathfinder that mines/bridges/pillars/parkours through obstacles, a ~206-family
-event-rule engine that reacts to almost anything the client can observe, humanized aim and input
-macros, and an embedded **GraalPy** Python runtime (plus a VS Code bridge) for scripting on top of
-all of it. Everything runs as **client commands** — no server permission level, no server-side mod
-required.
+Talos is an in-client automation framework: script movement, mining, inventory, combat, building
+and world reactions **in your existing Minecraft session** — real Python, running inside the game.
 
-**Documentation:** https://sheepishlyroyal.github.io/talos/ — searchable docs site (commands, scripting, simulations, CLI, architecture).
+```python
+import talos
+
+ore = talos.find_block("iron_ore", radius=64)
+talos.goto(ore)          # physics-simulated pathfinding: walks, jumps, bridges, mines through
+talos.mine(ore)
+talos.chat("got one")
+```
+
+Type it in the in-game editor, push it from VS Code, or run it from your terminal
+(`talos mine_iron.py`) with logs streaming back. Take over manually at any moment — it's your
+client, your player.
+
+**Docs:** https://sheepishlyroyal.github.io/talos/ · **Download:** [releases](https://github.com/sheepishlyroyal/talos/releases) · **License:** [MIT](LICENSE)
+
+> If Talos is useful or interesting to you, consider starring the repository — it helps other
+> Minecraft automation developers find it.
+
+## Why Talos (and not …)
+
+| Capability | Talos | Baritone | Mineflayer |
+|---|---|---|---|
+| Controls your **existing player/client** | Yes | Yes | No (headless bot account) |
+| **Python** scripting | Yes | No | No (JavaScript) |
+| In-client event rules (~206 trigger families) | Yes | Limited | Via API events |
+| Manual takeover mid-script | Yes | Limited | Not applicable |
+| Humanized aim & timing (tunable) | Yes | No | No |
+| Inventory/container automation | Yes | Limited | Yes |
+| Terminal + VS Code control with live logs | Yes | No | N/A (is a library) |
+| Runs without a mod on the server | Yes | Yes | Yes |
+
+Baritone is a superb pathfinder; Mineflayer is a superb bot library. Talos is the piece neither
+covers: a scriptable automation layer for the client you actually play on.
+
+Under the hood: a **client-side Fabric mod** (MC **1.21.11 / 26.1 / 26.2**) with a
+physics-simulated A\* pathfinder, a ~206-family event-rule engine, humanized aim and input macros,
+and an embedded **GraalPy** runtime. Everything runs as client commands — no server permission
+level, no server-side mod.
 
 - **Pathfinding** — a from-scratch A\* planner over a deterministic mirror of vanilla player
   physics (`talos-mod/.../pathing/sim/`), not a waypoint graph. It walks, jumps, sprints,
@@ -38,11 +71,11 @@ required.
 Prebuilt jars for all three Minecraft versions ship on the
 [**Releases**](https://github.com/sheepishlyroyal/talos/releases) page:
 
-| Minecraft | Jar |
-|---|---|
-| 1.21.11 | `talos-mod-1.1.0-mc1.21.11.jar` |
-| 26.1 | `talos-mod-1.1.0-mc26.1.jar` |
-| 26.2 | `talos-mod-1.1.0-mc26.2.jar` |
+| Minecraft | Jar | Status |
+|---|---|---|
+| 1.21.11 | `talos-mod-1.1.0-mc1.21.11.jar` | **Stable** — primary development target, playtested |
+| 26.1 | `talos-mod-1.1.0-mc26.1.jar` | Experimental — full port, compile- and content-verified; less playtime |
+| 26.2 | `talos-mod-1.1.0-mc26.2.jar` | Experimental — full port, compile- and content-verified; less playtime |
 
 Drop the matching jar into your Fabric `mods/` folder next to a matching Fabric API build, then launch.
 Or build from source (below).
@@ -1323,6 +1356,17 @@ if failed:
 ```
 
 ---
+
+## Roadmap
+
+- **Modrinth listing** — one-click install distribution (docs site already carries the button).
+- **Deeper 26.x parity** — promote the 26.1/26.2 ports from experimental to stable with playtime.
+- **More showcase scripts** — schematic-style building, farm loops, recording-to-script polish.
+- **Pathfinding engines** — the `talos:pathing_engine` entrypoint is open; a Baritone adapter
+  exists, more engines welcome.
+- **Script sharing** — exploring a curated place to publish and discover Talos scripts.
+
+Suggestions and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Development
 

@@ -1,9 +1,31 @@
-# Talos documentation
+# Control your own Minecraft client with Python
 
-**Talos** is a **client-side** Minecraft **Fabric** automation mod (MC **1.21.11 / 26.1 / 26.2**). It
-gives you a physics-simulated pathfinder, a ~206-family event-rule engine, humanized aim and input
-macros, and an embedded **GraalPy** Python runtime (plus a VS Code bridge). Everything runs as **client
-commands** — no server permission level, no server-side mod.
+**Talos** is an in-client automation framework: script movement, mining, inventory, combat, building
+and world reactions **in your existing Minecraft session** — real Python, running inside the game
+(client-side Fabric mod, MC **1.21.11 / 26.1 / 26.2**).
+
+```python
+import talos
+
+ore = talos.find_block("iron_ore", radius=64)
+talos.goto(ore)          # physics-simulated pathfinding: walks, jumps, bridges, mines through
+talos.mine(ore)
+talos.chat("got one")
+```
+
+Under the hood: a physics-simulated A* pathfinder, a ~206-family event-rule engine, humanized aim
+and input macros, and an embedded **GraalPy** runtime plus a VS Code bridge and terminal CLI.
+Everything runs as **client commands** — no server permission level, no server-side mod. Take over
+manually at any moment: it's your client, your player.
+
+| Capability | Talos | Baritone | Mineflayer |
+|---|---|---|---|
+| Controls your **existing player/client** | Yes | Yes | No (headless bot) |
+| **Python** scripting | Yes | No | No (JavaScript) |
+| In-client event rules (~206 families) | Yes | Limited | Via API events |
+| Manual takeover mid-script | Yes | Limited | Not applicable |
+| Humanized aim & timing (tunable) | Yes | No | No |
+| Terminal + VS Code control, live logs | Yes | No | N/A (library) |
 
 > ⚠️ Automation may violate a server's rules. Talos' humanization is **best-effort obfuscation, not a
 > guarantee against anti-cheat**. Use it where you're allowed to.

@@ -48,11 +48,69 @@
   </aside>
   <main class="content">
     <article class="prose">
-<h1 id="talos-documentation">Talos documentation</h1>
-<p><strong>Talos</strong> is a <strong>client-side</strong> Minecraft <strong>Fabric</strong> automation mod (MC <strong>1.21.11 / 26.1 / 26.2</strong>). It
-gives you a physics-simulated pathfinder, a ~206-family event-rule engine, humanized aim and input
-macros, and an embedded <strong>GraalPy</strong> Python runtime (plus a VS Code bridge). Everything runs as <strong>client
-commands</strong> — no server permission level, no server-side mod.</p>
+<h1 id="control-your-own-minecraft-client-with-python">Control your own Minecraft client with Python</h1>
+<p><strong>Talos</strong> is an in-client automation framework: script movement, mining, inventory, combat, building
+and world reactions <strong>in your existing Minecraft session</strong> — real Python, running inside the game
+(client-side Fabric mod, MC <strong>1.21.11 / 26.1 / 26.2</strong>).</p>
+<pre><code class="language-python">import talos
+
+ore = talos.find_block(&quot;iron_ore&quot;, radius=64)
+talos.goto(ore)          # physics-simulated pathfinding: walks, jumps, bridges, mines through
+talos.mine(ore)
+talos.chat(&quot;got one&quot;)
+</code></pre>
+<p>Under the hood: a physics-simulated A<em> pathfinder, a ~206-family event-rule engine, humanized aim
+and input macros, and an embedded </em><em>GraalPy</em><em> runtime plus a VS Code bridge and terminal CLI.
+Everything runs as </em><em>client commands</em>* — no server permission level, no server-side mod. Take over
+manually at any moment: it's your client, your player.</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Talos</th>
+<th>Baritone</th>
+<th>Mineflayer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Controls your <strong>existing player/client</strong></td>
+<td>Yes</td>
+<td>Yes</td>
+<td>No (headless bot)</td>
+</tr>
+<tr>
+<td><strong>Python</strong> scripting</td>
+<td>Yes</td>
+<td>No</td>
+<td>No (JavaScript)</td>
+</tr>
+<tr>
+<td>In-client event rules (~206 families)</td>
+<td>Yes</td>
+<td>Limited</td>
+<td>Via API events</td>
+</tr>
+<tr>
+<td>Manual takeover mid-script</td>
+<td>Yes</td>
+<td>Limited</td>
+<td>Not applicable</td>
+</tr>
+<tr>
+<td>Humanized aim &amp; timing (tunable)</td>
+<td>Yes</td>
+<td>No</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Terminal + VS Code control, live logs</td>
+<td>Yes</td>
+<td>No</td>
+<td>N/A (library)</td>
+</tr>
+</tbody>
+</table>
 <blockquote>
 <p><strong>Note:</strong> Automation may violate a server's rules. Talos' humanization is <strong>best-effort obfuscation, not a
 guarantee against anti-cheat</strong>. Use it where you're allowed to.</p>
@@ -150,7 +208,7 @@ in-game with live output. Everything else on this site is reference for that loo
       where permitted.
     </footer>
   </main>
-  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#talos-documentation">Talos documentation</a><a class="toc-3" href="#start-here">Start here</a><a class="toc-3" href="#what-talos-does">What Talos does</a><a class="toc-3" href="#quick-start">Quick start</a></nav>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#control-your-own-minecraft-client-with-python">Control your own Minecraft client with Python</a><a class="toc-3" href="#start-here">Start here</a><a class="toc-3" href="#what-talos-does">What Talos does</a><a class="toc-3" href="#quick-start">Quick start</a></nav>
 </div>
 <script src="assets/docs.js" defer></script>
 </body>
