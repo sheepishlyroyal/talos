@@ -51,10 +51,15 @@ SRC = Path(__file__).resolve().parent
 CONTENT = SRC / "content"
 OUT = ROOT / "docs"
 
-# Swap in the real Modrinth URL when the listing is live.
+# Swap in the real Modrinth URL when the listing is live; until then the primary
+# button points at GitHub Releases so it always works.
 MODRINTH_URL = "#"
 GITHUB_URL = "https://github.com/sheepishlyroyal/talos"
 RELEASES_URL = GITHUB_URL + "/releases"
+if MODRINTH_URL and MODRINTH_URL != "#":
+    DOWNLOAD_URL, DOWNLOAD_LABEL = MODRINTH_URL, "DOWNLOAD ON MODRINTH"
+else:
+    DOWNLOAD_URL, DOWNLOAD_LABEL = RELEASES_URL, "DOWNLOAD"
 
 # Sidebar structure: (group, [(page-stem, nav title)]).
 NAV = [
@@ -168,7 +173,8 @@ def main():
                 .replace("{{TOC}}", toc(headings))
                 .replace("{{BODY}}", body)
                 .replace("{{PAGER}}", prev_next(stem))
-                .replace("{{MODRINTH_URL}}", MODRINTH_URL)
+                .replace("{{DOWNLOAD_URL}}", DOWNLOAD_URL)
+                .replace("{{DOWNLOAD_LABEL}}", DOWNLOAD_LABEL)
                 .replace("{{GITHUB_URL}}", GITHUB_URL)
                 .replace("{{RELEASES_URL}}", RELEASES_URL))
         (OUT / f"{stem}.html").write_text(page, encoding="utf-8")

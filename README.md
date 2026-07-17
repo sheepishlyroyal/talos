@@ -1,5 +1,9 @@
 # Talos — control your own Minecraft client with Python
 
+[![CI](https://github.com/sheepishlyroyal/talos/actions/workflows/ci.yml/badge.svg)](https://github.com/sheepishlyroyal/talos/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-3ddc84.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-site-0b1016.svg)](https://sheepishlyroyal.github.io/talos/)
+
 Talos is an in-client automation framework: script movement, mining, inventory, combat, building
 and world reactions **in your existing Minecraft session** — real Python, running inside the game.
 
@@ -35,7 +39,9 @@ client, your player.
 | Runs without a mod on the server | Yes | Yes | Yes |
 
 Baritone is a superb pathfinder; Mineflayer is a superb bot library. Talos is the piece neither
-covers: a scriptable automation layer for the client you actually play on.
+covers: a scriptable automation layer for the client you actually play on. (Not a rivalry, either —
+Talos can even use Baritone as an optional pathfinding backend via the `talos:pathing_engine`
+entrypoint, see below.)
 
 Under the hood: a **client-side Fabric mod** (MC **1.21.11 / 26.1 / 26.2**) with a
 physics-simulated A\* pathfinder, a ~206-family event-rule engine, humanized aim and input macros,
@@ -94,8 +100,8 @@ Talos Python scripts, `/talos` commands and event rules, condensed for a model.
 - **Any other LLM (ChatGPT, Gemini, Cursor, local models):** paste the contents of `skill/SKILL.md` into
   the system prompt / context. The model can then write correct Talos scripts and commands directly.
 
-See the [**wiki**](https://github.com/sheepishlyroyal/talos/wiki) for the full guide, including a
-dedicated **LLM usage** page.
+See the [**docs site**](https://sheepishlyroyal.github.io/talos/LLM-Usage.html) for the full guide,
+including the dedicated **Using Talos with an LLM** page.
 
 ## Requirements & install
     
@@ -1381,7 +1387,8 @@ if failed:
 
 ## Roadmap
 
-- **Modrinth listing** — one-click install distribution (docs site already carries the button).
+- **Modrinth listing** — one-click install distribution (the docs-site download button switches
+  to Modrinth the moment the listing is live).
 - **Deeper 26.x parity** — promote the 26.1/26.2 ports from experimental to stable with playtime.
 - **More showcase scripts** — schematic-style building, farm loops, recording-to-script polish.
 - **Pathfinding engines** — the `talos:pathing_engine` entrypoint is open; a Baritone adapter
