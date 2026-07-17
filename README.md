@@ -973,6 +973,7 @@ talos harvest.py wheat 64        # push a local file into the game and run it
 talos run harvest.py wheat 64    # same, explicit
 talos py -c 'talos.log("hi")'    # one-liner; a trailing expression echoes its repr
 talos -c 'talos.player_feet()'   # same (py/python/python3 are accepted aliases)
+talos run 'import talos;talos.log("hi")'   # inline code: anything that isn't a filename
 talos python3 -c 'talos.chat("hello from the shell")'
 talos stop                       # hard-stop the running script
 talos status                     # bridge reachability + run state
