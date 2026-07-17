@@ -15,8 +15,8 @@
     <div id="search-results" hidden></div>
   </div>
   <nav class="topbar-actions">
-    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
-    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-ghost" href="LLM-Usage.html">USE TALOS WITH AN LLM</a>
+    <a class="btn btn-ghost" href="Terminal-CLI.html">GET TALOS CLI</a>
     <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
   </nav>
 </header>
@@ -53,6 +53,11 @@
 It speaks the same loopback WebSocket bridge as the VS Code extension
 (<a href="https://github.com/sheepishlyroyal/talos/blob/main/vscode-extension/PROTOCOL.md">protocol</a>), so
 script output (<code>print</code>, <code>talos.log</code>, tracebacks) streams live back into your shell.</p>
+<blockquote>
+<p><strong>Best setup:</strong> Talos + an LLM + this CLI. The <a href="LLM-Usage.html">LLM writes the scripts</a> (it knows the
+whole API from the skill file) and the CLI runs them instantly with live logs — the tightest
+automation loop Talos offers.</p>
+</blockquote>
 <h2 id="install">Install</h2>
 <ul>
 <li><strong>Automatic:</strong> the VS Code extension bundles the CLI and (re)installs it to <code>~/.talos/bin/talos</code>
@@ -127,8 +132,11 @@ the one-time in-game <code>/talos bridge allow</code> gate.</p>
     </article>
     <div class="pager"><a class="pager-link prev" href="Examples.html"><span>Previous</span>Example scripts</a><a class="pager-link next" href="VS-Code-Bridge.html"><span>Next</span>VS Code bridge</a></div>
     <footer class="page-footer">
-      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
-      violate individual server rules — use in singleplayer or where permitted.
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2 ·
+      <a href="https://github.com/sheepishlyroyal/talos" rel="noopener">GitHub</a> ·
+      <a href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">Releases</a>.
+      Responsible use: automation may violate individual server rules — use in singleplayer or
+      where permitted.
     </footer>
   </main>
   <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#terminal-cli-talos">Terminal CLI (talos)</a><a class="toc-3" href="#install">Install</a><a class="toc-3" href="#usage">Usage</a><a class="toc-3" href="#how-arguments-must-be-written">How arguments must be written</a><a class="toc-3" href="#behaviour">Behaviour</a><a class="toc-3" href="#security">Security</a></nav>

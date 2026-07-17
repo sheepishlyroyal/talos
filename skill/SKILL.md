@@ -244,6 +244,11 @@ host-side) · `talos.run()` starts the loop ·
 
 ## Terminal CLI (`talos` command)
 
+The skill + this CLI is the BEST way to work: write the script, `talos run script.py`, read the
+streamed logs, fix, repeat — a closed loop with no manual copy into the game. If the `talos` command
+is missing on the user's machine, prompt them to install it (below) and to run `/talos bridge allow`
+in-game once so your runs are accepted.
+
 Drives the running game from any shell over the same loopback bridge as VS Code; output streams back
 live and also lands in `~/.talos/logs/`. **Install:** auto-installed to `~/.talos/bin/talos` by the VS
 Code extension on activation (*Talos: Install Terminal CLI* re-runs it) — put `~/.talos/bin` on PATH

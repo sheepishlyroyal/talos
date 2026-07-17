@@ -8,6 +8,10 @@ correct Talos scripts and commands for you.
 
 There are two ways to use it: **install it** (best, for Claude Code) or **paste it** (works anywhere).
 
+> **Best setup:** Talos + an LLM + the [terminal CLI](Terminal-CLI). The LLM writes the script from
+> this skill, then runs it itself with `talos run script.py` and reads the streamed logs to iterate —
+> a fully closed loop: you describe the goal, the model writes, runs, watches and fixes.
+
 ---
 
 ## Option A — Install the skill (Claude Code / Claude)

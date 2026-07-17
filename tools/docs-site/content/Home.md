@@ -10,6 +10,12 @@ commands** — no server permission level, no server-side mod.
 
 <a class="cta-large" href="LLM-Usage.html">USE TALOS WITH AN LLM</a>
 
+> **The best way to run Talos is LLM + CLI.** Give an LLM the [Talos skill](LLM-Usage) so it writes
+> correct automation on the first try, and drive the game through the [terminal CLI](Terminal-CLI)
+> so scripts run and stream their logs without leaving the editor or shell. The loop becomes:
+> describe what you want → the LLM writes the script → `talos run script.py` → watch it happen
+> in-game with live output. Everything else on this site is reference for that loop.
+
 ## Start here
 
 | I want to… | Go to |

@@ -5,6 +5,10 @@ It speaks the same loopback WebSocket bridge as the VS Code extension
 ([protocol](https://github.com/sheepishlyroyal/talos/blob/main/vscode-extension/PROTOCOL.md)), so
 script output (`print`, `talos.log`, tracebacks) streams live back into your shell.
 
+> **Best setup:** Talos + an LLM + this CLI. The [LLM writes the scripts](LLM-Usage) (it knows the
+> whole API from the skill file) and the CLI runs them instantly with live logs — the tightest
+> automation loop Talos offers.
+
 ## Install
 
 - **Automatic:** the VS Code extension bundles the CLI and (re)installs it to `~/.talos/bin/talos`

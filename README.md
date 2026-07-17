@@ -52,6 +52,10 @@ Or build from source (below).
 Talos ships an **agent skill** ([`skill/SKILL.md`](skill/SKILL.md)) — the full authoring contract for
 Talos Python scripts, `/talos` commands and event rules, condensed for a model.
 
+> **Best setup: Talos + an LLM + the terminal CLI.** The LLM writes scripts from the skill, runs them
+> itself with `talos run script.py`, and reads the streamed logs to iterate — a closed loop where you
+> describe the goal and the model writes, runs, watches and fixes.
+
 - **Claude Code / Claude:** drop `skill/SKILL.md` into `~/.claude/skills/talos/SKILL.md` (it auto-loads
   by name), or copy the repo folder into your project's `.claude/skills/`.
 - **Any other LLM (ChatGPT, Gemini, Cursor, local models):** paste the contents of `skill/SKILL.md` into

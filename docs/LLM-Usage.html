@@ -15,8 +15,8 @@
     <div id="search-results" hidden></div>
   </div>
   <nav class="topbar-actions">
-    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
-    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-ghost" href="LLM-Usage.html">USE TALOS WITH AN LLM</a>
+    <a class="btn btn-ghost" href="Terminal-CLI.html">GET TALOS CLI</a>
     <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
   </nav>
 </header>
@@ -55,6 +55,11 @@ the getter/trigger catalog, canonical patterns, and the gotchas that trip models
 blocking, the chat echo, <code>^</code> meaning two different things). Give that file to any model and it can write
 correct Talos scripts and commands for you.</p>
 <p>There are two ways to use it: <strong>install it</strong> (best, for Claude Code) or <strong>paste it</strong> (works anywhere).</p>
+<blockquote>
+<p><strong>Best setup:</strong> Talos + an LLM + the <a href="Terminal-CLI.html">terminal CLI</a>. The LLM writes the script from
+this skill, then runs it itself with <code>talos run script.py</code> and reads the streamed logs to iterate —
+a fully closed loop: you describe the goal, the model writes, runs, watches and fixes.</p>
+</blockquote>
 <hr />
 <h2 id="option-a-install-the-skill-claude-code-claude">Option A — Install the skill (Claude Code / Claude)</h2>
 <p>Claude Code auto-loads skills by name from <code>~/.claude/skills/</code>. Drop the file in and it's available in
@@ -134,8 +139,11 @@ directly:</p>
     </article>
     <div class="pager"><a class="pager-link prev" href="Architecture-and-Testing.html"><span>Previous</span>Architecture & testing</a></div>
     <footer class="page-footer">
-      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
-      violate individual server rules — use in singleplayer or where permitted.
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2 ·
+      <a href="https://github.com/sheepishlyroyal/talos" rel="noopener">GitHub</a> ·
+      <a href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">Releases</a>.
+      Responsible use: automation may violate individual server rules — use in singleplayer or
+      where permitted.
     </footer>
   </main>
   <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#using-talos-with-an-llm">Using Talos with an LLM</a><a class="toc-3" href="#option-a-install-the-skill-claude-code-claude">Option A — Install the skill (Claude Code / Claude)</a><a class="toc-3" href="#option-b-paste-the-skill-chatgpt-gemini-local-models-any-chat">Option B — Paste the skill (ChatGPT, Gemini, local models, any chat)</a><a class="toc-3" href="#getting-good-results">Getting good results</a><a class="toc-3" href="#try-it-in-game-without-an-llm">Try it in-game without an LLM</a><a class="toc-3" href="#what-the-model-should-not-do">What the model should not do</a></nav>
