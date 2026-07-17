@@ -818,6 +818,28 @@ count=1)` · `armor_item(slot)` · `equip_armor(from_slot, armor_slot)` · `scre
 id update in place, different ids stack (max 20 lines / 256 chars, `§` colour codes work, cleared
 when the script stops). `hud_remove(id="hud")` · `hud_clear()`.
 
+### Drawing overlays
+
+Draw in the world the way Talos' own highlights do (wireframes rendered in-client, visible only to
+you):
+
+- `draw_box(a, b=None, color="green", seconds=10, id=None)` — outline a box; `draw_box(pos)` alone
+  outlines that single block cell. Positions are `Pos` objects or `(x, y, z)` tuples.
+- `draw_line(a, b, color="green", seconds=10, id=None)` — a world-space line segment (paths, links,
+  debug rays).
+- `draw_clear(id=None)` — remove one overlay, or all of this script's overlays.
+
+`color` is `"#RRGGBB"`, an int, or a name (`green red yellow blue white orange purple aqua pink
+black`). Re-drawing with the same `id` replaces the shape in place — that's how you animate (e.g.
+a line from your feet to a moving target every few ticks). Limits: max 512 live overlays per
+script, lifetime capped at 1 hour, and everything is cleared automatically when the script stops.
+
+```python
+ore = talos.find_block("diamond_ore", radius=64)
+talos.draw_box(ore, color="aqua", seconds=30)
+talos.draw_line(talos.player_feet(), ore, color="yellow", seconds=30, id="path")
+```
+
 ### Humanization & timing
 
 `wait(a, b=None)` / `wait_between(a, b)` (right-skewed random pause) · `set_profile(name)` (aim/timing
