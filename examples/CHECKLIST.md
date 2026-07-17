@@ -23,6 +23,7 @@ It prints `PASS`/`FAIL` for each item and a `N/N passed` summary on the HUD:
 | 4 | intensity set/get, `tune()`, clamping (9999 → ≤360), unknown-knob error, reset | humanisation tuning |
 | 5 | `debug_mode` toggle + debug line visible | logging switch |
 | 6 | sim steps ~20/s, pause stops it, 5 errors auto-pause (breaker), seeded rng | `talos.sim` |
+| 7 | `draw_box`/`draw_line` render (aqua box gone, yellow line stays at your feet), bad color rejected | drawing overlays |
 
 First terminal run may ask for `/talos bridge allow` in-game — run it once.
 
