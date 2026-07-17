@@ -73,19 +73,19 @@ the <strong>Claude skill</strong> into <code>~/.claude/skills/talos/</code> — 
 <div class="os-tab-buttons" role="tablist"><button type="button" data-os="macos" selected>macOS</button><button type="button" data-os="linux">Linux</button><button type="button" data-os="windows">Windows</button></div>
 <div class="os-tab-panel" data-os="macos"><pre><code>mkdir -p ~/.talos/bin ~/.claude/skills/talos
 curl -fsSL -o ~/.talos/bin/talos \
-  &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli&quot;
+  &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.2.0/talos-cli&quot;
 chmod +x ~/.talos/bin/talos
 curl -fsSL -o ~/.claude/skills/talos/SKILL.md \
   &quot;https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md&quot;</code></pre></div>
 <div class="os-tab-panel" data-os="linux" hidden><pre><code>mkdir -p ~/.talos/bin ~/.claude/skills/talos
 curl -fsSL -o ~/.talos/bin/talos \
-  &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli&quot;
+  &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.2.0/talos-cli&quot;
 chmod +x ~/.talos/bin/talos
 curl -fsSL -o ~/.claude/skills/talos/SKILL.md \
   &quot;https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md&quot;</code></pre></div>
 <div class="os-tab-panel" data-os="windows" hidden><pre><code># PowerShell
 New-Item -ItemType Directory -Force &quot;$env:USERPROFILE\.talos\bin&quot;, &quot;$env:USERPROFILE\.claude\skills\talos&quot; | Out-Null
-Invoke-WebRequest &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli&quot; -OutFile &quot;$env:USERPROFILE\.talos\bin\talos&quot;
+Invoke-WebRequest &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.2.0/talos-cli&quot; -OutFile &quot;$env:USERPROFILE\.talos\bin\talos&quot;
 Invoke-WebRequest &quot;https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md&quot; -OutFile &quot;$env:USERPROFILE\.claude\skills\talos\SKILL.md&quot;</code></pre></div>
 </div>
 

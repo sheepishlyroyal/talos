@@ -73,9 +73,9 @@ Prebuilt jars for all three Minecraft versions ship on the
 
 | Minecraft | Jar | Status |
 |---|---|---|
-| 1.21.11 | `talos-mod-1.1.0-mc1.21.11.jar` | **Stable** — primary development target, playtested |
-| 26.1 | `talos-mod-1.1.0-mc26.1.jar` | Experimental — full port, compile- and content-verified; less playtime |
-| 26.2 | `talos-mod-1.1.0-mc26.2.jar` | Experimental — full port, compile- and content-verified; less playtime |
+| 1.21.11 | `talos-mod-1.2.0-mc1.21.11.jar` | **Stable** — primary development target, playtested |
+| 26.1 | `talos-mod-1.2.0-mc26.1.jar` | Experimental — full port, compile- and content-verified; less playtime |
+| 26.2 | `talos-mod-1.2.0-mc26.2.jar` | Experimental — full port, compile- and content-verified; less playtime |
 
 Drop the matching jar into your Fabric `mods/` folder next to a matching Fabric API build, then launch.
 Or build from source (below).

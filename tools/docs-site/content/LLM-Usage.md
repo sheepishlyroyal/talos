@@ -27,21 +27,21 @@ the **Claude skill** into `~/.claude/skills/talos/` — the complete LLM + CLI w
 @macos
 mkdir -p ~/.talos/bin ~/.claude/skills/talos
 curl -fsSL -o ~/.talos/bin/talos \
-  "https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli"
+  "https://github.com/sheepishlyroyal/talos/releases/download/v1.2.0/talos-cli"
 chmod +x ~/.talos/bin/talos
 curl -fsSL -o ~/.claude/skills/talos/SKILL.md \
   "https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md"
 @linux
 mkdir -p ~/.talos/bin ~/.claude/skills/talos
 curl -fsSL -o ~/.talos/bin/talos \
-  "https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli"
+  "https://github.com/sheepishlyroyal/talos/releases/download/v1.2.0/talos-cli"
 chmod +x ~/.talos/bin/talos
 curl -fsSL -o ~/.claude/skills/talos/SKILL.md \
   "https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md"
 @windows
 # PowerShell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.talos\bin", "$env:USERPROFILE\.claude\skills\talos" | Out-Null
-Invoke-WebRequest "https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli" -OutFile "$env:USERPROFILE\.talos\bin\talos"
+Invoke-WebRequest "https://github.com/sheepishlyroyal/talos/releases/download/v1.2.0/talos-cli" -OutFile "$env:USERPROFILE\.talos\bin\talos"
 Invoke-WebRequest "https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md" -OutFile "$env:USERPROFILE\.claude\skills\talos\SKILL.md"
 :::
 
