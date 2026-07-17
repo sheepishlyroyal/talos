@@ -26,6 +26,7 @@ public final class TalosClientMod implements ClientModInitializer {
         TalosConfig config = TalosConfigManager.load();
         TalosConfigManager.setThemeMode(config.themeMode);
         TalosConfigManager.setActiveProfile(config.activeProfile);
+        TalosConfigManager.applyHumanTuning();
         // follow-up: wire live UI toggles (theme switcher, profile picker) to call
         // TalosConfigManager.setThemeMode/setActiveProfile so in-app changes persist.
 

@@ -11,6 +11,51 @@ import org.graalvm.polyglot.PolyglotException;
 import org.junit.jupiter.api.Test;
 
 final class GraalPySpikeTest {
+    /**
+     * Proves the pure-Python stdlib (random, math, json, collections, heapq,
+     * itertools, re, dataclasses) imports and works under the exact restriction
+     * flags ScriptEngine uses in production — `import random` is a supported,
+     * documented part of the scripting surface.
+     */
+    @Test
+    void stdlibImportsWorkUnderProductionSandboxFlags() {
+        Thread.currentThread().setContextClassLoader(GraalPySpike.class.getClassLoader());
+        try (Context context = Context.newBuilder("python")
+                .allowHostAccess(HostAccess.EXPLICIT)
+                .allowHostClassLookup(className -> false)
+                .allowIO(org.graalvm.polyglot.io.IOAccess.NONE)
+                .allowNativeAccess(false)
+                .allowCreateProcess(false)
+                .allowCreateThread(false)
+                .allowEnvironmentAccess(org.graalvm.polyglot.EnvironmentAccess.NONE)
+                .allowPolyglotAccess(org.graalvm.polyglot.PolyglotAccess.NONE)
+                .build()) {
+            int n = context.eval("python", """
+                    import random
+                    random.seed(42)
+                    random.randint(1, 10)
+                    """).asInt();
+            assertTrue(n >= 1 && n <= 10, "random.randint out of range: " + n);
+
+            String combined = context.eval("python", """
+                    import math, json, heapq, itertools, re, collections, dataclasses, time
+                    heap = [5, 1, 3]
+                    heapq.heapify(heap)
+                    counted = collections.Counter("aab")
+                    pairs = list(itertools.pairwise("abc"))
+                    match = re.match(r"t(al)os", "talos").group(1)
+                    json.dumps({
+                        "min": heap[0],
+                        "a": counted["a"],
+                        "pairs": len(pairs),
+                        "re": match,
+                        "cos0": math.cos(0.0),
+                    }, sort_keys=True, separators=(",", ":"))
+                    """).asString();
+            assertEquals("{\"a\":2,\"cos0\":1.0,\"min\":1,\"pairs\":2,\"re\":\"al\"}", combined);
+        }
+    }
+
     @Test
     void provesClassloadingSandboxMarshallingStdlibAndStartup() throws Exception {
         ExecutorService game = namedExecutor("game-thread");

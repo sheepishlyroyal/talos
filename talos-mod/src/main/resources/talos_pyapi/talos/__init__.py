@@ -17,7 +17,9 @@ from .actions import (goto, goto_near, goto_xz, goto_block, killprocess, kill_pr
 from .engine import (on_start, on_tick, task, every, start, run, cancel_all, sleep, ticks,
                      next_tick, tick_count, aio, TaskHandle, command, state)
 from .events import on
-from .humanize import wait, wait_between, set_profile, set_seed, human, fatigue, on_break
+from .humanize import (wait, wait_between, set_profile, set_seed, human, fatigue, on_break,
+                       intensity, tune, human_knobs, reset_tuning)
+from . import sim
 
 import base64 as _base64
 import marshal as _marshal
@@ -221,6 +223,7 @@ __all__ = ["args", "require",
            "Pos", "Entity", "Player", "Hit", "log", "debug", "info", "warn", "error", "debug_mode",
            "chat", "run_command",
            "wait", "wait_between", "set_profile", "set_seed", "human", "fatigue", "on_break",
+           "intensity", "tune", "human_knobs", "reset_tuning", "sim",
            "on", "parallel", "spawn", "command",
            "on_start", "on_tick", "task", "every", "start", "run", "cancel_all",
            "sleep", "ticks", "next_tick", "tick_count", "aio", "TaskHandle", "state",

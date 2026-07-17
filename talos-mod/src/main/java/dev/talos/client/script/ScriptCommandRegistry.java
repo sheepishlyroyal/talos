@@ -16,16 +16,24 @@ import java.util.concurrent.ConcurrentHashMap;
  * can never fire into a closed Context.
  */
 public final class ScriptCommandRegistry {
-    private static final Map<String, TalosNativeBridge> COMMANDS = new ConcurrentHashMap<>();
+    private record Entry(TalosNativeBridge owner, java.util.List<java.util.List<String>> suggestions) {}
+
+    private static final Map<String, Entry> COMMANDS = new ConcurrentHashMap<>();
 
     private ScriptCommandRegistry() {}
 
     static void register(String name, TalosNativeBridge owner) {
-        COMMANDS.put(name, owner);
+        register(name, owner, java.util.List.of());
+    }
+
+    /** Registers with per-argument-position tab suggestions (outer list = position). */
+    static void register(String name, TalosNativeBridge owner,
+                         java.util.List<java.util.List<String>> suggestions) {
+        COMMANDS.put(name, new Entry(owner, suggestions));
     }
 
     static void unregisterAll(TalosNativeBridge owner) {
-        COMMANDS.values().removeIf(bridge -> bridge == owner);
+        COMMANDS.values().removeIf(entry -> entry.owner == owner);
     }
 
     /** Whether a running script session currently claims {@code /talos <name>}. */
@@ -38,9 +46,16 @@ public final class ScriptCommandRegistry {
         return java.util.Set.copyOf(COMMANDS.keySet());
     }
 
+    /** Registration-time suggestions for argument position {@code index} (0-based); empty when none. */
+    public static java.util.List<String> suggestionsFor(String name, int index) {
+        Entry entry = COMMANDS.get(name);
+        if (entry == null || index < 0 || index >= entry.suggestions.size()) return java.util.List.of();
+        return entry.suggestions.get(index);
+    }
+
     /** Queues one invocation onto the owning session; false when no live handler exists. */
     public static boolean dispatch(String name, String rawArgs) {
-        TalosNativeBridge owner = COMMANDS.get(name);
-        return owner != null && owner.enqueueCommand(name, rawArgs);
+        Entry entry = COMMANDS.get(name);
+        return entry != null && entry.owner.enqueueCommand(name, rawArgs);
     }
 }

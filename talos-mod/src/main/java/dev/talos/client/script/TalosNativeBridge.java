@@ -810,6 +810,52 @@ public final class TalosNativeBridge {
     @HostAccess.Export public boolean humanOnBreak() {
         return await(game.submit(() -> TalosClient.humanizer().sessionArc().onBreak()));
     }
+    @HostAccess.Export public void setHumanIntensity(double value) {
+        await(game.submit(() -> { dev.talos.client.config.TalosConfigManager.setHumanIntensity(value); return null; }));
+    }
+    @HostAccess.Export public double humanIntensity() {
+        return await(game.submit(() -> TalosClient.humanizer().overrides().intensity()));
+    }
+    @HostAccess.Export public void setHumanKnob(String name, double value) {
+        await(game.submit(() -> { dev.talos.client.config.TalosConfigManager.setHumanKnob(name, value); return null; }));
+    }
+    @HostAccess.Export public void setHumanFamilies(String csv) {
+        await(game.submit(() -> { dev.talos.client.config.TalosConfigManager.setHumanFamilies(csv); return null; }));
+    }
+    @HostAccess.Export public void resetHumanKnobs() {
+        await(game.submit(() -> { dev.talos.client.config.TalosConfigManager.resetHumanTuning(); return null; }));
+    }
+    /** JSON snapshot of the current tuning + effective profile (fixed keys, numeric values). */
+    @HostAccess.Export public String humanKnobs() {
+        return await(game.submit(() -> {
+            var humanizer = TalosClient.humanizer();
+            var overrides = humanizer.overrides();
+            var profile = humanizer.baseProfile();
+            StringBuilder sb = new StringBuilder(256);
+            sb.append("{\"profile\":\"").append(profile.name()).append("\",\"intensity\":")
+                    .append(overrides.intensity()).append(",\"human_mode\":").append(humanizer.humanMode())
+                    .append(",\"families\":\"").append(overrides.familiesCsv()).append("\",\"overrides\":{");
+            boolean first = true;
+            for (var entry : overrides.snapshot().entrySet()) {
+                if (!first) sb.append(',');
+                first = false;
+                sb.append('"').append(entry.getKey()).append("\":").append(entry.getValue());
+            }
+            sb.append("},\"effective\":{\"reaction_median_ms\":").append(profile.reactionMedianMs())
+                    .append(",\"reaction_sigma\":").append(profile.reactionSigma())
+                    .append(",\"rotation_speed_min\":").append(profile.rotationSpeedDegPerTick().min())
+                    .append(",\"rotation_speed_max\":").append(profile.rotationSpeedDegPerTick().max())
+                    .append(",\"max_accel\":").append(profile.maxAngularAccelDegPerTick2())
+                    .append(",\"overshoot_prob\":").append(profile.overshootProbability())
+                    .append(",\"overshoot_min\":").append(profile.overshootMagnitudeDeg().min())
+                    .append(",\"overshoot_max\":").append(profile.overshootMagnitudeDeg().max())
+                    .append(",\"jitter_phi\":").append(profile.timingJitterPhi())
+                    .append(",\"path_deviation\":").append(profile.pathDeviationStdev())
+                    .append(",\"visibility_check\":").append(profile.alwaysVisibilityChecked())
+                    .append("}}");
+            return sb.toString();
+        }));
+    }
     @HostAccess.Export public void setSeed(long seed) { checkValid(); random = new Random(seed); }
     @HostAccess.Export public double randomBetween(double a, double b) {
         checkValid();
@@ -848,6 +894,34 @@ public final class TalosNativeBridge {
         if (name == null || !name.matches("[A-Za-z0-9_-]+"))
             throw new IllegalArgumentException("Command names must match [A-Za-z0-9_-]+");
         ScriptCommandRegistry.register(name, this);
+    }
+
+    /**
+     * Like {@link #registerCommand(String)} plus tab-completion suggestions. The spec is
+     * newline-separated argument positions, each a tab-separated list of tokens (built by
+     * talos.command's suggest= parameter). Stored host-side so Brigadier suggestion
+     * providers never call into Python.
+     */
+    @HostAccess.Export public void registerCommand(String name, String suggestionsSpec) {
+        checkValid();
+        if (name == null || !name.matches("[A-Za-z0-9_-]+"))
+            throw new IllegalArgumentException("Command names must match [A-Za-z0-9_-]+");
+        java.util.List<java.util.List<String>> suggestions = new java.util.ArrayList<>();
+        if (suggestionsSpec != null && !suggestionsSpec.isEmpty()) {
+            for (String position : suggestionsSpec.split("\n", -1)) {
+                java.util.List<String> options = new java.util.ArrayList<>();
+                for (String option : position.split("\t")) {
+                    String token = option.trim();
+                    if (token.isEmpty()) continue;
+                    if (token.chars().anyMatch(Character::isWhitespace))
+                        throw new IllegalArgumentException(
+                                "Suggestion tokens must not contain whitespace: '" + token + "'");
+                    options.add(token);
+                }
+                suggestions.add(java.util.List.copyOf(options));
+            }
+        }
+        ScriptCommandRegistry.register(name, this, java.util.List.copyOf(suggestions));
     }
 
     /** Drops every command this session registered (Python calls this on each fresh run). */
