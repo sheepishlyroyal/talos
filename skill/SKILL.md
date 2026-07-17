@@ -233,6 +233,7 @@ stdlib only, no pip).
 ```bash
 talos harvest.py wheat 64          # push local file + run; args → talos.args (as strings)
 talos py -c 'talos.log("hi")'      # one-liner (trailing expression echoes repr)
+talos run 'import talos;talos.log("hi")'  # inline code: any arg that isn't a filename
 talos stop | status | logs -f      # hard-stop · bridge state · follow the session log
 ```
 
