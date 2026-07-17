@@ -31,7 +31,9 @@ public final class TalosWebSocketServer extends WebSocketServer {
     private final BridgeAuth auth;
     private final Set<WebSocket> authenticated = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<WebSocket, Set<String>> pushed = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<WebSocket, String> pendingRuns = new ConcurrentHashMap<>();
+    private record PendingRun(String name, java.util.List<String> args) {}
+    private final ConcurrentHashMap<WebSocket, PendingRun> pendingRuns = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<WebSocket, String> pendingEvals = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<WebSocket, CompletableFuture<Void>> activeRuns = new ConcurrentHashMap<>();
     // Armed either by /talos bridge allow (which persists the choice) or automatically on
     // startup when a previous session already allowed it. The transport is always guarded
@@ -103,7 +105,9 @@ public final class TalosWebSocketServer extends WebSocketServer {
         } else if (message instanceof BridgeProtocol.PushScript request) {
             acceptPush(connection, request);
         } else if (message instanceof BridgeProtocol.Run request) {
-            acceptRun(connection, request.name());
+            acceptRun(connection, request.name(), request.args() == null ? java.util.List.of() : request.args());
+        } else if (message instanceof BridgeProtocol.Eval request) {
+            acceptEval(connection, request.code());
         } else if (message instanceof BridgeProtocol.Stop) {
             stopRun(connection);
         }
@@ -127,11 +131,11 @@ public final class TalosWebSocketServer extends WebSocketServer {
             if (!file.getParent().equals(scripts)) throw new IOException("Script path escapes scripts directory");
             Files.writeString(file, request.source(), StandardCharsets.UTF_8);
             pushed.computeIfAbsent(connection, ignored -> ConcurrentHashMap.newKeySet()).add(request.name());
-            LOGGER.info("Accepted VS Code script push: {}", request.name());
-            chat("Talos accepted script from VS Code: " + request.name());
+            LOGGER.info("Accepted bridge script push: {}", request.name());
+            chat("Talos accepted script over the bridge: " + request.name());
             if (!sessionAllowed && !confirmationRequested) {
                 confirmationRequested = true;
-                chat("VS Code wants to run " + request.name() + " — /talos bridge allow to accept");
+                chat("A bridge client wants to run " + request.name() + " — /talos bridge allow to accept");
             }
         } catch (IOException error) {
             LOGGER.warn("Could not save pushed script {}", request.name(), error);
@@ -139,27 +143,53 @@ public final class TalosWebSocketServer extends WebSocketServer {
         }
     }
 
-    private void acceptRun(WebSocket connection, String name) {
+    private void acceptRun(WebSocket connection, String name, java.util.List<String> args) {
         if (!validName(name) || !pushed.getOrDefault(connection, Set.of()).contains(name)) {
             send(connection, BridgeProtocol.done(false, "Script was not pushed on this connection"));
             return;
         }
         if (!sessionAllowed) {
-            pendingRuns.put(connection, name);
+            pendingRuns.put(connection, new PendingRun(name, args));
             send(connection, BridgeProtocol.log("warn", "Waiting for /talos bridge allow in Minecraft"));
             return;
         }
-        runScript(connection, name);
+        runScript(connection, name, args);
     }
 
-    private void runScript(WebSocket connection, String name) {
+    private void acceptEval(WebSocket connection, String code) {
+        if (code == null || code.isBlank()) {
+            send(connection, BridgeProtocol.done(false, "Empty eval code"));
+            return;
+        }
+        if (!sessionAllowed) {
+            pendingEvals.put(connection, code);
+            send(connection, BridgeProtocol.log("warn", "Waiting for /talos bridge allow in Minecraft"));
+            if (!confirmationRequested) {
+                confirmationRequested = true;
+                chat("A terminal wants to run Python — /talos bridge allow to accept");
+            }
+            return;
+        }
+        runEval(connection, code);
+    }
+
+    private void runScript(WebSocket connection, String name, java.util.List<String> args) {
+        launch(connection, sink -> ScriptEngine.instance().run(name, args, sink));
+    }
+
+    private void runEval(WebSocket connection, String code) {
+        launch(connection, sink -> ScriptEngine.instance().evalSnippet(code, sink));
+    }
+
+    private void launch(WebSocket connection,
+            java.util.function.Function<ScriptEngine.LogSink, CompletableFuture<Void>> starter) {
         if (activeRuns.containsKey(connection)) {
             send(connection, BridgeProtocol.done(false, "A script is already running"));
             return;
         }
         send(connection, BridgeProtocol.status("running"));
-        CompletableFuture<Void> future = ScriptEngine.instance().run(name,
-                (level, text) -> send(connection, BridgeProtocol.log(level, text)));
+        CompletableFuture<Void> future =
+                starter.apply((level, text) -> send(connection, BridgeProtocol.log(level, text)));
         activeRuns.put(connection, future);
         future.whenComplete((ignored, error) -> {
             if (!activeRuns.remove(connection, future)) return;
@@ -170,6 +200,7 @@ public final class TalosWebSocketServer extends WebSocketServer {
 
     private void stopRun(WebSocket connection) {
         pendingRuns.remove(connection);
+        pendingEvals.remove(connection);
         CompletableFuture<Void> active = activeRuns.remove(connection);
         ScriptEngine.instance().stop();
         send(connection, BridgeProtocol.status("stopped"));
@@ -182,8 +213,13 @@ public final class TalosWebSocketServer extends WebSocketServer {
         confirmationRequested = false;
         dev.talos.client.config.TalosConfigManager.setBridgeAutoAccept(true);
         chat("Talos VS Code bridge allowed (saved for future sessions)");
-        pendingRuns.forEach((connection, name) -> {
-            if (pendingRuns.remove(connection, name) && authenticated.contains(connection)) runScript(connection, name);
+        pendingRuns.forEach((connection, pending) -> {
+            if (pendingRuns.remove(connection, pending) && authenticated.contains(connection))
+                runScript(connection, pending.name(), pending.args());
+        });
+        pendingEvals.forEach((connection, code) -> {
+            if (pendingEvals.remove(connection, code) && authenticated.contains(connection))
+                runEval(connection, code);
         });
         return 1;
     }
@@ -224,6 +260,7 @@ public final class TalosWebSocketServer extends WebSocketServer {
         authenticated.remove(connection);
         pushed.remove(connection);
         pendingRuns.remove(connection);
+        pendingEvals.remove(connection);
         activeRuns.remove(connection);
     }
 

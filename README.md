@@ -642,6 +642,45 @@ unavailable — the API is a hardened capability surface, not full CPython.
 | `talos.debug_mode(enabled=None)` | Query (no arg) or toggle the same master switch as `/talos debug`. |
 | `talos.state` | A persistent dict (`state["key"] = …`) saved per-script across runs. |
 
+#### Libraries — reusable modules with `talos.require`
+
+Any `.py` file in `.minecraft/talos/scripts/` can be used as a library by other scripts — there is
+no pip and no `import` of anything except `talos`, so `talos.require` **is** the module system:
+
+```python
+# talos/scripts/mininglib.py — a library is just a script that defines things
+import talos
+
+def vein(block_id, radius=32):
+    """Mine every reachable block of this type nearby; returns count mined."""
+    mined = 0
+    while (pos := talos.find_block(block_id, radius)) is not None:
+        talos.goto_near(pos.x, pos.y, pos.z, 4)
+        talos.break_block(pos)
+        mined += 1
+        talos.wait_between(0.2, 0.6)
+    return mined
+```
+
+```python
+# talos/scripts/diamonds.py — the consumer
+import talos
+lib = talos.require("mininglib")          # ".py" optional
+talos.log(f"mined {lib.vein('diamond_ore')} diamonds")
+```
+
+Rules:
+
+- `require("name")` loads `talos/scripts/name.py` **only** — no paths, no traversal, no packages.
+- CPython import semantics: cached after the first load (repeat `require`s return the same module
+  object; cycles get the partially-initialized module), and the cache resets on every script
+  (re)run, so editing a library takes effect on the next run — no restart.
+- Libraries run in the same sandbox and get the same first-run trust summary as scripts.
+- Module-level code in a library executes once at `require` time — keep libraries to `def`s and
+  constants; put behaviour in functions the consumer calls.
+- Test a library standalone from a terminal:
+  `talos py -c 'lib = talos.require("mininglib"); talos.log(lib.vein("stone", 8))'`.
+
 ### Movement & pathing
 
 `goto(x, y=None, z=None)` · `goto_near(x, y, z, range)` · `goto_xz(x, z)` ·
@@ -689,6 +728,32 @@ None` (first block/entity along the look, sub-block precise, entity-aware) ·
 `place_block(x=None, y=None, z=None, block_id=None)` (no coords = place at crosshair) ·
 `place_look()` · `break_block(x, y=None, z=None)` · `mine(...)` (alias of `break_block`) ·
 `mine_looking_at()` · `left_click()` · `right_click()` · `kill_nearest(radius=6.0)`.
+
+### Chat & commands
+
+| Symbol | Description |
+|---|---|
+| `talos.chat(msg)` | Send a chat message to the server. A leading `/` runs it as a command instead. Returns the text sent. |
+| `talos.run_command(cmd)` | Run a command, leading `/` optional. `/talos …` client commands dispatch locally (so scripts can drive Talos itself); anything unhandled is sent to the server as a normal `/command`. |
+
+```python
+talos.chat("selling dirt, 1 diamond per stack")
+talos.chat("/home base")                    # same as run_command("home base")
+talos.run_command("talos human on")         # drive Talos features from Python
+```
+
+Three gotchas, all by design:
+
+- **Your own messages echo back** into the `chat` event — a `chat()` call inside a `chat` handler
+  loops forever unless you guard against your own sender name.
+- While a script is blocked in `talos.input()`, a plain `chat()` message is **consumed as that
+  input answer** (it stays local and never reaches the server).
+- Automated chat/commands are indistinguishable from typed ones to the server. Rate-limit yourself
+  (`talos.wait_between(...)`) — servers kick or mute chat spam, and `talos.run_command` is *not*
+  routed through the humanizer.
+
+Not to be confused with `@talos.command("name")`, which **registers** a new `/talos name`
+subcommand handled by your script.
 
 ### Aim & look
 
@@ -857,7 +922,8 @@ stubs.
 
 **Features:** *Run Script in Minecraft* (Cmd/Ctrl+Alt+Enter), *Stop Script*, *Reconnect*, run-on-save
 live reload, status-bar connection indicator, clickable Python tracebacks (jump to
-`your/script.py:line`, including `require`'d libs).
+`your/script.py:line`, including `require`'d libs), and auto-installs the [`talos` terminal
+CLI](#terminal-control--the-talos-cli) to `~/.talos/bin` on activation.
 
 ### Compatible editors
 
@@ -896,6 +962,60 @@ succeeds**, and **never auto-replays** a script on reconnect. **Don't run untrus
 
 ---
 
+## Terminal control — the `talos` CLI
+
+`cli/talos` is a dependency-free Python 3 command that drives the running game from any terminal
+over the same loopback WebSocket bridge the VS Code extension uses. Script output (`print`,
+`talos.log`, tracebacks) streams live back into the terminal.
+
+```bash
+talos harvest.py wheat 64        # push a local file into the game and run it
+talos run harvest.py wheat 64    # same, explicit
+talos py -c 'talos.log("hi")'    # one-liner; a trailing expression echoes its repr
+talos -c 'talos.player_feet()'   # same (py/python/python3 are accepted aliases)
+talos python3 -c 'talos.chat("hello from the shell")'
+talos stop                       # hard-stop the running script
+talos status                     # bridge reachability + run state
+talos logs -f                    # follow ~/.talos/logs/session-<newest>.log
+```
+
+### Install
+
+- **Automatic (recommended):** the VS Code extension bundles the CLI and installs it to
+  `~/.talos/bin/talos` every time it activates (command palette: *Talos: Install Terminal CLI* to
+  re-run it loudly). Add it to your PATH once:
+  `export PATH="$HOME/.talos/bin:$PATH"` in `~/.zshrc`/`~/.bashrc`
+  (Windows: the extension also writes `talos.cmd`; add `%USERPROFILE%\.talos\bin` to PATH).
+- **Manual (no VS Code):** copy [`cli/talos`](cli/talos) from this repo anywhere on your PATH and
+  `chmod +x` it. Python 3.8+ is the only requirement — no pip packages.
+
+### How arguments must be written
+
+- Everything **after the script filename** is an argument: `talos farm.py wheat 64 --fast` →
+  `talos.args == ["wheat", "64", "--fast"]`. Nothing after the filename is interpreted by the CLI —
+  `--fast` there belongs to your script, not to `talos`.
+- CLI options (`--port N`, `--token FILE`, `--no-color`) must come **before** the script filename.
+- Args always arrive as **strings** — convert yourself: `count = int(talos.args[1])`.
+- An argument containing spaces needs shell quoting: `talos greet.py "hello world"` arrives as one
+  arg. (In-game `/talos script run greet hello world` is whitespace-split only — spaces inside an
+  arg are impossible there; the CLI is the way to pass them.)
+- Script filenames may only use letters, digits, `_`, `.`, `-`, and must end in `.py` — the file is
+  pushed under its basename into `.minecraft/talos/scripts/`, overwriting any script of that name.
+
+### Behaviour & exit codes
+
+- The first terminal run needs a one-time `/talos bridge allow` in-game (persisted afterwards); the
+  CLI prints the prompt and waits, then runs automatically once you allow it.
+- `Ctrl-C` sends a hard-stop to the game before exiting — a runaway loop dies with the CLI.
+- Exit codes: `0` script succeeded · `1` script raised/failed · `2` usage error · `3` bridge
+  unreachable or auth failed. That makes shell scripting and CI-style checks possible:
+  `talos selftest.py && echo PASS`.
+- `talos logs [-f]` reads the newest `~/.talos/logs/session-*.log` directly (works even with the
+  game closed); everything a run prints also lands there, so the terminal, chat, VS Code, and the
+  log file all see the same stream.
+
+---
+
 ## In-game editor
 
 `/talos script editor` opens an in-game Python editor screen (`PythonEditorScreen`) for writing and
@@ -909,7 +1029,8 @@ running scripts without leaving the game.
 |---|---|
 | `~/.talos/rules.json` | Persisted event rules and schedules. |
 | `~/.talos/macros/` | Recorded input macros (JSON, per-tick frames). |
-| `~/.talos/token` | Per-session VS Code bridge auth token (regenerated every launch). |
+| `~/.talos/token` | Per-session bridge auth token (VS Code + `talos` CLI; regenerated every launch). |
+| `~/.talos/bin/` | The `talos` terminal CLI (auto-installed by the VS Code extension). |
 | `~/.talos/logs/` | Per-session detailed log files (`session-<timestamp>.log`, newest 10 kept). |
 | `.minecraft/talos/scripts/` | Python scripts run by `/talos script run` (and `require`'d libs). |
 
@@ -928,6 +1049,133 @@ running scripts without leaving the game.
   the chat/entity_hurt events, `require`/`args`, clickable tracebacks) haven't all been exercised
   against a live server yet. Expect rough edges in newly landed features before well-worn ones like
   pathing/mining.
+
+---
+
+## Architecture — and how to test each part
+
+Talos is a set of engines behind thin entry points. Every box below names its package under
+`talos-mod/src/main/java/dev/talos/` and the seam you can hook to test it **without touching the
+others**.
+
+```
+ you                          the mod (client only)                        Minecraft
+ ───                          ─────────────────────                        ─────────
+ /talos …  ──────────► client/command/TalosCommands ──┐
+ VS Code / talos CLI ─► client/bridge/ (WebSocket) ───┤
+                          BridgeProtocol JSON v1      ├─► client/script/ScriptEngine
+                                                      │     └ ≤8 Sessions: 1 worker thread
+ .py files ───────────────────────────────────────────┘       + 1 GraalPy Context each
+                                                              │
+                              Python `import talos` (resources/talos_pyapi/)
+                                                              │
+                          client/script/TalosNativeBridge  (default-deny exports)
+                                                              │  every call marshals via
+                          client/script/GameThreadExecutor ◄──┘  submit() → client tick
+                                                              │
+        ┌──────────────┬───────────────┬──────────────┬───────┴──────┬─────────────┐
+  client/pathing   client/action   client/rules   client/humanize  client/scan  client/hud
+  (sim planner,    (break/place/   (206 triggers, (profiles, aim   (block       (overlay)
+   follower)        kill state      /talos on)     arcs, timing)    search)
+                    machines)
+        └──────────────┴───────────────┴── client/log/TalosLog ── ~/.talos/logs/session-*.log
+```
+
+**Key invariants** (these are what your tests should assert):
+
+- The client tick thread **never enters Python**; scripts run on session worker threads and reach
+  the game only through `GameThreadExecutor.submit(...)` (bounded queue, drained each tick).
+- Every script run/eval takes an injectable **`LogSink`** (`ScriptEngine.LogSink` —
+  `void log(String level, String text)`), so all output is capturable: chat is just the default
+  sink, the bridge substitutes a WebSocket sink, the CLI sees the same stream in a terminal.
+- `/talos script stop` (or bridge `stop`, or CLI Ctrl-C) must unblock **any** stuck call — sessions
+  invalidate their native bridge, cancel in-flight game-thread futures, and hard-close the GraalPy
+  context.
+- The bridge speaks versioned JSON (`vscode-extension/PROTOCOL.md`); loopback-only, token-gated,
+  nothing before `auth_ok`.
+
+### Testing seams — how to check that a part works
+
+| Layer | Seam | How to test it |
+|---|---|---|
+| Wire protocol | Plain JSON over a WebSocket | Run a mock server/client — no Minecraft needed. The CLI was validated exactly this way: a ~80-line stdlib mock bridge asserting `push_script`/`run`/`eval` shapes and replaying `log`/`script_done`. |
+| Script engine + API | `talos` CLI exit codes | `talos selftest.py && echo PASS` — `0` success, `1` script raised, `3` bridge down. Scriptable from CI or a shell loop. |
+| Python API surface | An in-game self-test script | See below — a check-runner that exercises each subsystem and fails the run (exit `1`) if any check fails. |
+| Log pipeline | `~/.talos/logs/session-*.log` | Every level-tagged line lands in the file; `talos logs` reads it with the game closed. Assert on file contents. |
+| Engine internals | `/talos debug on` trace | Pathing/movement/rules/actions/script categories narrate decisions to chat + file — grep the session log for `[pathing]` etc. |
+| Humanizer | `talos.set_seed(n)` | Seeded runs are deterministic — replay a seed and compare traces. |
+| Rules engine | `/talos get <trigger>` | Every rule trigger is also a getter — read the value a rule would see, instantly, without firing it. |
+
+### Bug-hunting workflow — when something misbehaves
+
+1. **Turn the narration on:** `/talos debug on` (or `talos.debug_mode(True)`, or from a shell
+   `talos py -c 'talos.debug_mode(True)'`). The engine now explains its decisions live —
+   pathing plans/replans/stalls, rule fires with resolved values, action state transitions,
+   script lifecycle — to chat *and* the session log.
+2. **Watch from a terminal while you play:** `talos logs -f` follows
+   `~/.talos/logs/session-<newest>.log`. Every line is `HH:mm:ss.SSS [LEVEL] [category] message`,
+   so `talos logs | grep '\[pathing\]'` isolates one subsystem after the fact.
+3. **Probe state interactively:** `talos py -c '<expr>'` echoes the repr of any getter without
+   writing a script — e.g. `talos py -c 'talos.get("server_tps")'`,
+   `talos py -c 'talos.raytrace(16)'`. In-game, `/talos get <name>` reads the exact value a rule
+   trigger would see.
+4. **Instrument your script:** sprinkle `talos.debug(...)` freely — the lines are invisible (chat
+   *and* file) until debug mode is on, so they can stay in production scripts.
+5. **Reduce, then bisect:** shrink the repro into a snippet you can rerun cheaply from the shell
+   (`talos repro.py`; exit code `1` = still broken) — the run-on-save loop in VS Code or a
+   `while ! talos repro.py; do ...` shell loop makes iteration fast.
+6. **Check dispatch cost:** `/talos script profile` toggles per-event dispatch profiling when a
+   handler feels slow.
+7. **When reporting a bug**, attach the session log file — it contains the full timestamped
+   transcript of both your script's output and the engine trace.
+
+### A self-test script you can extend
+
+Drop this in `.minecraft/talos/scripts/selftest.py` (or run `talos selftest.py` from a terminal —
+non-zero exit means a check failed). Add a `@check(...)` per feature you care about:
+
+```python
+import talos
+
+CHECKS = []
+def check(name):
+    def wrap(fn):
+        CHECKS.append((name, fn))
+        return fn
+    return wrap
+
+@check("player position readable")
+def _(): assert talos.player_feet() is not None
+
+@check("world block lookup")
+def _():
+    feet = talos.player_feet()
+    assert ":" in talos.block_at(feet.x, feet.y - 1, feet.z)
+
+@check("observable catalog")
+def _(): assert talos.get("health") > 0
+
+@check("raytrace does not raise")
+def _(): talos.raytrace(8.0)          # None (no hit) is fine
+
+@check("inventory snapshot")
+def _(): assert isinstance(list(talos.inventory()), list)
+
+@check("logging pipeline")
+def _(): assert talos.log("selftest ping") == "selftest ping"
+
+failed = 0
+for name, fn in CHECKS:
+    try:
+        fn()
+        talos.info("PASS " + name)
+    except Exception as error:
+        failed += 1
+        talos.error("FAIL " + name + ": " + repr(error))
+talos.log(f"{len(CHECKS) - failed}/{len(CHECKS)} checks passed")
+if failed:
+    raise RuntimeError(f"{failed} check(s) failed")   # → exit code 1 in the CLI
+```
 
 ---
 

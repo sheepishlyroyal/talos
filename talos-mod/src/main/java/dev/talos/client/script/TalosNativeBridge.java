@@ -748,6 +748,28 @@ public final class TalosNativeBridge {
                     client.world.getBlockState(new BlockPos(x, y, z)).getBlock()).toString();
         }));
     }
+    /** Sends a plain chat message to the server (never a command — see sendCommand). */
+    @HostAccess.Export public void sendChat(String message) {
+        if (message == null || message.isBlank()) throw new IllegalArgumentException("Empty chat message");
+        String text = message;
+        TalosLog.trace("script", "chat send: " + text);
+        await(game.submit(() -> {
+            MinecraftClient client = requireWorld();
+            client.player.networkHandler.sendChatMessage(text);
+            return null;
+        }));
+    }
+    /** Runs a command: /talos client commands dispatch locally, anything else goes to the server. */
+    @HostAccess.Export public void sendCommand(String command) {
+        if (command == null || command.isBlank()) throw new IllegalArgumentException("Empty command");
+        String text = command;
+        TalosLog.trace("script", "command run: " + text);
+        await(game.submit(() -> {
+            requireWorld();
+            dev.talos.client.rules.EventRuleEngine.runCommand(text);
+            return null;
+        }));
+    }
     @HostAccess.Export public void log(String message) { logLevel(message, "info"); }
     @HostAccess.Export public void logLevel(String message, String level) {
         TalosLog.Level parsed;

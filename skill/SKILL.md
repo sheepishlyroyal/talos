@@ -150,6 +150,13 @@ bool.
 **Aim & look** — `look(yaw,pitch)` · `look_at(x,y=None,z=None)` · `look_angle()` → `(yaw,pitch)` ·
 `looking_at()` → `Pos|None` · `angle_to(x,y=None,z=None)` → `(yaw,pitch)`.
 
+**Chat & commands** — `chat(msg)` sends a chat message to the server (leading `/` runs it as a command) ·
+`run_command(cmd)` runs a command, `/` optional: `/talos …` client commands dispatch locally (scripts can
+drive Talos itself), anything else goes to the server. Both return the text. ⚠️ own messages echo back
+into the `chat` event (guard against loops); during `talos.input()` a plain `chat()` is consumed as that
+input answer; not humanized — rate-limit with `wait_between`. Distinct from `@talos.command(name)`, which
+*registers* a `/talos` subcommand.
+
 **Position & sensing** — `player_pos()` (eye) · `player_feet()` · `block_at(x,y=None,z=None)` → id ·
 `on_edge(margin=0.3)` → bool · `get(name, *args)` → shared catalog (int/float/bool/str).
 
@@ -169,8 +176,17 @@ bool.
 aim + session fatigue) · `fatigue()` → 0–1 · `on_break()` → bool · `sleep(secs)` · `ticks(n)` ·
 `next_tick()` · `tick_count()`.
 
-**Metadata & libs** — `talos.args` → `list[str]` from `/talos script run <name> args…` · `talos.require("lib")`
-imports another `talos/scripts/` file as a module · `talos.state` (persistent per-script dict).
+**Metadata & libs** — `talos.args` → `list[str]` from `/talos script run <name> args…` (CLI: everything
+after the filename; always strings) · `talos.require("lib")` imports another `talos/scripts/` file as a
+module · `talos.state` (persistent per-script dict).
+
+**Libraries (`talos.require`)** — with no pip and no stdlib imports, `require` IS the module system: a
+library is just another `.py` in `talos/scripts/` defining functions (`lib = talos.require("mininglib");
+lib.vein("diamond_ore")`). CPython semantics — cached per run, cycles return the partial module — and the
+cache resets on every (re)run, so edits apply next run. Same sandbox + trust summary as scripts. Keep
+libraries to `def`s/constants (module-level code executes at require time). Only files directly in
+`talos/scripts/` — no paths/packages. Test one standalone:
+`talos py -c 'lib = talos.require("mininglib"); talos.log(lib.vein("stone", 8))'`.
 
 **Logging** — `talos.log(msg, level="info")` writes to the session log file (`~/.talos/logs/`), the mod
 log, and the script console (chat / VS Code) · shorthands `talos.debug(msg)` / `info(msg)` / `warn(msg)` /
@@ -205,6 +221,28 @@ handler runs as a task; overrides built-ins when the name matches) · `talos.run
 `Hit(.type/.id/.pos/.distance)` (`.type` = `"block"`/`"entity"`). Failures raise `TalosError`,
 `PathFailedError`, `OutOfReachError`, `NotFoundError`, `TargetLostError`, `ActionCancelledError`,
 `WorldClosedError`.
+
+## Terminal CLI (`talos` command)
+
+Drives the running game from any shell over the same loopback bridge as VS Code; output streams back
+live and also lands in `~/.talos/logs/`. **Install:** auto-installed to `~/.talos/bin/talos` by the VS
+Code extension on activation (*Talos: Install Terminal CLI* re-runs it) — put `~/.talos/bin` on PATH
+(`export PATH="$HOME/.talos/bin:$PATH"`); or manually copy `cli/talos` from the repo (Python 3.8+,
+stdlib only, no pip).
+
+```bash
+talos harvest.py wheat 64          # push local file + run; args → talos.args (as strings)
+talos py -c 'talos.log("hi")'      # one-liner (trailing expression echoes repr)
+talos stop | status | logs -f      # hard-stop · bridge state · follow the session log
+```
+
+Args: everything after the filename is a script arg (CLI options like `--port` go *before* it);
+always strings (`int(talos.args[0])` yourself); quote spaces in the shell (in-game
+`/talos script run` is whitespace-split and cannot pass spaces). Filenames `[A-Za-z0-9_.-]+\.py`,
+pushed under their basename into `.minecraft/talos/scripts/`. First terminal run needs a one-time
+`/talos bridge allow` in-game (the CLI waits). Exit codes: 0 ok · 1 script failed · 2 usage ·
+3 unreachable/auth — so `talos selftest.py && echo PASS` works as a test harness; Ctrl-C hard-stops
+the in-game script.
 
 ### Canonical patterns
 
@@ -296,5 +334,32 @@ only.
 
 ## Data locations
 
-`~/.talos/rules.json` (rules/schedules) · `~/.talos/macros/` · `~/.talos/token` (VS Code bridge, per-launch)
+`~/.talos/rules.json` (rules/schedules) · `~/.talos/macros/` · `~/.talos/token` (bridge auth for VS Code +
+CLI, per-launch) · `~/.talos/bin/` (the `talos` terminal CLI) · `~/.talos/logs/` (session logs, newest 10)
 · `.minecraft/talos/scripts/` (scripts + `require`d libs).
+
+## Debugging workflow (bug hunting)
+
+1. `/talos debug on` (or `talos py -c 'talos.debug_mode(True)'`) — engine narrates pathing
+   plans/replans/stalls, rule fires, action state transitions, script lifecycle to chat + file.
+2. `talos logs -f` in a terminal follows `~/.talos/logs/session-<newest>.log`
+   (`HH:mm:ss.SSS [LEVEL] [category] msg`; grep `[pathing]`, `[rules]`, `[actions]`, `[script]`).
+3. Probe state without a script: `talos py -c 'talos.get("server_tps")'` · in-game `/talos get <name>`
+   reads exactly what a rule trigger would see.
+4. Sprinkle `talos.debug(...)` in scripts — invisible until debug mode is on, safe to leave in.
+5. Reduce to a repro script and bisect from the shell: `while ! talos repro.py; do …; done` (exit 1 =
+   still broken); VS Code run-on-save for fast iteration.
+6. `/talos script profile` toggles per-event dispatch profiling; attach the session log when reporting.
+
+## Architecture (for testing parts in isolation)
+
+`/talos` commands, the VS Code extension and the `talos` CLI (both via the loopback WebSocket,
+JSON protocol v1 in `vscode-extension/PROTOCOL.md`) all feed **ScriptEngine** (≤8 sessions; one
+worker thread + one GraalPy context each — the client tick thread never enters Python). Python
+reaches the game only through **TalosNativeBridge** exports marshalled onto the client tick via
+**GameThreadExecutor**. Testable seams: every run takes an injectable `LogSink` (chat is just the
+default); the wire protocol is mockable without Minecraft; CLI exit codes make shell/CI checks
+possible (`talos selftest.py && echo PASS`); `talos.set_seed(n)` makes humanized runs
+deterministic; every rule trigger doubles as `/talos get <name>`; `/talos debug on` traces
+pathing/rules/actions/script internals to `~/.talos/logs/session-*.log`. The README's
+"Architecture" section carries a ready-to-extend `selftest.py` check-runner.
