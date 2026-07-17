@@ -174,6 +174,12 @@ input answer; not humanized — rate-limit with `wait_between`. Distinct from `@
 **HUD** — `hud(text, id="hud")` pins a top-left line (same id updates in place; §colour ok; max 20 lines /
 256 chars) · `hud_remove(id="hud")` · `hud_clear()`.
 
+**Drawing overlays** — `draw_box(a, b=None, color="green", seconds=10, id=None)` (one arg = that
+block cell; a/b are Pos or (x,y,z)) · `draw_line(a, b, ...)` · `draw_clear(id=None)`. Client-only
+wireframes like the built-in highlights. color = "#RRGGBB" | int | name (green/red/yellow/blue/
+white/orange/purple/aqua/pink/black). Same id redraws in place (animate that way). Max 512 live
+per script, ≤1h lifetime, auto-cleared on script stop.
+
 **Humanization & timing** — `wait(a, b=None)` / `wait_between(a, b)` (right-skewed pause) ·
 `set_profile("raw"|"natural"|"paranoid")` · `set_seed(seed)` · `human(enabled=None)` (toggle/query eased
 aim + session fatigue) · `fatigue()` → 0–1 · `on_break()` → bool · `sleep(secs)` · `ticks(n)` ·

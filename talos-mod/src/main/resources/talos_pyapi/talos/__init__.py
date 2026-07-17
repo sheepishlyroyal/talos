@@ -13,7 +13,8 @@ from .actions import (goto, goto_near, goto_xz, goto_block, killprocess, kill_pr
                       looking_at, block_at, local, ahead, raytrace, raytrace_if, move_ahead,
                       on_edge, input, inventory, hotbar, selected_slot,
                       count, has, find_slot, container_items, deposit, withdraw, craft,
-                      screen, close_screen, hud, hud_remove, hud_clear, Pos, Entity, Player, Hit)
+                      screen, close_screen, hud, hud_remove, hud_clear,
+                      draw_box, draw_line, draw_clear, Pos, Entity, Player, Hit)
 from .engine import (on_start, on_tick, task, every, start, run, cancel_all, sleep, ticks,
                      next_tick, tick_count, aio, TaskHandle, command, state)
 from .events import on
@@ -220,6 +221,7 @@ __all__ = ["args", "require",
            "on_edge", "input", "inventory", "hotbar", "selected_slot",
            "count", "has", "find_slot", "container_items", "deposit", "withdraw", "craft",
            "screen", "close_screen", "hud", "hud_remove", "hud_clear",
+           "draw_box", "draw_line", "draw_clear",
            "Pos", "Entity", "Player", "Hit", "log", "debug", "info", "warn", "error", "debug_mode",
            "chat", "run_command",
            "wait", "wait_between", "set_profile", "set_seed", "human", "fatigue", "on_break",

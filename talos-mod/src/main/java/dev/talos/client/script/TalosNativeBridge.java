@@ -881,6 +881,78 @@ public final class TalosNativeBridge {
     @HostAccess.Export public void hudRemove(String id) { TalosHud.remove(id); }
     @HostAccess.Export public void hudClear() { TalosHud.clear(); }
 
+    /** Session-scoped keys of every overlay this script drew, for cleanup on invalidate. */
+    private final java.util.Set<String> drawKeys = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final int MAX_SCRIPT_DRAWS = 512;
+
+    private String drawKey(String id) {
+        if (id == null || id.isBlank()) throw new IllegalArgumentException("Draw id must not be empty");
+        return "pydraw:" + System.identityHashCode(this) + ":" + id;
+    }
+
+    private void checkDrawBudget(String key) {
+        if (!drawKeys.contains(key) && drawKeys.size() >= MAX_SCRIPT_DRAWS)
+            throw new IllegalStateException(
+                    "Too many script overlays (max " + MAX_SCRIPT_DRAWS + ") — talos.draw_clear() or reuse ids");
+    }
+
+    private static int drawLife(double seconds) {
+        if (!Double.isFinite(seconds) || seconds <= 0) throw new IllegalArgumentException("seconds must be > 0");
+        return (int) Math.min(72_000, Math.max(1, Math.round(seconds * 20.0)));
+    }
+
+    /** Outlines a world-space box. Same id replaces; expires after {@code seconds}. */
+    @HostAccess.Export public void drawBox(double x1, double y1, double z1,
+                                           double x2, double y2, double z2,
+                                           int colorRgb, double seconds, String id) {
+        checkValid();
+        String key = drawKey(id);
+        checkDrawBudget(key);
+        int life = drawLife(seconds);
+        await(game.submit(() -> {
+            dev.talos.client.render.RenderQueue.add(key,
+                    new net.minecraft.util.math.Box(x1, y1, z1, x2, y2, z2), colorRgb & 0xFFFFFF, life);
+            return null;
+        }));
+        drawKeys.add(key);
+    }
+
+    /** Draws a world-space line segment. Same id replaces; expires after {@code seconds}. */
+    @HostAccess.Export public void drawLine(double x1, double y1, double z1,
+                                            double x2, double y2, double z2,
+                                            int colorRgb, double seconds, String id) {
+        checkValid();
+        String key = drawKey(id);
+        checkDrawBudget(key);
+        int life = drawLife(seconds);
+        await(game.submit(() -> {
+            dev.talos.client.render.RenderQueue.addLine(key,
+                    new net.minecraft.util.math.Vec3d(x1, y1, z1),
+                    new net.minecraft.util.math.Vec3d(x2, y2, z2), colorRgb & 0xFFFFFF, life);
+            return null;
+        }));
+        drawKeys.add(key);
+    }
+
+    /** Removes one overlay by id; safe when the id was never drawn. */
+    @HostAccess.Export public void drawRemove(String id) {
+        checkValid();
+        String key = drawKey(id);
+        dev.talos.client.render.RenderQueue.remove(key);
+        drawKeys.remove(key);
+    }
+
+    /** Removes every overlay this script session drew. */
+    @HostAccess.Export public void drawClear() {
+        checkValid();
+        clearDraws();
+    }
+
+    private void clearDraws() {
+        for (String key : drawKeys) dev.talos.client.render.RenderQueue.remove(key);
+        drawKeys.clear();
+    }
+
     /**
      * Claims {@code /talos <name>} for this session. Only the NAME crosses the boundary:
      * the handler stays in Python (talos.command keeps it), and the client thread merely
@@ -944,6 +1016,7 @@ public final class TalosNativeBridge {
         valid.set(false);
         ScriptCommandRegistry.unregisterAll(this);
         pendingCommands.clear();
+        clearDraws();
         IllegalStateException error = new IllegalStateException("Script session invalidated");
         for (CompletableFuture<?> future : inFlight) future.completeExceptionally(error);
     }

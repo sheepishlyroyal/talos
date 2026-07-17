@@ -690,6 +690,94 @@ def on_edge(margin=0.3):
     fz = feet.z % 1.0
     return min(fx, 1.0 - fx) < margin or min(fz, 1.0 - fz) < margin
 
+_DRAW_COLORS = {
+    "green": 0x3DDC84, "red": 0xFF5541, "yellow": 0xFFDD4B, "blue": 0x4E9EFF,
+    "white": 0xFFFFFF, "orange": 0xFF9F1A, "purple": 0xB565FF, "aqua": 0x2BD9D9,
+    "pink": 0xFF6FB0, "black": 0x111111,
+}
+_draw_counter = [0]
+
+
+def _color_rgb(color):
+    if isinstance(color, int):
+        return color & 0xFFFFFF
+    text = str(color).strip().lower()
+    if text in _DRAW_COLORS:
+        return _DRAW_COLORS[text]
+    text = text.lstrip("#")
+    if len(text) == 6:
+        try:
+            return int(text, 16)
+        except ValueError:
+            pass
+    raise ValueError(f"Unknown color {color!r} — use '#RRGGBB', an int, or one of "
+                     + ", ".join(sorted(_DRAW_COLORS)))
+
+
+def _draw_xyz(value):
+    if hasattr(value, "x") and hasattr(value, "y") and hasattr(value, "z"):
+        return float(value.x), float(value.y), float(value.z)
+    seq = tuple(value)
+    if len(seq) != 3:
+        raise ValueError("Expected a Pos or a 3-tuple (x, y, z)")
+    return float(seq[0]), float(seq[1]), float(seq[2])
+
+
+def _draw_id(id):
+    if id is not None:
+        return str(id)
+    _draw_counter[0] += 1
+    return f"auto{_draw_counter[0]}"
+
+
+def draw_box(a, b=None, color="green", seconds=10.0, id=None):
+    """Outline a world-space box (like the built-in highlights).
+
+    draw_box(pos) outlines the single block cell at pos; draw_box(a, b) outlines
+    the box spanning the two corners. Positions are Pos objects or (x, y, z)
+    tuples. `color` is "#RRGGBB", an int, or a name (green, red, yellow, blue,
+    white, orange, purple, aqua, pink, black). The overlay expires after
+    `seconds`; drawing again with the same `id` replaces it in place (that is
+    how you animate). Returns the id. Limits: max 512 live overlays per script;
+    everything is removed automatically when the script stops.
+
+        ore = talos.find_block("diamond_ore")
+        talos.draw_box(ore, color="aqua", seconds=30)
+    """
+    x1, y1, z1 = _draw_xyz(a)
+    if b is None:
+        import math as _m
+        bx, by, bz = _m.floor(x1), _m.floor(y1), _m.floor(z1)
+        x1, y1, z1, x2, y2, z2 = bx, by, bz, bx + 1, by + 1, bz + 1
+    else:
+        x2, y2, z2 = _draw_xyz(b)
+    key = _draw_id(id)
+    _talos_host.drawBox(x1, y1, z1, x2, y2, z2, _color_rgb(color), float(seconds), key)
+    return key
+
+
+def draw_line(a, b, color="green", seconds=10.0, id=None):
+    """Draw a world-space line segment from `a` to `b` (Pos or (x, y, z)).
+
+    Same color/seconds/id semantics as draw_box(). Handy for paths:
+
+        feet = talos.player_feet()
+        talos.draw_line(feet, target, color="yellow", seconds=15)
+    """
+    x1, y1, z1 = _draw_xyz(a)
+    x2, y2, z2 = _draw_xyz(b)
+    key = _draw_id(id)
+    _talos_host.drawLine(x1, y1, z1, x2, y2, z2, _color_rgb(color), float(seconds), key)
+    return key
+
+
+def draw_clear(id=None):
+    """Remove one overlay by id, or every overlay this script drew when id is None."""
+    if id is None:
+        return _talos_host.drawClear()
+    return _talos_host.drawRemove(str(id))
+
+
 def hud(text, id="hud"):
     """Pin a line of text to the on-screen overlay (top-left).
 
