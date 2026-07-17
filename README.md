@@ -38,9 +38,9 @@ Prebuilt jars for all three Minecraft versions ship on the
 
 | Minecraft | Jar |
 |---|---|
-| 1.21.11 | `talos-mod-0.0.1-p0-mc1.21.11.jar` |
-| 26.1 | `talos-mod-0.0.1-p0-mc26.1.jar` |
-| 26.2 | `talos-mod-0.0.1-p0-mc26.2.jar` |
+| 1.21.11 | `talos-mod-1.1.0-mc1.21.11.jar` |
+| 26.1 | `talos-mod-1.1.0-mc26.1.jar` |
+| 26.2 | `talos-mod-1.1.0-mc26.2.jar` |
 
 Drop the matching jar into your Fabric `mods/` folder next to a matching Fabric API build, then launch.
 Or build from source (below).
