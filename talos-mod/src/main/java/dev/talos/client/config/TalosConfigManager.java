@@ -122,4 +122,64 @@ public final class TalosConfigManager {
         config.bridgeAutoAccept = allowed;
         save();
     }
+
+    /** Applies persisted humanization tuning (intensity, knobs, families) to the live Humanizer. */
+    public static synchronized void applyHumanTuning() {
+        var humanizer = TalosClient.humanizer();
+        try {
+            humanizer.overrides().setIntensity(config.humanIntensity);
+        } catch (IllegalArgumentException e) {
+            LOGGER.warn("Invalid persisted humanIntensity {}, ignoring", config.humanIntensity);
+        }
+        if (config.humanKnobs != null) {
+            for (var entry : config.humanKnobs.entrySet()) {
+                if (entry.getValue() == null) continue;
+                try {
+                    humanizer.overrides().set(
+                            dev.talos.client.humanize.HumanizationOverrides.Knob.byKey(entry.getKey()),
+                            entry.getValue());
+                } catch (IllegalArgumentException e) {
+                    LOGGER.warn("Ignoring persisted humanization knob '{}': {}", entry.getKey(), e.getMessage());
+                }
+            }
+        }
+        if (config.humanFamilies != null && !config.humanFamilies.isBlank()) {
+            try {
+                humanizer.overrides().setFamilies(config.humanFamilies);
+            } catch (IllegalArgumentException e) {
+                LOGGER.warn("Ignoring persisted humanization families '{}': {}", config.humanFamilies, e.getMessage());
+            }
+        }
+        humanizer.refreshTuning();
+    }
+
+    /** Sets the global humanization intensity on the live Humanizer and persists it. */
+    public static synchronized void setHumanIntensity(double value) {
+        TalosClient.humanizer().setIntensity(value);
+        config.humanIntensity = TalosClient.humanizer().overrides().intensity();
+        save();
+    }
+
+    /** Sets a named humanization knob and persists it. Unknown names/values throw. */
+    public static synchronized void setHumanKnob(String key, double value) {
+        TalosClient.humanizer().setKnob(key, value);
+        config.humanKnobs = TalosClient.humanizer().overrides().snapshot();
+        save();
+    }
+
+    /** Restricts trajectory families (csv) and persists; blank restores the profile default. */
+    public static synchronized void setHumanFamilies(String csv) {
+        TalosClient.humanizer().setFamilies(csv);
+        config.humanFamilies = TalosClient.humanizer().overrides().familiesCsv();
+        save();
+    }
+
+    /** Clears all humanization tuning back to the pure profile and persists. */
+    public static synchronized void resetHumanTuning() {
+        TalosClient.humanizer().resetTuning();
+        config.humanIntensity = 1.0;
+        config.humanKnobs = new java.util.LinkedHashMap<>();
+        config.humanFamilies = "";
+        save();
+    }
 }

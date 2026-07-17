@@ -379,6 +379,10 @@ session only), `/talos on list` (dumps every trigger's grammar).
 | `/talos script editor` | Open the in-game Python editor screen. |
 | `/talos bridge allow` / `/talos bridge status` | Allow / inspect the VS Code WebSocket bridge for this session. |
 | `/talos human [on\|off]` | Toggle session-arc "Human mode" — wall-clock fatigue drift + idle micro-breaks (see Humanization). |
+| `/talos human intensity <0..3>` | Global more/less-humanisation dial: 0 = near-robotic, 1 = profile default, 3 = exaggerated. Persisted. |
+| `/talos human set <knob> <value>` | Override one humanisation knob (tab-completes knob names; values clamp into safe ranges). Persisted. |
+| `/talos human show` | Show profile, intensity, active overrides and the effective aim/timing numbers. |
+| `/talos human reset` | Clear intensity + all knob overrides back to the pure profile. |
 | `/talos debug [on\|off\|status]` | Master switch for detailed logging (see Detailed logging below). Bare form / `status` reports the state and the session log-file path. |
 | `/talos ui` | Open the Talos UI screen. |
 | `/talos stop` (alias `/talos stop all`) | Stop pathing, follow, aim and any running task. |
@@ -638,6 +642,24 @@ unavailable — the API is a hardened capability surface, not full CPython.
 | `talos.args` | `list[str]` of the args passed to `/talos script run <name> args…`. Always fresh per run. |
 | `talos.require("mylib")` | Import another script in `talos/scripts/` as a module (CPython import semantics: caching, cycle handling; each library gets its own first-run trust summary). |
 | `talos.log(msg, level="info")` | Leveled log line — written to the session log file, the mod logger, and the script console. `level` is `"debug"`/`"info"`/`"warn"`/`"error"`; `talos.log("x")` behaves exactly as before. |
+
+### Python standard library
+
+The pure-Python standard library works out of the box — no setup, no flags:
+
+```python
+import random
+import talos
+talos.log(random.randint(1, 10))
+```
+
+Works: `random`, `math`, `json`, `collections`, `heapq`, `itertools`, `re`, `dataclasses`,
+`functools`, `enum`, `time`, and every other pure-Python stdlib module (the GraalPy runtime bundles
+the full stdlib; it is covered by a unit test that imports them under the production sandbox flags).
+**Not available** (blocked by the sandbox, by design): pip packages, native extensions (`numpy`,
+`PIL`, …), host file/socket IO (`open`, `socket`, `urllib`), `threading`, `subprocess`,
+`os.environ`. Try it: `/talos example stdlib` writes a runnable demo, or from the terminal:
+`talos run 'import random;import talos;talos.log(random.randint(1,10))'`.
 | `talos.debug(msg)` / `talos.info(msg)` / `talos.warn(msg)` / `talos.error(msg)` | Shorthands for `talos.log(msg, level=…)`. `debug` lines only reach the console/chat while `/talos debug` is on (they're also skipped in the file when off). |
 | `talos.debug_mode(enabled=None)` | Query (no arg) or toggle the same master switch as `/talos debug`. |
 | `talos.state` | A persistent dict (`state["key"] = …`) saved per-script across runs. |
@@ -801,7 +823,44 @@ when the script stops). `hud_remove(id="hud")` · `hud_clear()`.
 `wait(a, b=None)` / `wait_between(a, b)` (right-skewed random pause) · `set_profile(name)` (aim/timing
 profile: raw/natural/paranoid categories) · `set_seed(seed)` (reproducible runs) ·
 `human(enabled=None)` (toggle/query eased aim + session-arc fatigue) · `fatigue()` (0–1) · `on_break()` ·
+`intensity(value=None)` (global more/less-humanisation dial) · `tune(**knobs, families=[...])`
+(override individual knobs) · `human_knobs()` (inspect tuning + effective values) · `reset_tuning()` ·
 `sleep(seconds)` · `ticks(n)` · `next_tick()` · `tick_count()`.
+
+#### Tuning humanisation — more/less, per-knob
+
+The three profiles (raw/natural/paranoid) are starting points, not the ceiling. Two layers of user
+tuning sit on top, from Python (`talos.intensity`, `talos.tune`) or chat (`/talos human intensity`,
+`/talos human set`), both persisted in the mod config across sessions:
+
+- **Intensity** — one dial for "more or less humanisation". `talos.intensity(1.5)` scales the
+  humanness knobs together: reaction delays, overshoot probability/magnitude, timing jitter and path
+  wobble scale up with intensity, while rotation speed scales down. `0` is near-robotic, `1` is the
+  profile as authored, `3` is the exaggerated maximum.
+- **Per-knob overrides** — `talos.tune(overshoot_prob=0.3, rotation_speed_max=12)`. Every knob is
+  clamped into a safe range, so bad values can tune aim but never break it:
+
+| Knob | Meaning | Safe range |
+|---|---|---|
+| `reaction_median_ms` | median reaction delay before an action | 1–5000 |
+| `reaction_sigma` | log-normal spread of reaction delays | 0–2 |
+| `rotation_speed_min` / `rotation_speed_max` | aim speed range, degrees per tick | 0.5–360 |
+| `max_accel` | max angular acceleration, deg/tick² | 0.5–360 |
+| `overshoot_prob` | chance an aim overshoots then corrects | 0–1 |
+| `overshoot_min` / `overshoot_max` | overshoot magnitude range, degrees | 0–30 |
+| `jitter_phi` | AR(1) correlation of timing jitter | 0–0.95 |
+| `path_deviation` | lateral walk/aim wobble stdev | 0–2 |
+| `visibility_check` | 1 = only aim at visible targets | 0/1 |
+
+- **Trajectory families** — restrict the aim-path shapes: `talos.tune(families=["bezier",
+  "min_jerk"])` (options: `bezier`, `min_jerk`, `linear`).
+- Inspect everything with `talos.human_knobs()` (returns `profile`, `intensity`, `overrides`,
+  `families`, and `effective` — the final numbers actually used) or `/talos human show`; clear with
+  `talos.reset_tuning()` or `/talos human reset`.
+
+> Design note: knobs and intensity are the supported way to change *how* humanisation behaves.
+> Python callbacks cannot supply aim curves directly — aim plans are computed on the game thread,
+> and the game thread never enters Python (a core stability invariant).
 
 #### Human mode (session-arc)
 
@@ -847,9 +906,14 @@ Cooperative multitasking so several behaviors run at once:
   running while one walks or mines.
 - `@talos.on_start` / `@talos.on_tick` — module-level lifecycle hooks.
 - `@talos.every(seconds=…, minutes=…, ticks=…)` — run a function on a cadence.
-- `@talos.command("name")` — register a `/talos <name>` (or `/talos cmd <name>`) handler in Python;
-  an `async def` handler runs as a task. Overrides built-ins like `goto`/`mine`/`kill`/`follow` when
-  the name matches (the built-in checks `scriptOverride` first).
+- `@talos.command("name", suggest=None)` — register a `/talos <name>` (or `/talos cmd <name>`)
+  handler in Python; the handler receives the arguments as a `list[str]`, and an `async def` handler
+  runs as a task. Overrides built-ins like `goto`/`mine`/`kill`/`follow` when the name matches (the
+  built-in checks `scriptOverride` first). `suggest` adds chat tab-completion for the arguments: a
+  list of strings suggests those tokens for the first argument, a list of lists suggests
+  per-position — `@talos.command("farm", suggest=[["wheat", "carrot"], ["16", "64"]])`. Tokens must
+  not contain whitespace; suggestions are captured at registration and served host-side (the game
+  never calls into Python to compute them).
 - `talos.run()` — start the task loop (implicit at module end). `talos.cancel_all()`,
   `TaskHandle.cancel()`, `talos.parallel(...)`, `talos.spawn(fn, …)`.
 - `talos.input(prompt)` / `await talos.aio.input(prompt)` — block for the user's next chat message
@@ -878,6 +942,80 @@ def flee(type_id, entity_id, x, y, z):
 
 talos.run()
 ```
+
+---
+
+## Simulations & custom pathfinding — build your own
+
+Talos is deliberately open at both ends: you can replace the *pathfinding engine* or run *any
+tick-driven simulation of your own* (animal AI, farming brains, market bots, experiments — anything)
+with safety limits that make it impossible to crash or stall the game from a script.
+
+### `talos.sim` — the simulation framework
+
+```python
+import talos
+from talos import sim
+
+sheep = sim.Simulation("sheep", hz=4, budget_ms=5)
+
+@sheep.tick
+def step(dt):                    # dt = seconds since the previous step
+    ...                          # one simulation step
+
+sheep.start()
+talos.run()
+```
+
+- `sim.Simulation(name, hz=20, budget_ms=5)` — a named loop stepping up to `hz` times per second
+  (20 = every tick, the fastest allowed). `@sim.tick` registers the step function (takes `dt` or
+  nothing); `@sim.on_start` / `@sim.on_stop` are lifecycle hooks.
+- `sim.state` — a dict for your simulation's own data (positions, mode machines, counters).
+- `sim.rng` — a per-simulation seeded RNG (seeded from the sim's name; re-seed with `sim.seed(n)`),
+  so "random" behaviour is reproducible: the same seed replays the identical run. Randomness is an
+  *input* to the model, not a replacement for it — an animal sim is a state machine (graze → wander
+  → graze) where the RNG only picks parameters like durations and targets, exactly how Minecraft's
+  own mob AI works.
+- `sim.start() / stop() / pause() / resume()`, `sim.running`, `sim.paused`; module-level
+  `sim.sims()` and `sim.stop_all()`.
+
+**The "can't crash the game" contract** — simulations run on the script worker thread (the game
+thread never executes Python), and the framework enforces:
+
+| Limit | Value | What happens |
+|---|---|---|
+| Max simulations | 16 per script session | creating more raises `SimulationError` |
+| Step rate | ≤ 20 Hz (1 step/tick) | faster rates are rejected |
+| Step budget | `budget_ms` (default 5 ms) | 5 consecutive over-budget steps auto-throttle the sim to half rate, with a warning |
+| Circuit breaker | 5 consecutive exceptions | the sim auto-pauses with an error log; `sim.resume()` after fixing |
+| Action spam | bounded 256-slot queues | worker→game actions fail fast instead of piling up |
+| Hard stop | `/talos stop`, script stop | every sim ends immediately |
+
+What a client-side sim can and can't do: it **can** drive the player like an animal (see
+`/talos example sim`), keep purely virtual creatures in `sim.state` and visualise them via
+HUD/glow, and read + react to real mobs (`talos.entities()`, `talos.get(...)`). It **cannot**
+puppet server-controlled mobs — no client mod can.
+
+### Custom pathfinding, two tiers
+
+1. **Pure Python (no Java needed)** — build movement from raw primitives: `player_feet()`,
+   `look_angle()`, `look(yaw, pitch)`, `key("forward")`, `raytrace()`, `block_at()`. The shipped
+   reference `/talos example pygoto` is a complete from-scratch goto (eased steering + stall-jump
+   watchdog) plus a `@talos.command("goto")` override that intercepts `/talos goto` while the script
+   runs — the built-in stays reachable as `talos.goto` / `talos.aio.goto`, so you can pre-process
+   (speedbridge, scaffold, log) and delegate.
+2. **A Java engine replacement** — Talos discovers pathfinding engines through the Fabric
+   entrypoint `talos:pathing_engine`. Any mod jar can ship one: implement
+   `dev.talos.client.pathing.PathingEngine` (`isAvailable`, `goTo(Goal, PathingOptions)`, `cancel`,
+   `isPathing`) and a `PathingEngineProvider` (`create()`, `priority()`), declare the entrypoint in
+   your `fabric.mod.json`, and the registry picks the highest-priority available engine at startup —
+   this is exactly how the optional Baritone adapter (`talos-pathing-baritone`) plugs in, and
+   scripts notice nothing: `talos.goto()` just uses the winning engine. With no engine available a
+   `NoOpPathingEngine` fails calls with a typed error instead of crashing.
+
+Shipped examples (also in the repo's `examples/` folder): `/talos example sim` (wandering sheep,
+Simulation API + a `suggest=`-completed control command), `/talos example pygoto` (custom goto +
+override), `/talos example stdlib` (`import random` & friends).
 
 ---
 
