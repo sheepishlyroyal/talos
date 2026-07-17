@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Event rules & getters · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html" class="active">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="event-rules-getters">Event rules &amp; getters</h1>
+<p>Talos has one shared catalog of <strong>206 trigger names</strong>. Every name works three ways:</p>
+<ul>
+<li>as a <strong>rule</strong>: <code>/talos on &lt;name&gt; … run &lt;command&gt;</code></li>
+<li>as a <strong>command getter</strong>: <code>/talos get &lt;name&gt; [args]</code></li>
+<li>as a <strong>Python getter</strong>: <code>talos.get("&lt;name&gt;", *args)</code></li>
+</ul>
+<p>Both surfaces call the same Java catalog, so they can never disagree on names or calculations. The getter
+catalog is a strict <strong>superset</strong> — every trigger is a getter, plus some convenience getters with no
+matching trigger. <code>/talos get list</code> and <code>/talos on list</code> dump everything live.</p>
+<hr />
+<h2 id="event-rules-talos-on-run">Event rules — <code>/talos on … run …</code></h2>
+<p><code>/talos on &lt;trigger&gt; … run &lt;command&gt;</code> arms a persistent rule (saved to <code>~/.talos/rules.json</code>). <code>run</code> may
+be prefixed with <code>chat</code> to send a chat message instead of a command; commands dispatch through <code>/talos</code>
+first, then fall back to the server. Placeholders <code>{value}</code>, <code>{health}</code>, <code>{x}</code>/<code>{y}</code>/<code>{z}</code> are substituted
+from the firing event.</p>
+<p>Grammar depends on the trigger's <strong>kind</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Grammar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NONE</code></td>
+<td><code>on &lt;trigger&gt; run &lt;cmd&gt;</code></td>
+</tr>
+<tr>
+<td><code>NUMBER</code></td>
+<td><code>on &lt;trigger&gt; &lt;value&gt; run &lt;cmd&gt;</code></td>
+</tr>
+<tr>
+<td><code>TEXT</code></td>
+<td><code>on &lt;trigger&gt; [matching "&lt;text&gt;"] run</code> · also <code>count above &lt;n&gt; within &lt;secs&gt; run</code></td>
+</tr>
+<tr>
+<td><code>COMPARE</code></td>
+<td><code>on &lt;trigger&gt; [at &lt;x&gt; &lt;y&gt; &lt;z&gt; [radius &lt;r&gt;]] above\|below\|equals &lt;n&gt; [for &lt;secs&gt;] run</code> · also <code>changes above\|below\|equals &lt;delta&gt; within &lt;secs&gt; run</code></td>
+</tr>
+<tr>
+<td><code>ENTITY_COUNT</code></td>
+<td><code>on &lt;trigger&gt; &lt;selector&gt; radius &lt;r\|-1&gt; [at &lt;x y z&gt;] above\|below\|equals &lt;n&gt; run</code></td>
+</tr>
+<tr>
+<td><code>ENTITY_PRESENCE</code></td>
+<td><code>on &lt;trigger&gt; &lt;selector&gt; radius &lt;r\|-1&gt; [at &lt;x y z&gt;] run</code></td>
+</tr>
+<tr>
+<td><code>BLOCK_COUNT</code></td>
+<td><code>on &lt;trigger&gt; &lt;block&gt; radius &lt;r&gt; [at &lt;x y z&gt;] above\|below\|equals &lt;n&gt; run</code></td>
+</tr>
+<tr>
+<td><code>BLOCK_PRESENCE</code></td>
+<td><code>on &lt;trigger&gt; &lt;block&gt; radius &lt;r&gt; [at &lt;x y z&gt;] run</code></td>
+</tr>
+<tr>
+<td><code>ITEM_COUNT</code></td>
+<td><code>on &lt;trigger&gt; &lt;item&gt; above\|below\|equals &lt;n&gt; run</code></td>
+</tr>
+<tr>
+<td><code>REGION</code></td>
+<td><code>on &lt;trigger&gt; &lt;x1 y1 z1 x2 y2 z2&gt; run</code></td>
+</tr>
+</tbody>
+</table>
+<p>The optional <code>at</code>/<code>radius</code> branch exists only for spatial metrics and the entity/block families;
+non-spatial metrics reject it. Rule coordinates are resolved <strong>when the rule is armed</strong> and saved as exact
+world coordinates, so a persistent <code>~</code>/<code>^</code> rule does not drift after creation.</p>
+<pre><code>/talos on health below 6 for 2 run chat low health, retreating
+/talos on entity_count @e[type=zombie] radius 16 above 3 run chat too many zombies
+/talos on chat matching &quot;diamond&quot; count above 3 within 10 run chat spam detected
+/talos on health changes below -4 within 2 run chat taking burst damage
+/talos on block_near minecraft:lava radius 5 run chat lava nearby
+/talos on light_level at ~ ~1 ~ below 8 run chat it is dark above me
+/talos on item_picked_up @e[type=player] matching diamond run chat someone grabbed a diamond
+/talos on entered_region 100 60 100 120 80 120 run chat entered the build zone
+/talos on tick_every 100 run /talos get health
+</code></pre>
+<p>Other rule commands: <code>/talos rules list</code>, <code>/talos rules remove &lt;id&gt;</code>, <code>/talos rules clear</code>,
+<code>/talos every &lt;secs&gt; run &lt;cmd&gt;</code> (persists), <code>/talos after &lt;secs&gt; run &lt;cmd&gt;</code> (session only),
+<code>/talos on list</code> (dumps every trigger's grammar).</p>
+<p>Selectors support <code>@e</code>, <code>@a</code>, <code>@p</code>, <code>@s</code>, <code>@r</code>, <code>@n</code>, including bracket filters. Radius <code>-1</code> = the whole
+loaded client world.</p>
+<hr />
+<h2 id="getters-talosgetname-args-talos-get-name">Getters — <code>talos.get(name, *args)</code> / <code>/talos get name</code></h2>
+<p>Numeric getters return <code>int</code>/<code>float</code>, booleans <code>bool</code>, descriptive/latest-event values <code>str</code>. In Python,
+spaces normalize to underscores (<code>talos.get("server tps")</code> == <code>talos.get("server_tps")</code>); commands use
+underscores. Spatial getters accept a coordinate (absolute, <code>~</code> feet-relative, or <code>^</code> local); a single
+string works too: <code>talos.get("light_level", "~ ~1 ~")</code>.</p>
+<h3 id="getter-families">Getter families</h3>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Args</th>
+<th>Returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Live numeric metric (53)</td>
+<td>none; spatial ones also take <code>x y z</code></td>
+<td>current number via the rule engine's calculator (<code>health</code>, <code>hunger</code>, <code>server_tps</code>, <code>speed</code>, <code>light_level</code>, <code>nearest_hostile_distance</code>, <code>yaw</code>, …)</td>
+</tr>
+<tr>
+<td><code>entity_count</code> / <code>entity_near</code> / <code>entity_gone</code></td>
+<td><code>selector [radius=-1] [x y z]</code></td>
+<td>exact matching loaded-entity count</td>
+</tr>
+<tr>
+<td><code>block_count</code> / <code>block_near</code></td>
+<td><code>block [radius=16] [x y z]</code></td>
+<td>exact matching block count in the centered cube</td>
+</tr>
+<tr>
+<td><code>item_count</code> / <code>hotbar_item_count</code></td>
+<td><code>item</code></td>
+<td>exact inventory / hotbar count</td>
+</tr>
+<tr>
+<td><code>held_enchant</code></td>
+<td><code>enchantment</code></td>
+<td>main-hand enchantment level, or <code>0</code></td>
+</tr>
+<tr>
+<td><code>entered_region</code> / <code>left_region</code></td>
+<td><code>x1 y1 z1 x2 y2 z2</code></td>
+<td>inside / outside the cuboid (bool)</td>
+</tr>
+<tr>
+<td>Threshold triggers</td>
+<td>none</td>
+<td>underlying value (<code>health_below</code> → health, <code>air_below</code> → air, <code>xp_level_above</code> → XP, <code>tick_every</code> → tick)</td>
+</tr>
+<tr>
+<td>Event getters</td>
+<td>none</td>
+<td>latest payload + <code>[N.NNs ago]</code>, or <code>never observed</code>; entity events also append runtime <code>entity_id</code>, UUID, type, 3dp pos</td>
+</tr>
+<tr>
+<td>State/string getters</td>
+<td>none</td>
+<td>current boolean/string where one exists (<code>sneaking</code>, <code>standing_on</code>, <code>position</code>, <code>dimension</code>, <code>held_item</code>, …)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="a-few-examples">A few examples</h3>
+<pre><code class="language-python">talos.get(&quot;server_tps&quot;)                          # float, client TPS estimate
+talos.get(&quot;entity_count&quot;, &quot;@e[tag=guard]&quot;, 48)   # int
+talos.get(&quot;block_near&quot;, &quot;minecraft:lava&quot;, 8)     # int count, not merely True/False
+talos.get(&quot;held_enchant&quot;, &quot;minecraft:efficiency&quot;)# int level
+talos.get(&quot;villager_profession_changed&quot;)         # &quot;villager label: old -&gt; new&quot; + id/UUID/pos
+talos.get(&quot;entity_location&quot;, 123)                # &quot;type#123 @ x.xxx y.yyy z.zzz&quot;, or -1
+talos.get(&quot;entered_region&quot;, 100, 60, 100, 120, 80, 120)  # bool
+</code></pre>
+<h3 id="trigger-categories-all-readable-as-getters">Trigger categories (all readable as getters)</h3>
+<ul>
+<li><strong>Vitals &amp; player state</strong> — <code>health</code>, <code>hunger</code>, <code>air</code>, <code>xp_level</code>, <code>armor_points</code>, <code>speed</code>,
+  <code>damage_taken</code>, <code>healed</code>, <code>death</code>, <code>respawn</code>, <code>on_fire</code>, <code>falling</code>, <code>sneaking</code>, <code>sprinting</code>,
+  <code>jumped</code>, <code>landed</code>, <code>moving</code>, <code>teleported</code>, …</li>
+<li><strong>World</strong> — <code>time_day</code>/<code>time_night</code>, <code>weather_rain</code>/<code>weather_clear</code>, <code>dimension_changed</code>,
+  <code>biome_changed</code>, <code>chunk_changed</code>, <code>world_loaded</code>/<code>world_unloaded</code>, <code>explosion</code>, <code>light_level</code>, …</li>
+<li><strong>Entities &amp; projectiles</strong> — <code>entity_spawned</code>/<code>entity_removed</code>, <code>entity_hurt</code>/<code>entity_died</code>,
+  <code>entity_armor_changed</code>, <code>villager_profession_changed</code>, <code>projectile_launched</code>, <code>pearl_thrown</code>,
+  <code>projectile_hit</code>, <code>totem_popped</code>, <code>entity_status</code>, …</li>
+<li><strong>Items &amp; inventory</strong> — <code>item_gained</code>/<code>item_lost</code>, <code>item_picked_up</code>, <code>held_changed</code>, <code>tool_broken</code>,
+  <code>inventory_full</code>, <code>slot_changed</code>, <code>container_opened</code>/<code>container_closed</code>, <code>container_item_gained</code>, …</li>
+<li><strong>Text, sound, packets</strong> — <code>chat</code>, <code>actionbar</code>, <code>title</code>/<code>subtitle</code>, <code>mention</code>, <code>sound</code>,
+  <code>particle_seen</code>, <code>packet_received</code>, <code>bossbar_shown</code>/<code>bossbar_updated</code>, <code>sidebar_score_changed</code>, …</li>
+</ul>
+<p>The four generic catch-alls make everything else inspectable: <code>packet_received</code>, <code>entity_status</code>,
+<code>particle_seen</code>, and <code>sound</code>. For the exhaustive list with per-trigger payloads, run <code>/talos get list</code>
+in-game or read the <a href="https://github.com/sheepishlyroyal/talos/blob/main/README.md#talosget-and-trigger-return-value-catalog">README catalog</a>.</p>
+<h2 id="client-side-ceilings">Client-side ceilings</h2>
+<p>Some facts are simply not synced to a client and can never be observed: <strong>villager inventories</strong>, <strong>closed
+chest contents</strong> (only knowable while the chest screen is open), and <strong>beacon effects</strong> (only via the
+beacon screen). Equipment/profession/level for villagers <em>are</em> synced and covered by triggers.</p>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Commands.html"><span>Previous</span>Command reference</a><a class="pager-link next" href="Scripting.html"><span>Next</span>Python scripting</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#event-rules-getters">Event rules &amp; getters</a><a class="toc-3" href="#event-rules-talos-on-run">Event rules — /talos on … run …</a><a class="toc-3" href="#getters-talosgetname-args-talos-get-name">Getters — talos.get(name, *args) / /talos get name</a><a class="toc-3" href="#client-side-ceilings">Client-side ceilings</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

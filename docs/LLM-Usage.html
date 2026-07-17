@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Using Talos with an LLM · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html" class="active">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="using-talos-with-an-llm">Using Talos with an LLM</h1>
+<p>You don't have to memorise the API. Talos ships a single <strong>agent skill</strong> — <a href="https://github.com/sheepishlyroyal/talos/blob/main/skill/SKILL.md"><code>skill/SKILL.md</code></a>
+— that is the complete authoring contract: every command, the full Python API, the coordinate rules,
+the getter/trigger catalog, canonical patterns, and the gotchas that trip models up (worker-thread
+blocking, the chat echo, <code>^</code> meaning two different things). Give that file to any model and it can write
+correct Talos scripts and commands for you.</p>
+<p>There are two ways to use it: <strong>install it</strong> (best, for Claude Code) or <strong>paste it</strong> (works anywhere).</p>
+<hr />
+<h2 id="option-a-install-the-skill-claude-code-claude">Option A — Install the skill (Claude Code / Claude)</h2>
+<p>Claude Code auto-loads skills by name from <code>~/.claude/skills/</code>. Drop the file in and it's available in
+every session:</p>
+<pre><code class="language-bash">mkdir -p ~/.claude/skills/talos
+curl -fsSL https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md \
+  -o ~/.claude/skills/talos/SKILL.md
+</code></pre>
+<p>Or, per-project, copy it into your repo's <code>.claude/skills/talos/SKILL.md</code>. Then just ask:</p>
+<blockquote>
+<p>"Write a Talos script that strip-mines at Y=-59 and drops off loot in a chest when the inventory
+is nearly full."</p>
+</blockquote>
+<p>Claude will pull in the <code>talos</code> skill automatically and write against the real API.</p>
+<p><strong>Cursor / Windsurf / other agentic editors:</strong> add the contents of <code>SKILL.md</code> to your project rules
+(<code>.cursorrules</code>, <code>AGENTS.md</code>, a project instruction file, or the editor's "rules for AI" setting).</p>
+<hr />
+<h2 id="option-b-paste-the-skill-chatgpt-gemini-local-models-any-chat">Option B — Paste the skill (ChatGPT, Gemini, local models, any chat)</h2>
+<p>For any model without a skill system, paste the skill into the context once, then ask for what you want.
+A reliable framing:</p>
+<pre><code>You are helping me write automation for Talos, a client-side Minecraft Fabric mod with an
+embedded Python runtime (`import talos`). The following is the complete Talos authoring
+contract. Follow it exactly — only use the documented API; do not invent functions, and do
+not import anything except `talos`.
+
+&lt;PASTE THE ENTIRE CONTENTS OF skill/SKILL.md HERE&gt;
+
+Task: &lt;describe what you want the script to do&gt;
+</code></pre>
+<p>Get the raw file to paste from:
+<a href="https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md">https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md</a></p>
+<hr />
+<h2 id="getting-good-results">Getting good results</h2>
+<p>The skill already tells the model the important rules, but you'll get better scripts if your request
+includes:</p>
+<ul>
+<li><strong>The trigger</strong> — "on a timer", "when my health drops below 6", "when I pick up cobblestone", "as a
+  <code>/talos</code> command I can run".</li>
+<li><strong>The goal and stop condition</strong> — "mine 3 stacks then stop", "run until I <code>/talos script stop</code>".</li>
+<li><strong>Any items/coords/selectors</strong> — real block ids (<code>minecraft:diamond_ore</code>), coordinates, entity
+  selectors (<code>@e[type=zombie,distance=..16]</code>).</li>
+</ul>
+<p>Then verify the output against the skill's <strong>Gotchas checklist</strong> — the model should have:</p>
+<ul>
+<li>imported only <code>talos</code>,</li>
+<li>ended the script with <code>talos.run()</code> if it registers any <code>@task</code> / <code>@on</code> / <code>@every</code> / <code>@command</code>,</li>
+<li>used <code>await talos.aio.&lt;action&gt;()</code> (not the blocking form) when things run concurrently,</li>
+<li>guarded <code>chat</code> handlers against your own echoed messages.</li>
+</ul>
+<h2 id="try-it-in-game-without-an-llm">Try it in-game without an LLM</h2>
+<p>Every pattern the model will produce is also available as a bundled reference script you can read and run
+directly:</p>
+<pre><code>/talos example                 # list bundled examples
+/talos example sensors         # writes talos/scripts/example_sensors.py
+/talos script run example_sensors
+</code></pre>
+<p>See <a href="Examples.html">Example scripts</a> for the full source of each.</p>
+<h2 id="what-the-model-should-not-do">What the model should <em>not</em> do</h2>
+<ul>
+<li>Import <code>os</code>, <code>sys</code>, <code>requests</code>, <code>socket</code>, open files, or call <code>pip</code> — none of that exists in the
+  sandbox. Only <code>import talos</code>.</li>
+<li>Promise undetectability. Talos models motor-level imperfection only; it is best-effort obfuscation and
+  automation may still break a server's rules.</li>
+<li>Invent getter/trigger names. The catalog is fixed at 206 — <code>/talos get list</code> dumps every valid name,
+  and the skill lists the families.</li>
+</ul>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Architecture-and-Testing.html"><span>Previous</span>Architecture & testing</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#using-talos-with-an-llm">Using Talos with an LLM</a><a class="toc-3" href="#option-a-install-the-skill-claude-code-claude">Option A — Install the skill (Claude Code / Claude)</a><a class="toc-3" href="#option-b-paste-the-skill-chatgpt-gemini-local-models-any-chat">Option B — Paste the skill (ChatGPT, Gemini, local models, any chat)</a><a class="toc-3" href="#getting-good-results">Getting good results</a><a class="toc-3" href="#try-it-in-game-without-an-llm">Try it in-game without an LLM</a><a class="toc-3" href="#what-the-model-should-not-do">What the model should not do</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminal CLI · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html" class="active">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="terminal-cli-talos">Terminal CLI (<code>talos</code>)</h1>
+<p><code>cli/talos</code> is a dependency-free Python 3 command that drives the running game from any terminal.
+It speaks the same loopback WebSocket bridge as the VS Code extension
+(<a href="https://github.com/sheepishlyroyal/talos/blob/main/vscode-extension/PROTOCOL.md">protocol</a>), so
+script output (<code>print</code>, <code>talos.log</code>, tracebacks) streams live back into your shell.</p>
+<h2 id="install">Install</h2>
+<ul>
+<li><strong>Automatic:</strong> the VS Code extension bundles the CLI and (re)installs it to <code>~/.talos/bin/talos</code>
+  every time it activates. Command palette: <em>Talos: Install Terminal CLI</em> runs it loudly.
+  Put it on your PATH once: <code>export PATH="$HOME/.talos/bin:$PATH"</code> in <code>~/.zshrc</code>/<code>~/.bashrc</code>.
+  On Windows the extension also writes <code>talos.cmd</code> — add <code>%USERPROFILE%\.talos\bin</code> to PATH.</li>
+<li><strong>Manual:</strong> copy <a href="https://github.com/sheepishlyroyal/talos/blob/main/cli/talos"><code>cli/talos</code></a>
+  anywhere on your PATH and <code>chmod +x</code> it. Python 3.8+ only — no pip packages.</li>
+</ul>
+<h2 id="usage">Usage</h2>
+<pre><code class="language-bash">talos harvest.py wheat 64        # push a local file into the game and run it
+talos run harvest.py wheat 64    # same, explicit
+talos py -c 'talos.log(&quot;hi&quot;)'    # one-liner; trailing expression echoes its repr
+talos -c 'talos.player_feet()'   # same (py / python / python3 are aliases)
+talos run 'import talos;talos.log(&quot;hi&quot;)'   # inline code: anything that isn't a filename
+talos stop                       # hard-stop the running script
+talos status                     # bridge reachability + run state
+talos logs -f                    # follow the newest ~/.talos/logs/session-*.log
+</code></pre>
+<p>Options (must come <strong>before</strong> the script filename): <code>--port N</code> · <code>--token FILE</code> · <code>--no-color</code>.</p>
+<h2 id="how-arguments-must-be-written">How arguments must be written</h2>
+<ul>
+<li>Everything <strong>after the script filename</strong> is a script argument:
+  <code>talos farm.py wheat 64 --fast</code> → <code>talos.args == ["wheat", "64", "--fast"]</code> — <code>--fast</code> there
+  belongs to your script, not the CLI.</li>
+<li>Args always arrive as <strong>strings</strong>; convert yourself (<code>int(talos.args[1])</code>).</li>
+<li>Quote spaces in the shell: <code>talos greet.py "hello world"</code> arrives as one argument. In-game
+  <code>/talos script run</code> is whitespace-split only — the CLI is the way to pass args containing spaces.</li>
+<li>Script filenames may only use letters, digits, <code>_</code>, <code>.</code>, <code>-</code> and must end in <code>.py</code>. The file is
+  pushed under its <strong>basename</strong> into <code>.minecraft/talos/scripts/</code>, overwriting a same-named script.</li>
+</ul>
+<h2 id="behaviour">Behaviour</h2>
+<ul>
+<li>First terminal run requires a one-time <code>/talos bridge allow</code> in-game (persisted); the CLI prints
+  the prompt and waits, then runs automatically once allowed.</li>
+<li><code>Ctrl-C</code> sends a hard-stop into the game before exiting.</li>
+<li>Exit codes: <code>0</code> script succeeded · <code>1</code> script raised/failed · <code>2</code> usage error · <code>3</code> bridge
+  unreachable or auth failed — so <code>talos selftest.py &amp;&amp; echo PASS</code> works as a test harness (see
+  <a href="Architecture-and-Testing.html">Architecture &amp; Testing</a>).</li>
+<li><code>talos logs [-f]</code> reads the session log directly and works with the game closed.</li>
+</ul>
+<h2 id="security">Security</h2>
+<p>Same model as the VS Code bridge: loopback only, per-launch token from <code>~/.talos/token</code> sent as the
+first frame (never in the URL), nothing processed before <code>auth_ok</code>, browser origins rejected, and
+the one-time in-game <code>/talos bridge allow</code> gate.</p>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Examples.html"><span>Previous</span>Example scripts</a><a class="pager-link next" href="VS-Code-Bridge.html"><span>Next</span>VS Code bridge</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#terminal-cli-talos">Terminal CLI (talos)</a><a class="toc-3" href="#install">Install</a><a class="toc-3" href="#usage">Usage</a><a class="toc-3" href="#how-arguments-must-be-written">How arguments must be written</a><a class="toc-3" href="#behaviour">Behaviour</a><a class="toc-3" href="#security">Security</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installation · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html" class="active">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="installation">Installation</h1>
+<h2 id="requirements">Requirements</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Minecraft</td>
+<td>1.21.11 · 26.1 · 26.2</td>
+</tr>
+<tr>
+<td>Fabric Loader</td>
+<td>0.19.3+</td>
+</tr>
+<tr>
+<td>Fabric API</td>
+<td>matching your MC version (e.g. <code>0.141.4+1.21.11</code>)</td>
+</tr>
+<tr>
+<td>Java</td>
+<td>21 (build + run)</td>
+</tr>
+<tr>
+<td>GraalPy</td>
+<td>24.2.2 — <strong>bundled into the jar</strong>, nothing to install</td>
+</tr>
+</tbody>
+</table>
+<h2 id="install-a-prebuilt-jar-recommended">Install a prebuilt jar (recommended)</h2>
+<ol>
+<li>Install <a href="https://fabricmc.net/use/installer/">Fabric Loader</a> for your Minecraft version.</li>
+<li>Download the matching <strong>Fabric API</strong> jar and drop it in your <code>.minecraft/mods/</code> folder.</li>
+<li>Grab the Talos jar for your version from the <a href="https://github.com/sheepishlyroyal/talos/releases"><strong>Releases</strong></a>
+   page and drop it in <code>mods/</code> too:</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Minecraft</th>
+<th>Jar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.21.11</td>
+<td><code>talos-mod-0.0.1-p0-mc1.21.11.jar</code></td>
+</tr>
+<tr>
+<td>26.1</td>
+<td><code>talos-mod-0.0.1-p0-mc26.1.jar</code></td>
+</tr>
+<tr>
+<td>26.2</td>
+<td><code>talos-mod-0.0.1-p0-mc26.2.jar</code></td>
+</tr>
+</tbody>
+</table>
+<ol>
+<li>Launch. Type <code>/talos</code> in-game to confirm it loaded.</li>
+</ol>
+<h3 id="optional-baritone-adapter">Optional: Baritone adapter</h3>
+<p>The separately distributed <code>talos-pathing-baritone</code> adapter is picked up automatically if installed and
+takes priority over the built-in pathfinder. You don't need it — Talos' own sim-based pathfinder
+(<code>TalosPathingEngine</code>) is <strong>always available</strong> with no dependency, so <code>/talos goto</code> works out of the box.</p>
+<h2 id="build-from-source">Build from source</h2>
+<pre><code class="language-bash">git clone https://github.com/sheepishlyroyal/talos.git
+cd talos
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)     # macOS example
+./gradlew :talos-mod:remapJar
+</code></pre>
+<p>The output jar lands in <code>talos-mod/build/libs/</code>. Branches:</p>
+<ul>
+<li><code>main</code> / <code>pathing-v2</code> — the Minecraft <strong>1.21.11</strong> source (Yarn mappings).</li>
+<li><code>port/26.1</code>, <code>port/26.2</code> — the <strong>26.1 / 26.2</strong> ports (official Mojang mappings, Java 25).</li>
+</ul>
+<h2 id="data-locations">Data locations</h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.minecraft/talos/scripts/</code></td>
+<td>Python scripts run by <code>/talos script run</code> (and <code>require</code>'d libs)</td>
+</tr>
+<tr>
+<td><code>~/.talos/rules.json</code></td>
+<td>Persisted event rules and schedules</td>
+</tr>
+<tr>
+<td><code>~/.talos/macros/</code></td>
+<td>Recorded input macros</td>
+</tr>
+<tr>
+<td><code>~/.talos/token</code></td>
+<td>Per-session VS Code bridge auth token (regenerated every launch)</td>
+</tr>
+</tbody>
+</table>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Home.html"><span>Previous</span>Overview</a><a class="pager-link next" href="Commands.html"><span>Next</span>Command reference</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#installation">Installation</a><a class="toc-3" href="#requirements">Requirements</a><a class="toc-3" href="#install-a-prebuilt-jar-recommended">Install a prebuilt jar (recommended)</a><a class="toc-3" href="#build-from-source">Build from source</a><a class="toc-3" href="#data-locations">Data locations</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

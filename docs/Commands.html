@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command reference · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html" class="active">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="command-reference">Command reference</h1>
+<p>Every command lives under <code>/talos</code> (<code>/talos</code> is a full alias — both prefixes work everywhere). Every
+block/item id argument accepts <strong>both</strong> the bare and namespaced form (<code>stone</code> and <code>minecraft:stone</code>), and
+tab-completion suggests both.</p>
+<h2 id="coordinate-syntax">Coordinate syntax</h2>
+<table>
+<thead>
+<tr>
+<th>Prefix</th>
+<th>Meaning</th>
+<th>Base</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><em>(none)</em></td>
+<td>absolute world coordinate</td>
+<td>—</td>
+<td><code>100 64 -30</code></td>
+</tr>
+<tr>
+<td><code>~</code></td>
+<td>relative to the player</td>
+<td>position/eyes on that axis</td>
+<td><code>~ ~1 ~</code> (1 above)</td>
+</tr>
+<tr>
+<td><code>^</code> (raytrace / scripts)</td>
+<td>vanilla <strong>local</strong> frame <code>^left ^up ^forward</code></td>
+<td>eyes + look direction</td>
+<td><code>^ ^ 5</code> (5 forward)</td>
+</tr>
+<tr>
+<td><code>^</code> (look / coords / mine <code>direction</code>)</td>
+<td>relative <strong>angle</strong> offset</td>
+<td>current yaw/pitch</td>
+<td><code>^ ^-30</code> (aim 30° up)</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><code>^</code> means <strong>local coordinates</strong> in <code>raytrace</code>, but a <strong>relative angle</strong> in <code>/talos look</code>,
+<code>/talos coords direction</code> and <code>/talos mine direction</code>. Different subcommands, no collision — just be aware.</p>
+</blockquote>
+<h2 id="pathfinding-movement">Pathfinding &amp; movement</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/talos goto xyz &lt;x&gt; &lt;y&gt; &lt;z&gt;</code></td>
+<td>Path to an exact block (<code>~</code>-relative ok).</td>
+</tr>
+<tr>
+<td><code>/talos goto xyz &lt;x&gt; &lt;z&gt;</code> · <code>/talos xz &lt;x&gt; &lt;z&gt;</code></td>
+<td>Path to an X/Z column at your current Y.</td>
+</tr>
+<tr>
+<td><code>/talos goto near &lt;x&gt; &lt;y&gt; &lt;z&gt; &lt;range&gt;</code></td>
+<td>Path to within <code>range</code> blocks of a position.</td>
+</tr>
+<tr>
+<td><code>/talos goto block &lt;id&gt; [radius]</code></td>
+<td>Path to the <strong>nearest</strong> match; blacklists + retries the next-nearest (up to 5) if unreachable.</td>
+</tr>
+<tr>
+<td><code>/talos follow &lt;target&gt; [distance]</code></td>
+<td>Follow <strong>any entity</strong>; the goal live-tracks each tick it moves. <code>target</code> = player name, entity type, or selector.</td>
+</tr>
+<tr>
+<td><code>/talos find block &lt;predicate&gt; [radius]</code></td>
+<td>Report the nearest matching block in loaded chunks.</td>
+</tr>
+<tr>
+<td><code>/talos glow &lt;x&gt; &lt;y&gt; &lt;z&gt; [seconds]</code></td>
+<td>Wireframe box around a block to confirm a lookup.</td>
+</tr>
+<tr>
+<td><code>/talos stop</code> (<code>stop all</code>)</td>
+<td>Stop pathing, follow, aim and any running task.</td>
+</tr>
+</tbody>
+</table>
+<p><code>/talos goto</code> runs with mining <strong>and</strong> placing enabled by default — it tunnels, bridges, digs shafts,
+nerdpoles and parkours through one simulated-physics planner, never as fixed "modes". <code>follow</code> ends via
+<code>/talos stop</code>, when another goto takes over, or after the target stays gone ~15s. The blue/green/purple
+route-checkpoint boxes redraw from the live follower every second, so they stay visible the whole run.</p>
+<pre><code>/talos goto xyz ~ ~10 ~
+/talos goto near 100 64 200 3
+/talos goto block diamond_ore 32
+/talos follow @e[type=cow,distance=..20]
+</code></pre>
+<h2 id="raytrace-local-coordinates">Raytrace &amp; local coordinates</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/talos raytrace [get] &lt;x&gt; &lt;y&gt; &lt;z&gt;</code></td>
+<td>Resolve a coordinate triple to a world point (3dp) + the block id there.</td>
+</tr>
+<tr>
+<td><code>/talos raytrace simple\|advanced get &lt;x&gt; &lt;y&gt; &lt;z&gt;</code></td>
+<td><code>simple</code> = floored <strong>block cell</strong> (ints); <code>advanced</code> = exact 3dp point (default).</td>
+</tr>
+<tr>
+<td><code>/talos raytrace where [maxDist]</code></td>
+<td>Cast from the eyes; report the first <strong>block or entity</strong> hit — point (3dp), id, distance. Default 64, max 256.</td>
+</tr>
+<tr>
+<td><code>/talos raytrace if block &lt;id&gt; [maxDist]</code></td>
+<td>Succeed (1) / fail (0) if the first hit is that block.</td>
+</tr>
+<tr>
+<td><code>/talos raytrace if entity &lt;selector&gt; [maxDist]</code></td>
+<td>Succeed / fail if the first hit is a matching entity.</td>
+</tr>
+</tbody>
+</table>
+<p>Friendly caret: once <strong>any</strong> axis is a caret, plain numbers on the other axes are local offsets too —
+<code>^ ^ 5</code> <strong>is</strong> <code>^ ^ ^5</code>. Only mixing <code>^</code> with <code>~</code> is an error.</p>
+<pre><code>/talos raytrace ^ ^ 5          # point 5 ahead along the gaze
+/talos raytrace get ~ ~-1 ~    # the block just under your eyes
+/talos raytrace where
+/talos raytrace if block minecraft:chest 6
+</code></pre>
+<h2 id="world-actions">World actions</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/talos mine &lt;x&gt; &lt;y&gt; &lt;z&gt;</code></td>
+<td>Break a block via the humanized, tool-aware <code>BreakBlockAction</code>.</td>
+</tr>
+<tr>
+<td><code>/talos mine direction &lt;yaw&gt; &lt;pitch&gt;</code></td>
+<td>Mine the block hit by a raycast (<code>^</code>-relative angles).</td>
+</tr>
+<tr>
+<td><code>/talos mine block &lt;predicate&gt; [index]</code></td>
+<td>Mine the <code>index</code>-th closest match (0-based, <code>-1</code> = furthest).</td>
+</tr>
+<tr>
+<td><code>/talos place &lt;x&gt; &lt;y&gt; &lt;z&gt;</code></td>
+<td>Place your held block, verified against server state.</td>
+</tr>
+<tr>
+<td><code>/talos kill nearest [radius]</code></td>
+<td>Attack the nearest hostile within <code>radius</code> (default 6, range 1–64).</td>
+</tr>
+</tbody>
+</table>
+<h2 id="aiming-talos-look-talos-track">Aiming (<code>/talos look</code> / <code>/talos track</code>)</h2>
+<pre><code>/talos look 45 10                                # absolute or ^-relative yaw/pitch
+/talos look block minecraft:diamond_ore 0        # 0-based index into nearest matches
+/talos look coords ~ ~1 ~
+/talos look direction ^ ^-20                     # raycast along a direction
+/talos look @e[type=zombie] 0
+/talos track                                     # follow the nearest player (@p)
+/talos track @e[type=zombie]
+/talos track block minecraft:diamond_ore
+/talos track stop
+</code></pre>
+<p>With <strong>Human mode on</strong> (<code>/talos human on</code>), command and Python aim run through the humanized cube-aim
+controller — see <a href="Humanization.html">Humanization</a>.</p>
+<h2 id="input-automation">Input automation</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/talos walk &lt;w\|a\|s\|d&gt; tap</code></td>
+<td>One key press.</td>
+</tr>
+<tr>
+<td><code>/talos walk &lt;w\|a\|s\|d&gt; hold &lt;seconds&gt;</code></td>
+<td>Hold a movement key.</td>
+</tr>
+<tr>
+<td><code>/talos walk &lt;w\|a\|s\|d&gt; blocks &lt;n&gt; [center\|touch]</code></td>
+<td>Walk exactly <code>n</code> blocks with momentum-aware braking.</td>
+</tr>
+<tr>
+<td><code>/talos key &lt;name&gt; tap\|hold &lt;seconds&gt;</code></td>
+<td>Press any logical keybinding (movement, jump/sneak/sprint, attack/use/drop/swap/inventory, hotbar 1–9).</td>
+</tr>
+<tr>
+<td><code>/talos key list</code></td>
+<td>List key names.</td>
+</tr>
+<tr>
+<td><code>/talos macro record &lt;name&gt; [channels]</code></td>
+<td>Record real per-tick input.</td>
+</tr>
+<tr>
+<td><code>/talos macro stop</code></td>
+<td>Stop and save the recording.</td>
+</tr>
+<tr>
+<td><code>/talos macro play &lt;name&gt; [times] [channels]</code></td>
+<td>Replay a macro.</td>
+</tr>
+<tr>
+<td><code>/talos macro list</code> · <code>/talos macro delete &lt;name&gt;</code></td>
+<td>Manage saved macros.</td>
+</tr>
+</tbody>
+</table>
+<p>Macro channels: <code>move</code>, <code>jump</code>, <code>sneak</code>, <code>sprint</code>, <code>clicks</code>, <code>look</code>, <code>hotbar</code>, plus <code>keys</code>
+(all keyboard), <code>input</code> (keys+clicks) and <code>all</code>. A <code>clicks+look</code>-only macro leaves movement free for
+<code>/talos goto</code> or manual play alongside it.</p>
+<h2 id="inventory">Inventory</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/talos inv list</code></td>
+<td>List occupied slots in the current screen handler.</td>
+</tr>
+<tr>
+<td><code>/talos inv move &lt;from&gt; &lt;to&gt;</code></td>
+<td>Move a stack between slots.</td>
+</tr>
+<tr>
+<td><code>/talos inv hotbar &lt;from&gt; &lt;1-9&gt;</code></td>
+<td>Swap a slot into a hotbar position.</td>
+</tr>
+<tr>
+<td><code>/talos inv deposit all\|&lt;item&gt;</code></td>
+<td>Quick-move matching stacks into an open container.</td>
+</tr>
+<tr>
+<td><code>/talos inv withdraw all\|&lt;item&gt;</code></td>
+<td>Quick-move matching stacks out of an open container.</td>
+</tr>
+<tr>
+<td><code>/talos inv armor &lt;piece&gt; &lt;from&gt;</code></td>
+<td>Equip an armor piece from a slot.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="observables-talos-get">Observables (<code>/talos get</code>)</h2>
+<p>Instant readouts through the exact same evaluation path rules use. See
+<a href="Event-Rules-and-Getters.html">Event rules &amp; getters</a> for the full catalog.</p>
+<pre><code>/talos get health
+/talos get server_tps
+/talos get list                                # every observable + all 206 trigger names
+/talos get block_count minecraft:diamond_ore 16 ~ ~-4 ~
+/talos get entity @e[type=zombie] -1           # 0-based/negative index; -1 = furthest
+</code></pre>
+<h2 id="scripting-session-commands">Scripting &amp; session commands</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/talos script run &lt;name&gt; [args…]</code></td>
+<td>Run <code>talos/scripts/&lt;name&gt;.py</code>. Trailing args → <code>talos.args</code>.</td>
+</tr>
+<tr>
+<td><code>/talos script stop</code></td>
+<td>Hard-stop the running script, even mid-loop.</td>
+</tr>
+<tr>
+<td><code>/talos script profile</code></td>
+<td>Toggle per-event dispatch profiling.</td>
+</tr>
+<tr>
+<td><code>/talos py &lt;code&gt;</code></td>
+<td>Run a Python one-liner; a trailing expression echoes its repr.</td>
+</tr>
+<tr>
+<td><code>/talos &lt;name&gt; [args]</code></td>
+<td>Script-registered commands (<code>@talos.command(...)</code>); built-ins win first.</td>
+</tr>
+<tr>
+<td><code>/talos cmd &lt;name&gt; [args]</code></td>
+<td>Explicit dispatch for a script command that shadows a built-in.</td>
+</tr>
+<tr>
+<td><code>/talos example [name]</code></td>
+<td>List bundled examples, or write <code>example_&lt;name&gt;.py</code>.</td>
+</tr>
+<tr>
+<td><code>/talos script editor</code></td>
+<td>Open the in-game Python editor screen.</td>
+</tr>
+<tr>
+<td><code>/talos human [on\|off]</code></td>
+<td>Toggle session-arc Human mode.</td>
+</tr>
+<tr>
+<td><code>/talos human intensity &lt;0..3&gt;</code></td>
+<td>More/less humanisation: 0 near-robotic, 1 profile default, 3 max. Persisted.</td>
+</tr>
+<tr>
+<td><code>/talos human set &lt;knob&gt; &lt;value&gt;</code></td>
+<td>Override one humanisation knob (tab-completes; clamped safe). Persisted.</td>
+</tr>
+<tr>
+<td><code>/talos human show</code> / <code>reset</code></td>
+<td>Inspect / clear humanisation tuning.</td>
+</tr>
+<tr>
+<td><code>/talos debug [on\|off\|status]</code></td>
+<td>Master switch for <a href="Detailed-Logging.html">detailed logging</a> — engine trace + <code>talos.debug()</code> lines to chat and <code>~/.talos/logs/</code>.</td>
+</tr>
+<tr>
+<td><code>/talos ui</code></td>
+<td>Open the Talos UI screen.</td>
+</tr>
+<tr>
+<td><code>/talos bridge allow</code> · <code>/talos bridge status</code></td>
+<td>Allow / inspect the VS Code WebSocket bridge.</td>
+</tr>
+</tbody>
+</table>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Installation.html"><span>Previous</span>Installation</a><a class="pager-link next" href="Event-Rules-and-Getters.html"><span>Next</span>Event rules & getters</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#command-reference">Command reference</a><a class="toc-3" href="#coordinate-syntax">Coordinate syntax</a><a class="toc-3" href="#pathfinding-movement">Pathfinding &amp; movement</a><a class="toc-3" href="#raytrace-local-coordinates">Raytrace &amp; local coordinates</a><a class="toc-3" href="#world-actions">World actions</a><a class="toc-3" href="#aiming-talos-look-talos-track">Aiming (/talos look / /talos track)</a><a class="toc-3" href="#input-automation">Input automation</a><a class="toc-3" href="#inventory">Inventory</a><a class="toc-3" href="#observables-talos-get">Observables (/talos get)</a><a class="toc-3" href="#scripting-session-commands">Scripting &amp; session commands</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

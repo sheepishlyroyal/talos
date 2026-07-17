@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulations & pathfinding · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html" class="active">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="simulations-custom-pathfinding">Simulations &amp; custom pathfinding</h1>
+<p>Talos is open at both ends: you can run <strong>any tick-driven simulation of your own</strong> (animal AI,
+farming brains, experiments — anything) through <code>talos.sim</code>, and you can <strong>replace the pathfinding
+engine</strong> — either purely in Python or with a Java engine of your own.</p>
+<h2 id="talossim-the-simulation-framework"><code>talos.sim</code> — the simulation framework</h2>
+<pre><code class="language-python">import talos
+from talos import sim
+
+sheep = sim.Simulation(&quot;sheep&quot;, hz=4, budget_ms=5)
+
+@sheep.tick
+def step(dt):                    # dt = seconds since the previous step
+    ...                          # one simulation step
+
+sheep.start()
+talos.run()
+</code></pre>
+<ul>
+<li><code>sim.Simulation(name, hz=20, budget_ms=5)</code> — a named loop stepping up to <code>hz</code> times per second
+  (20 = every tick, the fastest allowed). <code>@sim.tick</code> registers the step function (takes <code>dt</code> or
+  nothing); <code>@sim.on_start</code> / <code>@sim.on_stop</code> are lifecycle hooks.</li>
+<li><code>sim.state</code> — a dict for the simulation's own data (positions, mode machines, counters).</li>
+<li><code>sim.rng</code> — a per-simulation seeded RNG (seeded from the sim's name; re-seed with <code>sim.seed(n)</code>).</li>
+<li><code>sim.start() / stop() / pause() / resume()</code>, <code>sim.running</code>, <code>sim.paused</code>; module-level
+  <code>sim.sims()</code> and <code>sim.stop_all()</code>.</li>
+</ul>
+<h3 id="randomness-vs-simulation">Randomness vs simulation</h3>
+<p>"Random" and "simulated" are not in conflict — randomness is an <em>input</em> to the model, not a
+replacement for it. An animal sim is a state machine (graze → wander → graze) where the RNG only
+picks parameters: how long to graze, where to wander. The structure makes it look like an animal;
+the randomness stops it looking mechanical. That is exactly how Minecraft's own mob AI works. And
+because <code>sim.rng</code> is seeded, the same seed replays the identical "random" run — sims are testable
+and debuggable deterministically.</p>
+<h3 id="the-cant-crash-the-game-contract">The "can't crash the game" contract</h3>
+<p>Simulations run on the script worker thread — the game thread never executes Python — and the
+framework enforces hard limits on top:</p>
+<table>
+<thead>
+<tr>
+<th>Limit</th>
+<th>Value</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Max simulations</td>
+<td>16 per script session</td>
+<td>creating more raises <code>SimulationError</code></td>
+</tr>
+<tr>
+<td>Step rate</td>
+<td>≤ 20 Hz (1 step/tick)</td>
+<td>faster rates are rejected</td>
+</tr>
+<tr>
+<td>Step budget</td>
+<td><code>budget_ms</code> (default 5 ms)</td>
+<td>5 consecutive over-budget steps auto-throttle the sim to half rate, with a warning</td>
+</tr>
+<tr>
+<td>Circuit breaker</td>
+<td>5 consecutive exceptions</td>
+<td>the sim auto-pauses with an error log; <code>sim.resume()</code> after fixing</td>
+</tr>
+<tr>
+<td>Action spam</td>
+<td>bounded 256-slot queues</td>
+<td>worker→game actions fail fast instead of piling up</td>
+</tr>
+<tr>
+<td>Hard stop</td>
+<td><code>/talos stop</code>, script stop</td>
+<td>every sim ends immediately</td>
+</tr>
+</tbody>
+</table>
+<h3 id="what-a-client-side-sim-can-and-cant-do">What a client-side sim can and can't do</h3>
+<p>It <strong>can</strong> drive the player like an animal (<code>/talos example sim</code> — a wandering sheep), keep purely
+virtual creatures in <code>sim.state</code> and visualise them via HUD/glow, and read + react to real mobs
+(<code>talos.entities()</code>, <code>talos.get(...)</code>). It <strong>cannot</strong> puppet server-controlled mobs — no client mod
+can.</p>
+<h2 id="custom-pathfinding-two-tiers">Custom pathfinding — two tiers</h2>
+<h3 id="1-pure-python-no-java-needed">1. Pure Python (no Java needed)</h3>
+<p>Build movement from raw primitives: <code>player_feet()</code>, <code>look_angle()</code>, <code>look(yaw, pitch)</code>,
+<code>key("forward")</code>, <code>raytrace()</code>, <code>block_at()</code>. The shipped reference <code>/talos example pygoto</code> is a
+complete from-scratch goto — eased steering (clamped yaw correction per tick), forward hold, and a
+stall watchdog that taps jump — plus a <code>@talos.command("goto")</code> <strong>override</strong> that intercepts
+<code>/talos goto</code> while the script runs. The built-in stays reachable as <code>talos.goto</code> /
+<code>talos.aio.goto</code>, so an override can pre-process (speedbridge, scaffold, log) and then delegate to
+the real pathfinder.</p>
+<h3 id="2-a-java-engine-replacement">2. A Java engine replacement</h3>
+<p>Talos discovers pathfinding engines through the Fabric entrypoint <strong><code>talos:pathing_engine</code></strong>. Any
+mod jar can ship one:</p>
+<ol>
+<li>Implement <code>dev.talos.client.pathing.PathingEngine</code> — <code>isAvailable()</code>,
+   <code>goTo(Goal, PathingOptions)</code>, <code>cancel()</code>, <code>isPathing()</code> (optional: <code>setNodeCount</code>, <code>retarget</code>,
+   <code>getCurrentNodes</code>).</li>
+<li>Implement <code>PathingEngineProvider</code> — <code>create()</code> and <code>priority()</code>.</li>
+<li>Declare the entrypoint in your <code>fabric.mod.json</code>:
+   <code>json
+   { "entrypoints": { "talos:pathing_engine": ["com.example.MyEngineProvider"] } }</code></li>
+</ol>
+<p>At startup the registry collects every provider, sorts by priority, and picks the first engine that
+reports <code>isAvailable()</code>. Scripts notice nothing — <code>talos.goto()</code> just uses the winning engine. This
+is exactly how the optional Baritone adapter (<code>talos-pathing-baritone</code>) plugs in. With no engine
+available, a <code>NoOpPathingEngine</code> fails calls with a typed error instead of crashing.</p>
+<h2 id="custom-talos-commands-with-argument-suggestions">Custom <code>/talos</code> commands with argument suggestions</h2>
+<p>Simulations and custom pathfinders usually want a control command. <code>@talos.command</code> supports
+arguments and chat tab-completion:</p>
+<pre><code class="language-python">@talos.command(&quot;sheep&quot;, suggest=[[&quot;start&quot;, &quot;stop&quot;, &quot;pause&quot;, &quot;resume&quot;]])
+def sheep_cmd(args):             # args: list[str]
+    getattr(sheep, args[0] if args else &quot;start&quot;)()
+</code></pre>
+<p><code>suggest</code> is a list of tokens for the first argument, or a list of lists for per-position
+suggestions (<code>suggest=[["wheat", "carrot"], ["16", "64"]]</code>). Tokens must not contain whitespace.
+Suggestions are captured at registration and served host-side — the game never calls into Python to
+compute them.</p>
+<h2 id="shipped-examples">Shipped examples</h2>
+<p><code>/talos example sim</code> (wandering sheep + control command) · <code>/talos example pygoto</code> (from-scratch
+goto + override) · <code>/talos example stdlib</code> (<code>import random</code> &amp; friends). The same scripts live in the
+repo's <code>examples/</code> folder.</p>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Scripting.html"><span>Previous</span>Python scripting</a><a class="pager-link next" href="Humanization.html"><span>Next</span>Humanization</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#simulations-custom-pathfinding">Simulations &amp; custom pathfinding</a><a class="toc-3" href="#talossim-the-simulation-framework">talos.sim — the simulation framework</a><a class="toc-3" href="#custom-pathfinding-two-tiers">Custom pathfinding — two tiers</a><a class="toc-3" href="#custom-talos-commands-with-argument-suggestions">Custom /talos commands with argument suggestions</a><a class="toc-3" href="#shipped-examples">Shipped examples</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

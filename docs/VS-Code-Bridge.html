@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VS Code bridge · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html" class="active">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="vs-code-bridge">VS Code bridge</h1>
+<p>The <code>vscode-extension/</code> pushes and runs Python scripts against the mod over a local WebSocket, with live
+log streaming into a "Talos" output channel and Pylance autocomplete via the bundled <code>talos.pyi</code> stubs.</p>
+<h2 id="features">Features</h2>
+<ul>
+<li><strong>Run Script in Minecraft</strong> (Cmd/Ctrl+Alt+Enter) — pushes the active file and runs it in-game.</li>
+<li><strong>Stop Script</strong>, <strong>Reconnect</strong>.</li>
+<li><strong>Run-on-save live reload</strong> (<code>talos.runOnSave</code>).</li>
+<li>Status-bar connection indicator.</li>
+<li>Clickable Python tracebacks — jump to <code>your/script.py:line</code>, including <code>require</code>'d libraries.</li>
+</ul>
+<h2 id="compatible-editors">Compatible editors</h2>
+<p>The extension uses <strong>only stable VS Code APIs</strong> plus a plain <code>ws</code> WebSocket — no proposed or proprietary
+APIs — so the same <code>.vsix</code> runs unmodified on any VS Code-compatible host at engine <code>^1.85.0</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Fully supported</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>VS Code</strong></td>
+<td>reference target</td>
+</tr>
+<tr>
+<td><strong>Cursor</strong> · <strong>Windsurf</strong> · <strong>VSCodium</strong> · <strong>Trae</strong> · <strong>Google Antigravity</strong></td>
+<td>VS Code forks</td>
+</tr>
+<tr>
+<td><strong>Eclipse Theia</strong></td>
+<td>via Open VSX</td>
+</tr>
+<tr>
+<td><strong>code-server / Gitpod / GitHub Codespaces</strong></td>
+<td>browser-hosted VS Code</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Not supported</strong> (different extension systems — would need a native client against the WebSocket protocol
+in <code>vscode-extension/PROTOCOL.md</code>): JetBrains IDEs, Zed, Neovim/Vim, Sublime Text, Emacs.</p>
+<p>Install: <code>&lt;editor&gt; --install-extension talos-&lt;version&gt;.vsix --force</code> (<code>code</code>, <code>cursor</code>, <code>windsurf</code>,
+<code>codium</code>, …) or <strong>Extensions → "Install from VSIX…"</strong>. Talos isn't on a marketplace, so sideload the
+<code>.vsix</code> directly.</p>
+<h2 id="enable-the-bridge-in-game">Enable the bridge in-game</h2>
+<p>Run <code>/talos bridge allow</code> for the session (check state with <code>/talos bridge status</code>).</p>
+<h2 id="configuration">Configuration</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>talos.host</code></td>
+<td><code>127.0.0.1</code></td>
+<td>Must be loopback — the extension refuses anything else.</td>
+</tr>
+<tr>
+<td><code>talos.port</code></td>
+<td><code>43077</code></td>
+<td>Port the mod's WebSocket server listens on.</td>
+</tr>
+<tr>
+<td><code>talos.tokenPath</code></td>
+<td><code>~/.talos/token</code></td>
+<td>Per-session auth token file.</td>
+</tr>
+<tr>
+<td><code>talos.runOnSave</code></td>
+<td><code>false</code></td>
+<td>Re-push and re-run on save (live reload).</td>
+</tr>
+</tbody>
+</table>
+<h2 id="security">Security</h2>
+<p>Pushing a script is <strong>remote code execution inside your game client</strong>, so the bridge is hardened:</p>
+<ul>
+<li><strong>binds loopback only</strong> (<code>127.0.0.1</code>),</li>
+<li><strong>token-gated</strong> — a random per-session token in a file only your OS user can read, sent as the <strong>first
+  WebSocket frame</strong> (never in the URL),</li>
+<li><strong>acts on no frame before auth succeeds</strong>,</li>
+<li><strong>never auto-replays</strong> a script on reconnect.</li>
+</ul>
+<p><strong>Don't run untrusted scripts.</strong></p>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Terminal-CLI.html"><span>Previous</span>Terminal CLI</a><a class="pager-link next" href="Detailed-Logging.html"><span>Next</span>Detailed logging</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#vs-code-bridge">VS Code bridge</a><a class="toc-3" href="#features">Features</a><a class="toc-3" href="#compatible-editors">Compatible editors</a><a class="toc-3" href="#enable-the-bridge-in-game">Enable the bridge in-game</a><a class="toc-3" href="#configuration">Configuration</a><a class="toc-3" href="#security">Security</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

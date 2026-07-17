@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html" class="active">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="talos-documentation">Talos documentation</h1>
+<p><strong>Talos</strong> is a <strong>client-side</strong> Minecraft <strong>Fabric</strong> automation mod (MC <strong>1.21.11 / 26.1 / 26.2</strong>). It
+gives you a physics-simulated pathfinder, a ~206-family event-rule engine, humanized aim and input
+macros, and an embedded <strong>GraalPy</strong> Python runtime (plus a VS Code bridge). Everything runs as <strong>client
+commands</strong> — no server permission level, no server-side mod.</p>
+<blockquote>
+<p><strong>Note:</strong> Automation may violate a server's rules. Talos' humanization is <strong>best-effort obfuscation, not a
+guarantee against anti-cheat</strong>. Use it where you're allowed to.</p>
+</blockquote>
+<h2 id="start-here">Start here</h2>
+<table>
+<thead>
+<tr>
+<th>I want to…</th>
+<th>Go to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Install the mod</td>
+<td><a href="Installation.html">Installation</a></td>
+</tr>
+<tr>
+<td>Learn the <code>/talos</code> commands</td>
+<td><a href="Commands.html">Command reference</a></td>
+</tr>
+<tr>
+<td>Arm reactive rules (<code>/talos on …</code>) and read live values</td>
+<td><a href="Event-Rules-and-Getters.html">Event rules &amp; getters</a></td>
+</tr>
+<tr>
+<td>Write Python automation (<code>import talos</code>)</td>
+<td><a href="Scripting.html">Python scripting</a></td>
+</tr>
+<tr>
+<td>See full worked scripts (lumberjack, sensors, events…)</td>
+<td><a href="Examples.html">Example scripts</a></td>
+</tr>
+<tr>
+<td>Understand Human mode / fatigue</td>
+<td><a href="Humanization.html">Humanization</a></td>
+</tr>
+<tr>
+<td>Push scripts from an editor</td>
+<td><a href="VS-Code-Bridge.html">VS Code bridge</a></td>
+</tr>
+<tr>
+<td><strong>Have ChatGPT/Claude/Gemini write Talos code for me</strong></td>
+<td><a href="LLM-Usage.html"><strong>Using Talos with an LLM</strong></a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="what-talos-does">What Talos does</h2>
+<ul>
+<li><strong>Pathfinding</strong> — a from-scratch A* planner over a deterministic mirror of vanilla player physics
+  (not a waypoint graph). It walks, jumps, sprints, parkours (including momentum-chained hops), mines,
+  bridges, pillars, digs shafts and swims as needed. Deep searches run full-speed on background threads
+  over an immutable world snapshot; movement never stalls, and it replans live.</li>
+<li><strong>Event rules</strong> — <code>/talos on &lt;trigger&gt; … run &lt;command&gt;</code>, ~206 unique trigger families (vitals,
+  entities, blocks, items, world, packets, text, sound/particles), each with comparisons, sustained /
+  windowed temporal modes, and selector filtering.</li>
+<li><strong>Raytrace &amp; local coordinates</strong> — <code>/talos raytrace</code> resolves vanilla caret (<code>^left ^up ^forward</code>)
+  coordinates and casts look-rays that hit <strong>blocks and entities</strong> with sub-block precision.</li>
+<li><strong>Follow mode</strong> — <code>/talos follow</code> trails any entity with a moving-goal navigator.</li>
+<li><strong>Humanized aim</strong> — an off-grid "yellow cube" target model with fast/slow rotation profiles and a live
+  red preview path — never an instant snap.</li>
+<li><strong>Macros</strong> — channel-selective recording/replay of real per-tick input.</li>
+<li><strong>Scripting</strong> — embedded GraalPy (<code>import talos</code>), libraries (<code>talos.require</code>), CLI args (<code>talos.args</code>),
+  an on-screen HUD, an in-game editor, and a VS Code extension that pushes and runs scripts over a
+  local, token-gated WebSocket.</li>
+</ul>
+<h2 id="quick-start">Quick start</h2>
+<pre><code>/talos goto xyz ~ ~ ~50        # walk 50 blocks north, tunnelling/bridging as needed
+/talos raytrace where          # what am I looking at? (block or entity, to 3dp)
+/talos follow @e[type=cow]     # trail the nearest cow
+/talos on health below 6 run chat low HP!    # arm a persistent rule
+/talos example sensors         # write a live-dashboard example script
+/talos script run example_sensors            # ...and run it
+</code></pre>
+<p>Every command lives under <code>/talos</code> (<code>/talos</code> is a full alias — both prefixes work everywhere).</p>
+    </article>
+    <div class="pager"><span></span><a class="pager-link next" href="Installation.html"><span>Next</span>Installation</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#talos-documentation">Talos documentation</a><a class="toc-3" href="#start-here">Start here</a><a class="toc-3" href="#what-talos-does">What Talos does</a><a class="toc-3" href="#quick-start">Quick start</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

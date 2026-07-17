@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Humanization · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html" class="active">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="humanization">Humanization</h1>
+<p>Talos routes aim, timing and movement through a composable humanization layer. There are two independent
+dials: a <strong>stationary profile</strong> (raw/natural/paranoid) and <strong>Human mode</strong> (a session-arc fatigue model
+plus eased cube-aim).</p>
+<blockquote>
+<p><strong>Note:</strong> This is <strong>best-effort obfuscation of long-session statistical detection, not a guarantee of
+undetectability</strong>, and automation may still violate a server's rules. It models only <em>motor-level</em>
+imperfection (overshoot, hesitation, breaks) — never <em>semantic</em> mistakes like attacking the wrong target.</p>
+</blockquote>
+<h2 id="profiles">Profiles</h2>
+<p><code>set_profile("raw" | "natural" | "paranoid")</code> (Python) or the profile Talos reports on <code>/talos human off</code>.
+Profiles are <strong>categories of distributions</strong>, not fixed knobs — the trajectory <em>family</em> varies
+(Bézier / minimum-jerk / piecewise-noise), because a fixed distribution shape is itself a fingerprint.</p>
+<ul>
+<li><strong>raw</strong> — minimal shaping; fastest.</li>
+<li><strong>natural</strong> — right-skewed timing, bounded velocity/accel, overshoot + micro-correction.</li>
+<li><strong>paranoid</strong> — widest variance, most conservative motion.</li>
+</ul>
+<p><code>set_seed(seed)</code> makes a run reproducible (one <code>SeededRng</code> per task, never a global) — useful for testing.</p>
+<h2 id="tuning-moreless-humanisation-per-knob">Tuning — more/less humanisation, per-knob</h2>
+<p>The profiles are starting points, not the ceiling. Two layers of user tuning sit on top, settable
+from Python or chat and <strong>persisted in the mod config across sessions</strong>:</p>
+<h3 id="intensity-one-dial">Intensity — one dial</h3>
+<p><code>talos.intensity(1.5)</code> or <code>/talos human intensity 1.5</code>. Scales the humanness knobs together:
+reaction delays, overshoot probability/magnitude, timing jitter and path wobble scale <strong>up</strong> with
+intensity, while rotation speed scales <strong>down</strong>. <code>0</code> is near-robotic, <code>1</code> is the profile as
+authored, <code>3</code> is the exaggerated maximum.</p>
+<h3 id="per-knob-overrides">Per-knob overrides</h3>
+<p><code>talos.tune(overshoot_prob=0.3, rotation_speed_max=12)</code> or <code>/talos human set &lt;knob&gt; &lt;value&gt;</code>
+(knob names tab-complete). Every knob is clamped into a safe range — bad values can tune aim but
+never break it:</p>
+<table>
+<thead>
+<tr>
+<th>Knob</th>
+<th>Meaning</th>
+<th>Safe range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>reaction_median_ms</code></td>
+<td>median reaction delay before an action</td>
+<td>1–5000</td>
+</tr>
+<tr>
+<td><code>reaction_sigma</code></td>
+<td>log-normal spread of reaction delays</td>
+<td>0–2</td>
+</tr>
+<tr>
+<td><code>rotation_speed_min</code> / <code>rotation_speed_max</code></td>
+<td>aim speed range, degrees per tick</td>
+<td>0.5–360</td>
+</tr>
+<tr>
+<td><code>max_accel</code></td>
+<td>max angular acceleration, deg/tick²</td>
+<td>0.5–360</td>
+</tr>
+<tr>
+<td><code>overshoot_prob</code></td>
+<td>chance an aim overshoots then corrects</td>
+<td>0–1</td>
+</tr>
+<tr>
+<td><code>overshoot_min</code> / <code>overshoot_max</code></td>
+<td>overshoot magnitude range, degrees</td>
+<td>0–30</td>
+</tr>
+<tr>
+<td><code>jitter_phi</code></td>
+<td>AR(1) correlation of timing jitter</td>
+<td>0–0.95</td>
+</tr>
+<tr>
+<td><code>path_deviation</code></td>
+<td>lateral walk/aim wobble stdev</td>
+<td>0–2</td>
+</tr>
+<tr>
+<td><code>visibility_check</code></td>
+<td>1 = only aim at visible targets</td>
+<td>0/1</td>
+</tr>
+</tbody>
+</table>
+<h3 id="trajectory-families">Trajectory families</h3>
+<p>Restrict which aim-path shapes are used: <code>talos.tune(families=["bezier", "min_jerk"])</code> — options
+<code>bezier</code>, <code>min_jerk</code>, <code>linear</code>.</p>
+<h3 id="inspect-reset">Inspect &amp; reset</h3>
+<p><code>talos.human_knobs()</code> returns a dict with <code>profile</code>, <code>intensity</code>, <code>human_mode</code>, <code>families</code>,
+<code>overrides</code> (your tuning) and <code>effective</code> (the final numbers actually used for aim/timing);
+<code>/talos human show</code> prints the same in chat. Clear everything with <code>talos.reset_tuning()</code> or
+<code>/talos human reset</code>.</p>
+<blockquote>
+<p>Design note: knobs, families and intensity are the supported way to change <em>how</em> humanisation
+behaves. Python callbacks cannot supply aim curves directly — aim plans are computed on the game
+thread, and the game thread never enters Python (a core stability invariant).</p>
+</blockquote>
+<h2 id="human-mode-talos-human-onoff-taloshumantruefalse">Human mode — <code>/talos human [on|off]</code> · <code>talos.human(True/False)</code></h2>
+<p>The single Human-mode toggle. <strong>On</strong> bundles two things:</p>
+<h3 id="1-eased-cube-aim-no-direct-snap">1. Eased cube-aim (no direct snap)</h3>
+<p>Command and Python aim — absolute angles, coordinates, blocks and entities — runs through the cube-aim
+controller (<code>AimController</code>):</p>
+<ul>
+<li>A <strong>1×1m yellow guide cube</strong> is rendered off-grid, centred exactly on the intended point.</li>
+<li>The actual aim spot — the <strong>red X</strong> — lands on a <strong>visible face</strong> chosen with probability proportional
+  to that face's visible flat area, center-biased, then a random spot on that face.</li>
+<li>Rotation draws a random <strong>fast</strong> sensitivity far out and a random <strong>slow</strong> sensitivity for the final
+  approach, blending smoothly (never instantly) once the look ray passes within 0.4m of the cube, with
+  per-tick jitter and a <strong>red dotted preview line</strong> tracing the exact curve the crosshair is about to draw.</li>
+<li>A per-session <strong>quadratic speed modulation</strong> (peaking mid-flight, never linear) adds a small speed
+  swell/sag and a slight bow to the path.</li>
+</ul>
+<p><code>/talos track</code> keeps the same aim session alive against a moving target. Navigation gaze during
+<code>/talos goto</code> speaks the same language against a full-block cube on the look-ahead target's hitbox — while
+the walking bearing stays honest (the mark pulls the gaze only a few degrees off the route line; the
+physics rollouts still choose the actual movement inputs).</p>
+<h3 id="2-session-arc-fatigue">2. Session-arc fatigue</h3>
+<p>On top of the stationary profile, a wall-clock <strong>fatigue</strong> model (<code>SessionArc</code>) drifts your behaviour
+over the session so the input stream is <strong>non-stationary</strong> — because a real human's parameters drift, and
+a fixed-parameter profile is exactly what a server can find over hours:</p>
+<ul>
+<li>reactions <strong>slow and spread</strong>,</li>
+<li>aim <strong>loosens and overshoots</strong> more,</li>
+<li>the walk <strong>wobbles wider</strong>,</li>
+<li><strong>idle micro-breaks</strong> pause pathing briefly — more often, and longer, as fatigue rises.</li>
+</ul>
+<p>The HUD shows a <code>human » fatigue N% (Mm)</code> line (or <code>on break (Ns)</code>) while it's on.</p>
+<p><strong>Off</strong> uses direct snap aiming and disables the session drift.</p>
+<h2 id="python-surface">Python surface</h2>
+<pre><code class="language-python">talos.human(True)        # enable; talos.human() returns current state
+talos.human(False)       # disable
+talos.fatigue()          # 0.0–1.0 current fatigue
+talos.on_break()         # True while an idle micro-break is pausing pathing
+talos.set_profile(&quot;natural&quot;)
+talos.set_seed(1234)
+talos.wait_between(2, 5)  # right-skewed humanized pause (the human-ish sleep)
+</code></pre>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Simulations-and-Custom-Pathfinding.html"><span>Previous</span>Simulations & pathfinding</a><a class="pager-link next" href="Examples.html"><span>Next</span>Example scripts</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#humanization">Humanization</a><a class="toc-3" href="#profiles">Profiles</a><a class="toc-3" href="#tuning-moreless-humanisation-per-knob">Tuning — more/less humanisation, per-knob</a><a class="toc-3" href="#human-mode-talos-human-onoff-taloshumantruefalse">Human mode — /talos human [on|off] · talos.human(True/False)</a><a class="toc-3" href="#python-surface">Python surface</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

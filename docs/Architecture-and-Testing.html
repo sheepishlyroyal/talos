@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture & testing · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html" class="active">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="architecture-testing">Architecture &amp; Testing</h1>
+<p>Talos is a set of engines behind thin entry points. Every part below names its package under
+<code>talos-mod/src/main/java/dev/talos/</code> and the seam you can hook to test it without touching the
+others.</p>
+<h2 id="component-map">Component map</h2>
+<pre><code> you                          the mod (client only)                        Minecraft
+ ───                          ─────────────────────                        ─────────
+ /talos …  ──────────► client/command/TalosCommands ──┐
+ VS Code / talos CLI ─► client/bridge/ (WebSocket) ───┤
+                          BridgeProtocol JSON v1      ├─► client/script/ScriptEngine
+                                                      │     └ ≤8 Sessions: 1 worker thread
+ .py files ───────────────────────────────────────────┘       + 1 GraalPy Context each
+                                                              │
+                              Python `import talos` (resources/talos_pyapi/)
+                                                              │
+                          client/script/TalosNativeBridge  (default-deny exports)
+                                                              │  every call marshals via
+                          client/script/GameThreadExecutor ◄──┘  submit() → client tick
+                                                              │
+        ┌──────────────┬───────────────┬──────────────┬───────┴──────┬─────────────┐
+  client/pathing   client/action   client/rules   client/humanize  client/scan  client/hud
+        └──────────────┴───────────────┴── client/log/TalosLog ── ~/.talos/logs/session-*.log
+</code></pre>
+<h2 id="key-invariants-what-tests-should-assert">Key invariants (what tests should assert)</h2>
+<ul>
+<li>The client tick thread <strong>never enters Python</strong> — scripts run on session worker threads and touch
+  the game only through <code>GameThreadExecutor.submit(...)</code> (bounded queue, drained each tick).</li>
+<li>Every script run/eval takes an injectable <strong><code>LogSink</code></strong> (<code>void log(String level, String text)</code>).
+  Chat is merely the default sink; the bridge substitutes a WebSocket sink; the CLI prints the same
+  stream in a terminal; the session file gets it all.</li>
+<li>A stop (command, bridge frame, or CLI Ctrl-C) must unblock <strong>any</strong> stuck call: sessions
+  invalidate their native bridge, cancel in-flight game-thread futures, and hard-close the GraalPy
+  context.</li>
+<li>The bridge speaks versioned JSON, loopback-only, token-gated, nothing before <code>auth_ok</code>.</li>
+</ul>
+<h2 id="testing-seams">Testing seams</h2>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Seam</th>
+<th>How to test it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Wire protocol</td>
+<td>Plain JSON over a WebSocket</td>
+<td>Mock either side without Minecraft. The CLI was validated against an ~80-line stdlib mock bridge asserting <code>push_script</code>/<code>run</code>/<code>eval</code> shapes and replaying <code>log</code>/<code>script_done</code>.</td>
+</tr>
+<tr>
+<td>Script engine + API</td>
+<td>CLI exit codes</td>
+<td><code>talos selftest.py &amp;&amp; echo PASS</code> — <code>0</code> ok, <code>1</code> script raised, <code>3</code> bridge down. Scriptable from CI or a shell loop.</td>
+</tr>
+<tr>
+<td>Python API surface</td>
+<td>In-game self-test script</td>
+<td>The check-runner below; the run fails (exit <code>1</code>) if any check fails.</td>
+</tr>
+<tr>
+<td>Log pipeline</td>
+<td><code>~/.talos/logs/session-*.log</code></td>
+<td>Every level-tagged line lands in the file; <code>talos logs</code> reads it with the game closed.</td>
+</tr>
+<tr>
+<td>Engine internals</td>
+<td><code>/talos debug on</code></td>
+<td>Pathing/movement/rules/actions/script categories narrate decisions to chat + file — grep the session log for <code>[pathing]</code> etc.</td>
+</tr>
+<tr>
+<td>Humanizer</td>
+<td><code>talos.set_seed(n)</code></td>
+<td>Seeded runs are deterministic — replay and compare.</td>
+</tr>
+<tr>
+<td>Rules engine</td>
+<td><code>/talos get &lt;trigger&gt;</code></td>
+<td>Every rule trigger is also a getter — read the value a rule would see without firing it.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="bug-hunting-workflow">Bug-hunting workflow</h2>
+<ol>
+<li><code>/talos debug on</code> (or <code>talos py -c 'talos.debug_mode(True)'</code>) — the engine narrates pathing
+   plans/replans/stalls, rule fires, action state transitions and script lifecycle to chat + file.</li>
+<li><code>talos logs -f</code> follows the session log from a terminal while you play; grep <code>[pathing]</code>,
+   <code>[rules]</code>, <code>[actions]</code>, <code>[script]</code> after the fact.</li>
+<li>Probe state without writing a script: <code>talos py -c 'talos.get("server_tps")'</code>; in-game
+   <code>/talos get &lt;name&gt;</code> reads exactly what a rule trigger would see.</li>
+<li>Sprinkle <code>talos.debug(...)</code> in scripts — invisible until debug mode is on, safe to leave in.</li>
+<li>Reduce to a repro script and bisect from the shell (<code>while ! talos repro.py; do …; done</code>) or use
+   VS Code run-on-save for fast iteration.</li>
+<li><code>/talos script profile</code> toggles per-event dispatch profiling. Attach the session log to bug
+   reports — it is the full timestamped transcript.</li>
+</ol>
+<h2 id="the-self-test-pattern">The self-test pattern</h2>
+<p>Drop into <code>.minecraft/talos/scripts/selftest.py</code>, or run <code>talos selftest.py</code> from a terminal —
+non-zero exit means a check failed. Extend with one <code>@check(...)</code> per feature you care about:</p>
+<pre><code class="language-python">import talos
+
+CHECKS = []
+def check(name):
+    def wrap(fn):
+        CHECKS.append((name, fn))
+        return fn
+    return wrap
+
+@check(&quot;player position readable&quot;)
+def _(): assert talos.player_feet() is not None
+
+@check(&quot;world block lookup&quot;)
+def _():
+    feet = talos.player_feet()
+    assert &quot;:&quot; in talos.block_at(feet.x, feet.y - 1, feet.z)
+
+@check(&quot;observable catalog&quot;)
+def _(): assert talos.get(&quot;health&quot;) &gt; 0
+
+@check(&quot;raytrace does not raise&quot;)
+def _(): talos.raytrace(8.0)          # None (no hit) is fine
+
+@check(&quot;inventory snapshot&quot;)
+def _(): assert isinstance(list(talos.inventory()), list)
+
+@check(&quot;logging pipeline&quot;)
+def _(): assert talos.log(&quot;selftest ping&quot;) == &quot;selftest ping&quot;
+
+failed = 0
+for name, fn in CHECKS:
+    try:
+        fn()
+        talos.info(&quot;PASS &quot; + name)
+    except Exception as error:
+        failed += 1
+        talos.error(&quot;FAIL &quot; + name + &quot;: &quot; + repr(error))
+talos.log(f&quot;{len(CHECKS) - failed}/{len(CHECKS)} checks passed&quot;)
+if failed:
+    raise RuntimeError(f&quot;{failed} check(s) failed&quot;)   # → exit code 1 in the CLI
+</code></pre>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Detailed-Logging.html"><span>Previous</span>Detailed logging</a><a class="pager-link next" href="LLM-Usage.html"><span>Next</span>Using Talos with an LLM</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#architecture-testing">Architecture &amp; Testing</a><a class="toc-3" href="#component-map">Component map</a><a class="toc-3" href="#key-invariants-what-tests-should-assert">Key invariants (what tests should assert)</a><a class="toc-3" href="#testing-seams">Testing seams</a><a class="toc-3" href="#bug-hunting-workflow">Bug-hunting workflow</a><a class="toc-3" href="#the-self-test-pattern">The self-test pattern</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

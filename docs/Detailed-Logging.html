@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Detailed logging · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html" class="active">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="detailed-logging">Detailed logging</h1>
+<p>One master switch controls how loud Talos is. Everything shares a single rotating sink at
+<code>~/.talos/logs/session-&lt;timestamp&gt;.log</code> — a new file per game launch, newest 10 kept.</p>
+<h2 id="the-switch">The switch</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/talos debug</code> / <code>/talos debug status</code></td>
+<td>Report ON/OFF and the current session log-file path.</td>
+</tr>
+<tr>
+<td><code>/talos debug on</code></td>
+<td>Enable: engine trace + <code>talos.debug()</code> lines surface to chat and the file.</td>
+</tr>
+<tr>
+<td><code>/talos debug off</code></td>
+<td>Disable: <code>info</code>/<code>warn</code>/<code>error</code> continue; <code>debug</code> + trace go quiet.</td>
+</tr>
+</tbody>
+</table>
+<p>From Python the same switch is <code>talos.debug_mode(True)</code> / <code>talos.debug_mode(False)</code>;
+<code>talos.debug_mode()</code> with no argument queries it.</p>
+<h2 id="script-logging-api">Script logging API</h2>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>talos.log(msg, level="info")</code></td>
+<td>Leveled line → session log file, mod log, and the script console (in-game chat, or the VS Code output channel when run through the bridge). Returns the text. <code>talos.log("x")</code> behaves exactly like before.</td>
+</tr>
+<tr>
+<td><code>talos.info(msg)</code></td>
+<td>Same as <code>talos.log(msg)</code>. Gray in chat.</td>
+</tr>
+<tr>
+<td><code>talos.warn(msg)</code></td>
+<td>Yellow in chat. Always visible.</td>
+</tr>
+<tr>
+<td><code>talos.error(msg)</code></td>
+<td>Red in chat. Always visible.</td>
+</tr>
+<tr>
+<td><code>talos.debug(msg)</code></td>
+<td>Dark-gray in chat — only visible (console <strong>and</strong> file) while debug mode is on. Free to leave in production scripts.</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-python">import talos
+
+talos.debug_mode(True)                              # same as /talos debug on
+talos.debug(f&quot;starting at {talos.player_feet()}&quot;)   # visible only in debug mode
+talos.warn(&quot;low durability&quot;)                        # always visible, yellow
+</code></pre>
+<h2 id="engine-trace-debug-mode-only">Engine trace (debug mode only)</h2>
+<p>With the switch on, the engine narrates what it's deciding — live to chat, and into the file:</p>
+<ul>
+<li><strong>Pathing</strong> — plan starts, native/simulation search attempts, replans, follower stalls, final
+  success/fail with detail.</li>
+<li><strong>Movement</strong> — follow-segment starts, moving-goal retargets, route hot-swaps, stall detection.</li>
+<li><strong>Rules</strong> — each <code>/talos on</code> rule fire with its trigger and resolved value.</li>
+<li><strong>Actions</strong> — break/place/kill state transitions (<code>prepare → acquire → execute → verify</code>).</li>
+<li><strong>Scripts</strong> — session start/stop and hard-stops.</li>
+</ul>
+<p>This makes <code>/talos debug on</code> the first diagnostic step when a goto stalls, a rule doesn't fire, or a
+script misbehaves — and the file keeps the full timestamped transcript for later.</p>
+<h2 id="file-format">File format</h2>
+<pre><code>16:20:31.412 [INFO] [script] harvest pass 3 done
+16:20:32.001 [DEBUG] [pathing] simulation search attempt 2: partial (node cap)
+16:20:33.590 [WARN] [script] low durability
+</code></pre>
+<p><code>HH:mm:ss.SSS [LEVEL] [category] message</code> — categories are <code>script</code>, <code>pathing</code>, <code>movement</code>, <code>rules</code>,
+<code>actions</code>. <code>DEBUG</code> lines are skipped in the file while the switch is off, so quiet sessions stay small.</p>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="VS-Code-Bridge.html"><span>Previous</span>VS Code bridge</a><a class="pager-link next" href="Architecture-and-Testing.html"><span>Next</span>Architecture & testing</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#detailed-logging">Detailed logging</a><a class="toc-3" href="#the-switch">The switch</a><a class="toc-3" href="#script-logging-api">Script logging API</a><a class="toc-3" href="#engine-trace-debug-mode-only">Engine trace (debug mode only)</a><a class="toc-3" href="#file-format">File format</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

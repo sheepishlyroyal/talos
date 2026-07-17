@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Example scripts · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html" class="active">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="example-scripts">Example scripts</h1>
+<p>Talos ships a set of <strong>bundled reference scripts</strong>. Write one to <code>talos/scripts/</code> and run it:</p>
+<pre><code>/talos example                 # list every bundled example
+/talos example lumberjack      # writes talos/scripts/example_lumberjack.py
+/talos script run example_lumberjack [maxTrees]
+</code></pre>
+<p><code>/talos example &lt;name&gt;</code> <strong>overwrites</strong> its file every time — they're reference material, not saved state.
+Read them, then copy and adapt. Every one uses only the documented API (see <a href="Scripting.html">Python scripting</a>).</p>
+<table>
+<thead>
+<tr>
+<th>Example</th>
+<th>What it shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#goto--custom-goto--command-override"><code>goto</code></a></td>
+<td>A from-scratch pathless goto on raw primitives, plus overriding the built-in <code>/talos goto</code></td>
+</tr>
+<tr>
+<td><a href="#farm--find--goto--mine-loop"><code>farm</code></a></td>
+<td>A tiny find → goto → harvest loop with humanized waits</td>
+</tr>
+<tr>
+<td><a href="#follow--override--from-scratch-shadow"><code>follow</code></a></td>
+<td>Overriding <code>/talos follow</code> and a from-scratch follow loop</td>
+</tr>
+<tr>
+<td><a href="#lumberjack--fell-trees"><code>lumberjack</code></a></td>
+<td>A practical multi-wood tree feller</td>
+</tr>
+<tr>
+<td><a href="#events--every-taloson-handler"><code>events</code></a></td>
+<td>Every <code>talos.on(...)</code> push event, printed live</td>
+</tr>
+<tr>
+<td><a href="#sensors--live-taloget-dashboard"><code>sensors</code></a></td>
+<td>A live dashboard built entirely from <code>talos.get()</code> — a tour of the getter families</td>
+</tr>
+<tr>
+<td><code>sim</code></td>
+<td>A wandering "sheep" — the <code>talos.sim</code> simulation framework (state machine + seeded RNG), plus a <code>suggest=</code>-completed control command. See <a href="Simulations-and-Custom-Pathfinding.html">Simulations &amp; custom pathfinding</a></td>
+</tr>
+<tr>
+<td><code>pygoto</code></td>
+<td>Write-your-own pathfinding from raw primitives + a <code>/talos goto</code> override (sibling of <code>goto</code>)</td>
+</tr>
+<tr>
+<td><code>stdlib</code></td>
+<td>The Python standard library out of the box: <code>random</code>, <code>json</code>, <code>math</code>, <code>collections</code>, …</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="goto-custom-goto-command-override"><code>goto</code> — custom goto + command override</h2>
+<p><code>/talos example goto</code> — a pure-Python goto built on raw primitives (no pathfinder), plus a <code>/talos goto</code>
+override that wraps the built-in. This is the pattern for <strong>replacing or extending any built-in command</strong>
+from Python: register <code>@talos.command("goto")</code>, do your custom prep, then delegate to <code>talos.aio.goto(...)</code>
+(the original stays reachable).</p>
+<pre><code class="language-python"># example_goto.py -- a pure-Python goto built on raw primitives, plus a
+# /talos goto override. Reference material: /talos example goto rewrites it.
+#
+# Run:    /talos script run example_goto
+# Then:   /talos pygoto &lt;x&gt; &lt;y&gt; &lt;z&gt;     (from-scratch goto, no pathfinder)
+#         /talos goto xyz &lt;x&gt; &lt;y&gt; &lt;z&gt;   (now routed through goto_override)
+# Stop:   /talos script stop            (handlers unregister automatically)
+
+import math
+import talos
+
+ARRIVE = 0.5        # horizontal distance (blocks) that counts as &quot;arrived&quot;
+TURN_STEP = 12.0    # max yaw correction per tick -- small = smooth turning
+STALL_TICKS = 8     # ticks without progress before we tap jump
+
+
+def yaw_toward(feet, x, z):
+    # Minecraft yaw: 0 = south (+Z), 90 = west (-X) -- hence atan2(-dx, dz).
+    return math.degrees(math.atan2(-(x - feet.x), z - feet.z))
+
+
+async def naive_goto(x, y, z):
+    # Once per tick: measure the offset, ease the yaw toward it, hold forward,
+    # and tap jump when the distance stops shrinking (a step or lip ahead).
+    tx, tz = x + 0.5, z + 0.5   # aim for the center of the target cell
+    best = None                 # closest distance reached so far
+    stall = 0                   # ticks since best last improved
+    try:
+        while True:
+            feet = talos.player_feet()
+            dx, dz = tx - feet.x, tz - feet.z
+            dist = (dx * dx + dz * dz) ** 0.5
+            if dist &lt;= ARRIVE:
+                talos.log(f&quot;pygoto: arrived ({dist:.2f} blocks from target)&quot;)
+                return
+
+            # Eased steering: shortest signed turn toward the target, clamped.
+            yaw, _pitch = talos.look_angle()
+            delta = (yaw_toward(feet, tx, tz) - yaw + 180.0) % 360.0 - 180.0
+            step = max(-TURN_STEP, min(TURN_STEP, delta))
+            talos.look(yaw + step, 15.0)  # slight downward pitch: watch our feet
+
+            talos.key(&quot;forward&quot;)          # HELD until released -- see finally
+
+            # Progress watchdog: a ~1-block step ahead stops us; tap jump.
+            if best is None or dist &lt; best - 0.05:
+                best, stall = dist, 0
+            else:
+                stall += 1
+                if stall &gt;= STALL_TICKS:
+                    stall = 0
+                    talos.tap(&quot;jump&quot;)     # one tick, releases itself
+
+            await talos.next_tick()       # one control decision per game tick
+    finally:
+        talos.release_keys()              # never leave W held down
+
+
+@talos.command(&quot;pygoto&quot;)
+def pygoto(args):
+    # /talos pygoto &lt;x&gt; &lt;y&gt; &lt;z&gt; -- returning the coroutine starts it as a task,
+    # so chat (and other tasks) stay responsive while it walks.
+    if len(args) != 3:
+        talos.log(&quot;usage: /talos pygoto &lt;x&gt; &lt;y&gt; &lt;z&gt;&quot;)
+        return
+    x, y, z = (int(float(a)) for a in args)
+    talos.log(f&quot;pygoto: walking to {x} {y} {z} (raw inputs, no pathfinder)&quot;)
+    return naive_goto(x, y, z)
+
+
+@talos.command(&quot;goto&quot;)
+def goto_override(args):
+    # Replaces /talos goto while this script runs. The built-ins stay reachable
+    # as talos.goto / talos.aio.goto / talos.aio.goto_block, so the override can
+    # prep, then delegate. Handles both forms:
+    #   /talos goto xyz &lt;x&gt; &lt;y&gt; &lt;z&gt;
+    #   /talos goto block &lt;blockId&gt; [radius]
+    async def wrapped_xyz(x, y, z):
+        # Custom prep goes here (speedbridging, scaffolding, logging, ...).
+        result = await talos.aio.goto(x, y, z)  # the ORIGINAL goto, unchanged
+        talos.log(f&quot;goto override: built-in finished -- {result}&quot;)
+
+    async def wrapped_block(block_id, radius):
+        result = await talos.aio.goto_block(block_id, radius)
+        talos.log(f&quot;goto override: goto_block finished -- {result}&quot;)
+
+    if args and args[0] == &quot;block&quot;:
+        radius = int(args[2]) if len(args) &gt; 2 else 64
+        return wrapped_block(args[1], radius)
+    if args and args[0] == &quot;xyz&quot;:
+        args = args[1:]
+    if len(args) != 3:
+        talos.log(&quot;this override handles xyz &lt;x&gt; &lt;y&gt; &lt;z&gt; and block &lt;id&gt; [radius]&quot;)
+        return
+    x, y, z = (int(float(a)) for a in args)
+    return wrapped_xyz(x, y, z)
+
+
+talos.log(&quot;example_goto loaded: /talos goto overridden, /talos pygoto added&quot;)
+</code></pre>
+<hr />
+<h2 id="farm-find-goto-mine-loop"><code>farm</code> — find → goto → mine loop</h2>
+<p><code>/talos example farm</code> — scan for a crop, walk to it, harvest, and wait a humanized moment before scanning
+again.</p>
+<pre><code class="language-python"># example_farm.py -- a tiny farming loop: find a crop, walk to it, harvest
+# it, and wait a humanized moment before scanning again. Reference material:
+# /talos example farm rewrites it.
+#
+# Run:    /talos script run example_farm
+# Stop:   /talos script stop
+
+import talos
+
+# Crops to harvest, in preference order. Add &quot;minecraft:carrots&quot; etc. here.
+CROPS = [&quot;minecraft:sugar_cane&quot;, &quot;minecraft:wheat&quot;]
+
+
+@talos.task
+async def farm():
+    while True:
+        target = None
+        for crop in CROPS:
+            target = await talos.aio.find_block(crop, 32)
+            if target:
+                break
+        if target is None:
+            talos.log(&quot;farm: nothing to harvest nearby, waiting...&quot;)
+            await talos.aio.wait(2.0, 4.0)   # humanized pause between scans
+            continue
+
+        await talos.aio.goto_near(int(target.x), int(target.y), int(target.z), 2)
+        await talos.aio.mine(target)
+
+        # Replanting: for wheat, select the hotbar slot holding seeds and
+        # place them back on the farmland, e.g.:
+        #   talos.select_slot(0)                          # slot with seeds
+        #   talos.place_block(target.x, target.y, target.z)
+        # Sugar cane regrows from the stump, so it needs no replant.
+
+        await talos.aio.wait(0.4, 0.9)       # human-ish pause per harvest
+</code></pre>
+<hr />
+<h2 id="follow-override-from-scratch-shadow"><code>follow</code> — override + from-scratch shadow</h2>
+<p><code>/talos example follow</code> — override <code>/talos follow</code> with custom behaviour layered on the built-in, plus a
+from-scratch <code>/talos shadow</code> loop on raw primitives for full control.</p>
+<pre><code class="language-python"># example_follow.py -- customize /talos follow. Reference material:
+# /talos example follow rewrites it.
+#
+# Run:    /talos script run example_follow
+# Then:   /talos follow &lt;name|type|@e[...]&gt; [distance]   (routed through here)
+#         /talos shadow &lt;target&gt;                          (from-scratch loop)
+# Stop:   /talos script stop
+#
+# Targets accept players AND any entity: &quot;Steve&quot;, &quot;zombie&quot;,
+# &quot;@e[type=cow,distance=..20]&quot;, &quot;@p&quot;, &quot;@n&quot;. The built-in stays reachable as
+# talos.follow / talos.aio.follow.
+
+import talos
+
+
+@talos.command(&quot;follow&quot;)
+def follow_override(args):
+    # Peel a trailing number off as the keep-distance, like the built-in does.
+    if not args:
+        talos.log(&quot;usage: /talos follow &lt;target&gt; [distance]&quot;)
+        return
+    distance = 3.0
+    if len(args) &gt; 1:
+        try:
+            distance = float(args[-1])
+            args = args[:-1]
+        except ValueError:
+            pass
+    target = &quot; &quot;.join(args)
+
+    async def wrapped():
+        talos.log(f&quot;following {target!r}, keeping ~{distance} blocks&quot;)
+        # Custom behavior goes here: sprint-only follow, waypoint logging,
+        # auto-eat while following, breaking off when health drops, ...
+        try:
+            await talos.aio.follow(target, distance)  # the ORIGINAL follow
+        except talos.PathFailedError as error:
+            talos.log(f&quot;follow ended: {error}&quot;)
+
+    return wrapped()
+
+
+@talos.command(&quot;shadow&quot;)
+def shadow(args):
+    # A from-scratch follow on raw primitives: re-goto the target's feet
+    # whenever they stray, with everything (pace, distance, pathing options)
+    # under your control.
+    if not args:
+        talos.log(&quot;usage: /talos shadow &lt;target&gt;&quot;)
+        return
+    target = &quot; &quot;.join(args)
+
+    async def loop():
+        while True:
+            entity = talos.find_entity(target, 64) if &quot;:&quot; in target \
+                else next((p for p in talos.players()
+                           if p.name.lower() == target.lower()), None)
+            if entity is None:
+                talos.log(&quot;shadow: target not in range, waiting...&quot;)
+                await talos.aio.wait(1.0, 2.0)
+                continue
+            if entity.distance &gt; 4.0:
+                await talos.aio.goto_near(int(entity.pos.x), int(entity.pos.y),
+                                          int(entity.pos.z), 2)
+            await talos.aio.wait(0.3, 0.6)
+
+    return loop()
+
+
+talos.log(&quot;example_follow loaded: /talos follow overridden, /talos shadow added&quot;)
+</code></pre>
+<hr />
+<h2 id="lumberjack-fell-trees"><code>lumberjack</code> — fell trees</h2>
+<p><code>/talos example lumberjack</code> — find a log of any wood type, walk to it, mine the trunk column upward, and
+move on to the next tree. Pass a count (<code>/talos script run example_lumberjack 5</code>) or omit it to run until
+you <code>/talos script stop</code>.</p>
+<pre><code class="language-python"># example_lumberjack.py -- fell nearby trees: find a log, walk to it, mine
+# the trunk column upward, then look for the next one. Reference material:
+# /talos example lumberjack rewrites it.
+#
+# Run:    /talos script run example_lumberjack [maxTrees]   (0/omitted = forever)
+# Stop:   /talos script stop
+
+import talos
+
+LOGS = [&quot;minecraft:oak_log&quot;, &quot;minecraft:birch_log&quot;, &quot;minecraft:spruce_log&quot;,
+        &quot;minecraft:jungle_log&quot;, &quot;minecraft:acacia_log&quot;, &quot;minecraft:dark_oak_log&quot;,
+        &quot;minecraft:mangrove_log&quot;, &quot;minecraft:cherry_log&quot;]
+
+
+def nearest_log(radius=48):
+    # find_block returns the nearest of ONE id; scan every log type and keep
+    # the closest hit across them all.
+    best = None
+    feet = talos.player_feet()
+    for log in LOGS:
+        pos = talos.find_block(log, radius)
+        if pos is None:
+            continue
+        d = ((pos.x - feet.x) ** 2 + (pos.y - feet.y) ** 2 + (pos.z - feet.z) ** 2) ** 0.5
+        if best is None or d &lt; best[0]:
+            best = (d, pos)
+    return best[1] if best else None
+
+
+@talos.task
+async def chop():
+    goal = int(talos.args[0]) if talos.args else 0   # 0 = run until stopped
+    felled = 0
+    while goal == 0 or felled &lt; goal:
+        tree = nearest_log()
+        if tree is None:
+            talos.hud(&quot;§6lumberjack §7» no trees in range, waiting...&quot;, id=&quot;lj&quot;)
+            await talos.aio.wait(2.0, 4.0)
+            continue
+
+        tx, ty, tz = int(tree.x), int(tree.y), int(tree.z)
+        talos.hud(f&quot;§6lumberjack §7» felling tree at {tx} {ty} {tz}&quot;, id=&quot;lj&quot;)
+        await talos.aio.goto_near(tx, ty, tz, 2)
+
+        # Mine straight up the trunk: same X/Z column, block by block, for as
+        # long as the block there is a log.
+        y = ty
+        while True:
+            here = talos.block_at(tx, y, tz)
+            if &quot;log&quot; not in here:
+                break
+            await talos.aio.mine(tx, y, tz)
+            await talos.aio.wait(0.15, 0.4)   # humanized swing cadence
+            y += 1
+
+        felled += 1
+        logs = talos.count(&quot;minecraft:oak_log&quot;) + talos.count(&quot;minecraft:birch_log&quot;)
+        talos.hud(f&quot;§6lumberjack §7» felled {felled} · logs carried {logs}&quot;, id=&quot;lj&quot;)
+        await talos.aio.wait(0.5, 1.2)
+    talos.log(f&quot;lumberjack: done, felled {felled} trees&quot;)
+
+talos.run()
+</code></pre>
+<hr />
+<h2 id="events-every-taloson-handler"><code>events</code> — every <code>talos.on(...)</code> handler</h2>
+<p><code>/talos example events</code> — subscribe to <strong>every</strong> <code>talos.on(...)</code> push event and print what fires, so you
+can watch the live event stream. (These ten push callbacks are distinct from the 206 <code>/talos on</code> rule
+triggers — read those with <code>talos.get</code>; see <code>sensors</code> below.)</p>
+<pre><code class="language-python"># example_events.py -- subscribe to EVERY talos.on(...) event and print what
+# fires, so you can watch the live event stream. Reference material:
+# /talos example events rewrites it.
+#
+# Run:    /talos script run example_events
+# Stop:   /talos script stop
+#
+# NOTE: talos.on(...) push events (below) are a small set of worker-thread
+# callbacks. They are NOT the 206 /talos on &lt;trigger&gt; rule names -- every one
+# of those is readable instead via talos.get(name, *args); see example_sensors.
+
+import talos
+
+@talos.on(&quot;tick&quot;)
+def _tick():
+    # Fires ~20x/second. Keep it cheap. Here it does nothing but prove it runs.
+    pass
+
+@talos.on(&quot;chat&quot;)
+def _chat(message, sender):
+    # sender = a player name, or None for system lines. YOUR OWN messages echo
+    # back here too -- always guard against reacting to yourself.
+    who = sender if sender is not None else &quot;&lt;system&gt;&quot;
+    talos.log(f&quot;[chat] {who}: {message}&quot;)
+
+@talos.on(&quot;health&quot;)
+def _health(health):
+    talos.hud(f&quot;§chealth §f{health:.1f}&quot;, id=&quot;ev_health&quot;)
+
+@talos.on(&quot;entity_hurt&quot;)
+def _entity_hurt(type_id, entity_id, x, y, z):
+    talos.log(f&quot;[entity_hurt] {type_id} #{entity_id} @ {x:.1f} {y:.1f} {z:.1f}&quot;)
+
+@talos.on(&quot;item_pickup&quot;)
+def _pickup(item_id, amount):
+    talos.log(f&quot;[item_pickup] +{amount} {item_id}&quot;)
+
+@talos.on(&quot;death&quot;)
+def _death():
+    talos.hud(&quot;§4you died&quot;, id=&quot;ev_death&quot;)
+
+@talos.on(&quot;goto_start&quot;)
+def _goto_start(x, y, z):
+    talos.log(f&quot;[goto_start] planning to {x} {y} {z}&quot;)
+
+@talos.on(&quot;goto_done&quot;)
+def _goto_done(success, detail):
+    talos.log(f&quot;[goto_done] success={success} -- {detail}&quot;)
+
+@talos.on(&quot;goto_stuck&quot;)
+def _goto_stuck(detail):
+    talos.log(f&quot;[goto_stuck] replanning -- {detail}&quot;)
+
+@talos.on(&quot;disconnect&quot;)
+def _disconnect():
+    talos.log(&quot;[disconnect] left the world&quot;)
+
+talos.hud(&quot;§aevent monitor armed §7» watch the log&quot;, id=&quot;ev_title&quot;)
+talos.run()
+</code></pre>
+<hr />
+<h2 id="sensors-live-talosget-dashboard"><code>sensors</code> — live <code>talos.get()</code> dashboard</h2>
+<p><code>/talos example sensors</code> — a live HUD dashboard built entirely from <code>talos.get()</code>, with a startup tour of
+every getter <strong>family</strong>: plain metrics, descriptive strings, booleans, spatial getters (coords),
+parameterized getters (selectors/items/enchants/regions), and event getters. Every one of the 206
+<code>/talos on</code> triggers is also a getter — <code>/talos get list</code> dumps them all.</p>
+<pre><code class="language-python"># example_sensors.py -- a live dashboard built entirely from talos.get(). Every
+# one of the 206 /talos on triggers is ALSO a getter: talos.get(name, *args).
+# Numbers come back as int/float, booleans as bool, everything else as str.
+# Reference material: /talos example sensors rewrites it.
+#
+# Run:    /talos script run example_sensors
+# Stop:   /talos script stop
+# See:    /talos get list   (dumps every observable + all 206 trigger names)
+
+import talos
+
+def dump_catalog_demo():
+    # A guided tour of the getter FAMILIES, printed once at startup.
+    talos.log(&quot;== talos.get() families ==&quot;)
+
+    # 1) plain live numeric metrics (no args)
+    for name in (&quot;health&quot;, &quot;hunger&quot;, &quot;air&quot;, &quot;xp_level&quot;, &quot;armor_points&quot;,
+                 &quot;speed&quot;, &quot;server_tps&quot;, &quot;fps&quot;, &quot;ping&quot;, &quot;light_level&quot;):
+        talos.log(f&quot;  {name} = {talos.get(name)}&quot;)
+
+    # 2) descriptive string getters
+    for name in (&quot;position&quot;, &quot;dimension&quot;, &quot;biome&quot;, &quot;held_item&quot;, &quot;weather&quot;, &quot;time&quot;):
+        talos.log(f&quot;  {name} = {talos.get(name)}&quot;)
+
+    # 3) boolean state getters
+    for name in (&quot;sneaking&quot;, &quot;sprinting&quot;, &quot;on_ground&quot;, &quot;moving&quot;, &quot;inventory_full&quot;):
+        talos.log(f&quot;  {name} = {talos.get(name)}&quot;)
+
+    # 4) spatial getters accept coords: absolute, ~ feet-relative, or ^ local frame
+    talos.log(f&quot;  light_level(^ ^ ^8 ahead) = {talos.get('light_level', '^ ^ ^8')}&quot;)
+    talos.log(&quot;  block_count(diamond_ore r16, 4 below) = &quot;
+              f&quot;{talos.get('block_count', 'minecraft:diamond_ore', 16, '~', '~-4', '~')}&quot;)
+
+    # 5) parameterized getters: selectors, items, enchants, regions
+    talos.log(f&quot;  entity_count(@e[type=zombie] r32) = {talos.get('entity_count', '@e[type=zombie]', 32)}&quot;)
+    talos.log(f&quot;  item_count(diamond) = {talos.get('item_count', 'minecraft:diamond')}&quot;)
+    talos.log(f&quot;  held_enchant(efficiency) = {talos.get('held_enchant', 'minecraft:efficiency')}&quot;)
+    talos.log(f&quot;  entered_region(100 60 100..120 80 120) = &quot;
+              f&quot;{talos.get('entered_region', 100, 60, 100, 120, 80, 120)}&quot;)
+
+    # 6) event getters: latest occurrence + '[N.NNs ago]', or 'never observed'
+    for name in (&quot;damage_taken&quot;, &quot;item_picked_up&quot;, &quot;villager_profession_changed&quot;,
+                 &quot;sound&quot;, &quot;explosion&quot;, &quot;block_at_feet&quot;):
+        talos.log(f&quot;  {name} = {talos.get(name)}&quot;)
+
+dump_catalog_demo()
+
+@talos.every(ticks=5)
+def dashboard():
+    # A compact vitals HUD refreshed 4x/second, every value straight from get().
+    hp = talos.get(&quot;health&quot;); food = talos.get(&quot;hunger&quot;)
+    tps = talos.get(&quot;server_tps&quot;); spd = talos.get(&quot;speed&quot;)
+    hostile = talos.get(&quot;nearest_hostile_distance&quot;)
+    talos.hud(f&quot;§chp§f {hp:.0f}  §6food§f {food:.0f}  §aTPS§f {tps:.1f}  &quot;
+              f&quot;§dspd§f {spd:.1f}  §chostile§f {hostile:.1f}m&quot;, id=&quot;dash_vitals&quot;)
+    talos.hud(f&quot;§7{talos.get('position')} · {talos.get('dimension')} · &quot;
+              f&quot;{talos.get('biome')}&quot;, id=&quot;dash_where&quot;)
+    talos.hud(f&quot;§7looking at §f{talos.get('looking_at')}&quot;, id=&quot;dash_look&quot;)
+
+talos.hud(&quot;§asensor dashboard live §7» /talos get list for all 206&quot;, id=&quot;dash_title&quot;)
+talos.run()
+</code></pre>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Humanization.html"><span>Previous</span>Humanization</a><a class="pager-link next" href="Terminal-CLI.html"><span>Next</span>Terminal CLI</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#example-scripts">Example scripts</a><a class="toc-3" href="#goto-custom-goto-command-override">goto — custom goto + command override</a><a class="toc-3" href="#farm-find-goto-mine-loop">farm — find → goto → mine loop</a><a class="toc-3" href="#follow-override-from-scratch-shadow">follow — override + from-scratch shadow</a><a class="toc-3" href="#lumberjack-fell-trees">lumberjack — fell trees</a><a class="toc-3" href="#events-every-taloson-handler">events — every talos.on(...) handler</a><a class="toc-3" href="#sensors-live-talosget-dashboard">sensors — live talos.get() dashboard</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

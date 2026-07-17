@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Python scripting · Talos docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b1016'/%3E%3Cpath d='M3 4h10v2H9v6H7V6H3z' fill='%233ddc84'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">TALOS<span class="brand-sub">docs</span></a>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search the docs" autocomplete="off" spellcheck="false" aria-label="Search the docs">
+    <div id="search-results" hidden></div>
+  </div>
+  <nav class="topbar-actions">
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos" rel="noopener">GITHUB</a>
+    <a class="btn btn-ghost" href="https://github.com/sheepishlyroyal/talos/releases" rel="noopener">RELEASES</a>
+    <a class="btn btn-primary" id="modrinth-download" href="#" rel="noopener">DOWNLOAD ON MODRINTH</a>
+  </nav>
+</header>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="nav-group"><div class="nav-group-title">Getting started</div>
+<a href="Home.html">Overview</a>
+<a href="Installation.html">Installation</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Reference</div>
+<a href="Commands.html">Command reference</a>
+<a href="Event-Rules-and-Getters.html">Event rules & getters</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Scripting</div>
+<a href="Scripting.html" class="active">Python scripting</a>
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations & pathfinding</a>
+<a href="Humanization.html">Humanization</a>
+<a href="Examples.html">Example scripts</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Tools</div>
+<a href="Terminal-CLI.html">Terminal CLI</a>
+<a href="VS-Code-Bridge.html">VS Code bridge</a>
+<a href="Detailed-Logging.html">Detailed logging</a>
+</div>
+<div class="nav-group"><div class="nav-group-title">Internals</div>
+<a href="Architecture-and-Testing.html">Architecture & testing</a>
+<a href="LLM-Usage.html">Using Talos with an LLM</a>
+</div>
+  </aside>
+  <main class="content">
+    <article class="prose">
+<h1 id="python-scripting-import-talos">Python scripting (<code>import talos</code>)</h1>
+<p><code>/talos script run &lt;name&gt;</code> runs <code>.minecraft/talos/scripts/&lt;name&gt;.py</code> through an embedded <strong>GraalPy</strong>
+runtime with a curated <code>talos</code> module already in scope.</p>
+<ul>
+<li>Python runs on a <strong>dedicated worker thread</strong>; the game tick thread never enters Python, so blocking
+  calls block only your script — render FPS is unaffected.</li>
+<li><code>pip</code>, native packages, host classes, filesystem and environment access are <strong>unavailable</strong>. It's a
+  hardened capability surface, not full CPython. <strong>Only <code>import talos</code>.</strong></li>
+<li><strong>No <code>pip install talos</code></strong> — <code>talos</code> is provided by the mod's embedded GraalPy runtime, not a PyPI
+  package. You install nothing: drop a <code>.py</code> in <code>.minecraft/talos/scripts/</code> and <code>import talos</code>.</li>
+<li>A plain <code>talos.goto(...)</code> <strong>pauses every Python task in the session</strong> until it returns. To run things
+  concurrently, use <code>await talos.aio.goto(...)</code> inside an <code>async def</code>.</li>
+<li>End a script with <code>talos.run()</code> if it registers any task/event/<code>@every</code>/<code>@command</code> (implicit at module
+  end, but be explicit).</li>
+</ul>
+<blockquote>
+<p><strong>Note:</strong> <strong>Your own chat echoes back</strong> into the <code>chat</code> event. Always guard <code>chat</code>/<code>mention</code> handlers against
+reacting to your own messages.</p>
+</blockquote>
+<h2 id="api-by-category">API by category</h2>
+<p><strong>Metadata &amp; libraries</strong> — <code>talos.args</code> (<code>list[str]</code> from <code>/talos script run &lt;name&gt; args…</code>) ·
+<code>talos.require("lib")</code> (import another <code>talos/scripts/</code> file as a module) · <code>talos.state</code> (persistent
+per-script dict).</p>
+<p><strong>Logging</strong> — <code>talos.log(msg, level="info")</code> (session log file + mod log + script console) ·
+<code>talos.debug/info/warn/error(msg)</code> shorthands (<code>warn</code> yellow, <code>error</code> red in chat; <code>debug</code> only visible
+while debug mode is on) · <code>talos.debug_mode(enabled=None)</code> (query/toggle the master switch — same as
+<code>/talos debug on|off</code>). Debug mode also streams the engine's own trace (pathing, rules, actions, script
+lifecycle) to chat and <code>~/.talos/logs/session-&lt;timestamp&gt;.log</code> (newest 10 kept). See
+<a href="Detailed-Logging.html">Detailed logging</a>.</p>
+<p><strong>Libraries</strong> — with no pip, <code>talos.require</code> <em>is</em> the module system: a library is just another <code>.py</code>
+in <code>talos/scripts/</code> defining functions (<code>lib = talos.require("mininglib"); lib.vein("diamond_ore")</code>).
+Cached per run (CPython semantics), cache resets on every (re)run so edits apply next run; same
+sandbox + trust summary as scripts; only files directly in <code>talos/scripts/</code>. Keep module-level code
+to <code>def</code>s/constants. Test one standalone from a terminal:
+<code>talos py -c 'lib = talos.require("mininglib"); talos.log(lib.vein("stone", 8))'</code> — see
+<a href="Terminal-CLI.html">Terminal CLI</a> and the debugging workflow in
+<a href="Architecture-and-Testing.html">Architecture &amp; Testing</a>.</p>
+<p><strong>Movement &amp; pathing</strong> — <code>goto(x, y=None, z=None)</code> · <code>goto_near(x, y, z, range)</code> · <code>goto_xz(x, z)</code> ·
+<code>goto_block(block_id, radius=64)</code> · <code>follow(target, distance=3.0)</code> · <code>move_ahead(distance)</code> (neg = back
+off) · <code>set_node_count(n)</code>. All accept numbers, <code>~</code>/<code>^</code> token strings, one <code>"~ ~1 ~"</code> string, or a
+<code>Pos</code>/<code>Entity</code>.</p>
+<p><strong>Named-process control (non-blocking watchdog)</strong> — <code>killprocess(name)</code> (alias <code>kill_process</code>) ·
+<code>process_time(name)</code> → secs or <code>-1</code> · <code>time_exceeds(name, secs)</code> → bool. Names: <code>goto</code>, <code>goto_block</code>,
+<code>follow</code>, <code>path</code>, <code>pathing</code>, or a task name.</p>
+<p><strong>Raytrace &amp; local coords</strong> — <code>local(left, up, forward)</code> → <code>Pos</code> (from eyes; <code>local(0,0,5)</code> = 5 ahead) ·
+<code>ahead(distance)</code> → <code>Pos</code> · <code>raytrace(max_distance=64.0)</code> → <code>Hit | None</code> ·
+<code>raytrace_if(block=None, entity=None, max_distance=64.0)</code> → bool.</p>
+<p><strong>Finding</strong> — <code>find_block(name, radius=64)</code> → <code>Pos|None</code> · <code>find_entity(type, radius=64.0)</code> →
+<code>Entity|None</code> · <code>find_item(item, radius=64.0)</code> → <code>Entity|None</code> · <code>players(radius=128.0)</code> ·
+<code>nearest_player(radius=128.0)</code> · <code>entities(type=None, radius=64.0)</code>.</p>
+<p><strong>World actions</strong> — <code>place_block(x=None, y=None, z=None, block_id=None)</code> (no coords = at crosshair) ·
+<code>place_look()</code> · <code>break_block(x, y=None, z=None)</code> · <code>mine(...)</code> (alias) · <code>mine_looking_at()</code> ·
+<code>left_click()</code> · <code>right_click()</code> · <code>kill_nearest(radius=6.0)</code>.</p>
+<p><strong>Aim &amp; look</strong> — <code>look(yaw, pitch)</code> · <code>look_at(x, y=None, z=None)</code> · <code>look_angle()</code> → <code>(yaw, pitch)</code> ·
+<code>looking_at()</code> → <code>Pos|None</code> · <code>angle_to(x, y=None, z=None)</code> → <code>(yaw, pitch)</code>.</p>
+<p><strong>Chat &amp; commands</strong> — <code>chat(msg)</code> sends a chat message to the server (a leading <code>/</code> runs it as a
+command) · <code>run_command(cmd)</code> runs a command (<code>/</code> optional): <code>/talos …</code> client commands dispatch
+locally so scripts can drive Talos itself; anything unhandled goes to the server. Both return the
+text. <strong>Note:</strong> Own messages echo into the <code>chat</code> event — guard against loops; while <code>talos.input()</code> is
+waiting, a plain <code>chat()</code> is consumed as that answer; neither is humanized — rate-limit with
+<code>wait_between</code>. Distinct from <code>@talos.command(name)</code>, which <em>registers</em> a <code>/talos</code> subcommand.</p>
+<p><strong>Position &amp; sensing</strong> — <code>player_pos()</code> (eye) · <code>player_feet()</code> · <code>block_at(x, y=None, z=None)</code> → id ·
+<code>on_edge(margin=0.3)</code> → bool · <code>get(name, *args)</code> → the shared catalog
+(<a href="Event-Rules-and-Getters.html">Event rules &amp; getters</a>).</p>
+<p><strong>Input</strong> — <code>key(name, pressed=True)</code> · <code>tap(name)</code> (one tick) · <code>release_keys(*names)</code> (none = all) ·
+<code>select_slot(0-8)</code>.</p>
+<p><strong>Inventory</strong> — <code>inventory()</code> → <code>list[{slot,id,count}]</code> · <code>hotbar()</code> · <code>selected_slot()</code> · <code>count(id)</code> ·
+<code>has(id)</code> · <code>find_slot(id)</code> · <code>container_items()</code> · <code>container_slot_count()</code> ·
+<code>click_slot(slot, right=False)</code> · <code>move_stack(from, to)</code> · <code>take_stack(container_slot, player_slot)</code> ·
+<code>deposit(id, amount)</code> → moved · <code>withdraw(id, amount)</code> → moved · <code>craft(id, count=1)</code> · <code>armor_item(slot)</code>
+· <code>equip_armor(from, armor_slot)</code> · <code>screen()</code> · <code>close_screen()</code>.</p>
+<p><strong>HUD</strong> — <code>hud(text, id="hud")</code> pins a top-left line (same id updates in place; different ids stack; max
+20 lines / 256 chars; <code>§</code> colour codes work; cleared when the script stops) · <code>hud_remove(id="hud")</code> ·
+<code>hud_clear()</code>.</p>
+<p><strong>Humanization &amp; timing</strong> — <code>wait(a, b=None)</code> / <code>wait_between(a, b)</code> (right-skewed pause) ·
+<code>set_profile("raw"|"natural"|"paranoid")</code> · <code>set_seed(seed)</code> · <code>human(enabled=None)</code> · <code>fatigue()</code> → 0–1 ·
+<code>on_break()</code> → bool · <code>intensity(v=None)</code> (global more/less dial, 0–3) · <code>tune(**knobs, families=[...])</code>
+(per-knob overrides, clamped safe) · <code>human_knobs()</code> → dict · <code>reset_tuning()</code> · <code>sleep(secs)</code> ·
+<code>ticks(n)</code> · <code>next_tick()</code> · <code>tick_count()</code>. See <a href="Humanization.html">Humanization</a> for the knob table.</p>
+<p><strong>Simulations (<code>talos.sim</code>)</strong> — <code>sim.Simulation(name, hz=20, budget_ms=5)</code> with <code>@sim.tick(dt)</code>,
+<code>@sim.on_start</code>/<code>@sim.on_stop</code>, <code>start/stop/pause/resume</code>, <code>sim.state</code> dict, seeded <code>sim.rng</code>. Safety
+limits: max 16 sims, ≤20 Hz, over-budget auto-throttle, 5-error circuit breaker. See
+<a href="Simulations-and-Custom-Pathfinding.html">Simulations &amp; custom pathfinding</a>.</p>
+<h3 id="python-standard-library">Python standard library</h3>
+<p>Pure-Python stdlib imports work out of the box — <code>random</code>, <code>math</code>, <code>json</code>, <code>collections</code>, <code>heapq</code>,
+<code>itertools</code>, <code>re</code>, <code>dataclasses</code>, <code>time</code>, …:</p>
+<pre><code class="language-python">import random
+import talos
+talos.log(random.randint(1, 10))
+</code></pre>
+<p><strong>Not available</strong> (blocked by the sandbox, by design): pip packages, native extensions (<code>numpy</code>,
+<code>PIL</code>), host file/socket IO (<code>open</code>, <code>socket</code>, <code>urllib</code>), <code>threading</code>, <code>subprocess</code>, <code>os.environ</code>.
+Demo: <code>/talos example stdlib</code>, or from the terminal:
+<code>talos run 'import random;import talos;talos.log(random.randint(1,10))'</code>.</p>
+<h2 id="events-talosonevent">Events — <code>@talos.on("&lt;event&gt;")</code></h2>
+<p>Registers a handler on the worker thread. These are push callbacks — <strong>not</strong> the 206 rule triggers (read
+those with <code>talos.get</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Handler</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tick</code></td>
+<td><code>fn()</code> — every game tick</td>
+</tr>
+<tr>
+<td><code>chat</code></td>
+<td><code>fn(message, sender)</code> — <code>sender</code> is a player name or <code>None</code> (system). <strong>Own messages echo — guard.</strong></td>
+</tr>
+<tr>
+<td><code>entity_hurt</code></td>
+<td><code>fn(type_id, entity_id, x, y, z)</code></td>
+</tr>
+<tr>
+<td><code>health</code></td>
+<td><code>fn(health)</code></td>
+</tr>
+<tr>
+<td><code>death</code> / <code>disconnect</code></td>
+<td><code>fn()</code></td>
+</tr>
+<tr>
+<td><code>item_pickup</code></td>
+<td><code>fn(item_id, amount)</code></td>
+</tr>
+<tr>
+<td><code>goto_start</code></td>
+<td><code>fn(x, y, z)</code> · <code>goto_done</code> <code>fn(success, detail)</code> · <code>goto_stuck</code> <code>fn(detail)</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="async-tasks-commands">Async, tasks &amp; commands</h2>
+<ul>
+<li><code>@talos.task</code> / <code>talos.start(coro, name=None)</code> — run an <code>async def</code> as a concurrent task.</li>
+<li><code>talos.aio.*</code> — awaitable versions of the blocking actions (<code>goto</code>, <code>goto_near</code>, <code>goto_xz</code>,
+  <code>goto_block</code>, <code>follow</code>, <code>find_block</code>, <code>place_block</code>, <code>break_block</code>, <code>mine</code>, <code>mine_looking_at</code>,
+  <code>kill_nearest</code>, <code>wait</code>, <code>wait_between</code>, <code>input</code>). Use inside <code>async def</code> so other tasks keep running.</li>
+<li><code>@talos.on_start</code> / <code>@talos.on_tick</code> — module-level lifecycle hooks.</li>
+<li><code>@talos.every(seconds=…, minutes=…, ticks=…)</code> — run a function on a cadence.</li>
+<li><code>@talos.command("name", suggest=None)</code> — register <code>/talos &lt;name&gt;</code> in Python; the handler receives the
+  arguments as a <code>list[str]</code> (async handler runs as a task; overrides a built-in when the name matches).
+  <code>suggest</code> adds chat tab-completion: a list of tokens for the first argument, or a list of lists
+  per-position — <code>@talos.command("farm", suggest=[["wheat", "carrot"], ["16", "64"]])</code>. Tokens must not
+  contain whitespace; suggestions are captured at registration and served host-side (the game never
+  calls into Python to compute them).</li>
+<li><code>talos.run()</code> — start the loop. <code>talos.cancel_all()</code>, <code>TaskHandle.cancel()</code>, <code>talos.parallel(...)</code>,
+  <code>talos.spawn(fn, …)</code>.</li>
+<li><code>talos.input(prompt)</code> / <code>await talos.aio.input(prompt)</code> — block for the user's next chat message
+  (captured locally, never sent).</li>
+</ul>
+<h2 id="snapshot-types-errors">Snapshot types &amp; errors</h2>
+<p><code>Pos(.x/.y/.z)</code> · <code>Entity(.uuid/.type/.pos/.distance)</code> · <code>Player(.name/…)</code> ·
+<code>Hit(.type/.id/.pos/.distance)</code> (<code>.type</code> = <code>"block"</code>/<code>"entity"</code>). Failures raise <code>TalosError</code>,
+<code>PathFailedError</code>, <code>OutOfReachError</code>, <code>NotFoundError</code>, <code>TargetLostError</code>, <code>ActionCancelledError</code>,
+<code>WorldClosedError</code>.</p>
+<h2 id="gotchas-checklist">Gotchas checklist</h2>
+<ul>
+<li>[ ] <code>import talos</code> only; no stdlib file/network/process/<code>pip</code>.</li>
+<li>[ ] <code>talos.run()</code> present if any <code>@task</code>/<code>@on</code>/<code>@every</code>/<code>@command</code>/<code>@on_tick</code> is used.</li>
+<li>[ ] Used <code>await talos.aio.&lt;action&gt;()</code> (not the blocking form) when other tasks must keep running.</li>
+<li>[ ] <code>chat</code>/<code>mention</code> handlers guard against your own echoed messages.</li>
+<li>[ ] <code>^</code> = <strong>local frame</strong> in <code>raytrace</code>/scripts but a <strong>relative angle</strong> in <code>look</code>/<code>coords</code>/<code>mine
+      direction</code>.</li>
+<li>[ ] Long loops call <code>talos.wait_between(...)</code> / <code>next_tick()</code> so they yield and stay cancellable.</li>
+</ul>
+<p>See <a href="Examples.html">Example scripts</a> for complete, runnable programs.</p>
+    </article>
+    <div class="pager"><a class="pager-link prev" href="Event-Rules-and-Getters.html"><span>Previous</span>Event rules & getters</a><a class="pager-link next" href="Simulations-and-Custom-Pathfinding.html"><span>Next</span>Simulations & pathfinding</a></div>
+    <footer class="page-footer">
+      Client-side Fabric mod for Minecraft 1.21.11 / 26.1 / 26.2. Responsible use: automation may
+      violate individual server rules — use in singleplayer or where permitted.
+    </footer>
+  </main>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#python-scripting-import-talos">Python scripting (import talos)</a><a class="toc-3" href="#api-by-category">API by category</a><a class="toc-3" href="#events-talosonevent">Events — @talos.on("&lt;event&gt;")</a><a class="toc-3" href="#async-tasks-commands">Async, tasks &amp; commands</a><a class="toc-3" href="#snapshot-types-errors">Snapshot types &amp; errors</a><a class="toc-3" href="#gotchas-checklist">Gotchas checklist</a></nav>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>
