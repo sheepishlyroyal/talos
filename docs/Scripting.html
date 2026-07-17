@@ -122,6 +122,12 @@ waiting, a plain <code>chat()</code> is consumed as that answer; neither is huma
 <p><strong>HUD</strong> — <code>hud(text, id="hud")</code> pins a top-left line (same id updates in place; different ids stack; max
 20 lines / 256 chars; <code>§</code> colour codes work; cleared when the script stops) · <code>hud_remove(id="hud")</code> ·
 <code>hud_clear()</code>.</p>
+<p><strong>Drawing overlays</strong> — <code>draw_box(a, b=None, color="green", seconds=10, id=None)</code> (one arg = that
+block cell; positions are <code>Pos</code> or <code>(x, y, z)</code>) · <code>draw_line(a, b, …)</code> · <code>draw_clear(id=None)</code>.
+Client-only wireframes, like the built-in highlights. <code>color</code> = <code>"#RRGGBB"</code>, int, or a name
+(green/red/yellow/blue/white/orange/purple/aqua/pink/black). Re-drawing the same <code>id</code> replaces the
+shape in place — that's how you animate. Max 512 live overlays per script, lifetime ≤ 1 h,
+auto-cleared when the script stops.</p>
 <p><strong>Humanization &amp; timing</strong> — <code>wait(a, b=None)</code> / <code>wait_between(a, b)</code> (right-skewed pause) ·
 <code>set_profile("raw"|"natural"|"paranoid")</code> · <code>set_seed(seed)</code> · <code>human(enabled=None)</code> · <code>fatigue()</code> → 0–1 ·
 <code>on_break()</code> → bool · <code>intensity(v=None)</code> (global more/less dial, 0–3) · <code>tune(**knobs, families=[...])</code>

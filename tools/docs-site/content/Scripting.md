@@ -87,6 +87,13 @@ waiting, a plain `chat()` is consumed as that answer; neither is humanized — r
 20 lines / 256 chars; `§` colour codes work; cleared when the script stops) · `hud_remove(id="hud")` ·
 `hud_clear()`.
 
+**Drawing overlays** — `draw_box(a, b=None, color="green", seconds=10, id=None)` (one arg = that
+block cell; positions are `Pos` or `(x, y, z)`) · `draw_line(a, b, …)` · `draw_clear(id=None)`.
+Client-only wireframes, like the built-in highlights. `color` = `"#RRGGBB"`, int, or a name
+(green/red/yellow/blue/white/orange/purple/aqua/pink/black). Re-drawing the same `id` replaces the
+shape in place — that's how you animate. Max 512 live overlays per script, lifetime ≤ 1 h,
+auto-cleared when the script stops.
+
 **Humanization & timing** — `wait(a, b=None)` / `wait_between(a, b)` (right-skewed pause) ·
 `set_profile("raw"|"natural"|"paranoid")` · `set_seed(seed)` · `human(enabled=None)` · `fatigue()` → 0–1 ·
 `on_break()` → bool · `intensity(v=None)` (global more/less dial, 0–3) · `tune(**knobs, families=[...])`

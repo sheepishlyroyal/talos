@@ -71,6 +71,20 @@ def tuning():
 check("intensity / tune / clamp / human_knobs / reset_tuning", tuning)
 
 
+# ---- 3b. drawing overlays -----------------------------------------------------
+def drawing():
+    feet = talos.player_feet()
+    box_id = talos.draw_box(feet, color="aqua", seconds=20)
+    talos.draw_line(feet, (feet.x + 5, feet.y + 2, feet.z), color="yellow", seconds=20, id="chk_line")
+    try:
+        talos.draw_box(feet, color="not_a_color")
+        raise AssertionError("bad color accepted")
+    except ValueError:
+        pass
+    talos.draw_clear(box_id)   # line stays visible for the manual look-around
+check("draw_box / draw_line / draw_clear (look: yellow line at your feet)", drawing)
+
+
 # ---- 4. debug switch ---------------------------------------------------------
 def debug():
     was = talos.debug_mode()
