@@ -98,6 +98,5 @@ authentication or distributes Mojang assets.
 
 ## Licence
 
-The repository's licence is not yet declared (a `LICENSE` file is pending). By submitting a
-contribution you agree it can be distributed under the licence the project adopts. If this matters
-to you, open an issue first.
+Talos is [MIT-licensed](LICENSE). By submitting a contribution you agree it is provided under the
+same licence.
