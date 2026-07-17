@@ -9,6 +9,7 @@ Usage:
   talos <script.py> [args...]        push a local file into the game and run it
   talos run <script.py> [args...]    same, explicit
   talos py <script.py>               same, via the py alias
+  talos run 'import talos;...'       inline code: anything that isn't a filename
   talos py -c 'code'                 run a one-liner (shares a running script's
   talos -c 'code'                    globals; trailing expression echoes repr)
   talos python  -c 'code'|file.py    python/python3 are accepted aliases
@@ -349,8 +350,13 @@ def main(argv):
         cmd_status(ports, token_path)
     elif rest[0] == "logs":
         cmd_logs(follow="-f" in rest[1:])
-    else:
+    elif re.fullmatch(r"[A-Za-z0-9_.\\/~-]+", rest[0]):
+        # Looks like a filename/path -> push + run it.
         cmd_run(rest[0], rest[1:], ports, token_path)
+    else:
+        # Anything with code-ish characters (spaces, ;, (, quotes...) is inline Python:
+        #   talos run 'import talos;talos.log("hi")'
+        cmd_eval(" ".join(rest), ports, token_path)
 
 
 if __name__ == "__main__":
