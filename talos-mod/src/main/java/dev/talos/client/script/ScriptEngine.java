@@ -51,7 +51,7 @@ public final class ScriptEngine {
     private static final ScriptEngine INSTANCE = new ScriptEngine();
     private static final CompletableFuture<Engine> SHARED_ENGINE = new CompletableFuture<>();
     private static final List<String> API_FILES = List.of(
-            "errors.py", "actions.py", "engine.py", "events.py", "humanize.py", "__init__.py");
+            "errors.py", "actions.py", "engine.py", "events.py", "humanize.py", "sim.py", "__init__.py");
     private static final int MAX_SESSIONS = 8;
 
     /**
