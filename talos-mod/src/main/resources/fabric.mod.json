@@ -4,6 +4,7 @@
   "version": "${version}",
   "name": "Talos",
   "environment": "client",
+  "license": "MIT",
   "entrypoints": {
     "client": ["dev.talos.client.TalosClientMod", "dev.talos.client.script.ScriptClientInit"],
     "talos:pathing_engine": ["dev.talos.client.pathing.talos.TalosPathingEngineProvider"]
