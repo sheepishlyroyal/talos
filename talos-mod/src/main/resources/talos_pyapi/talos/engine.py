@@ -278,7 +278,7 @@ _commands = {}
 _commands_pumping = False
 
 
-def command(name):
+def command(name, suggest=None):
     """Register a handler for `/talos <name> ...` while this script session runs.
 
     If `name` matches a built-in subcommand (goto, mine, place, kill), the chat
@@ -295,12 +295,35 @@ def command(name):
         async def pygoto(args):
             x, y, z = (int(a) for a in args)
             await talos.aio.goto(x, y, z)
+
+    Tab-completion for the arguments comes from `suggest`: a list of strings
+    suggests those tokens for the FIRST argument; a list of lists suggests
+    per-position (outer index = argument position). Tokens must not contain
+    whitespace. Suggestions are static (captured at registration) and are served
+    host-side — the game never calls into Python to compute them.
+
+        @talos.command("farm", suggest=[["wheat", "carrot", "potato"], ["16", "64"]])
+        def farm(args):
+            crop, count = args[0], int(args[1])
     """
     def decorate(handler):
         if not callable(handler):
             raise TypeError("@talos.command needs a callable handler")
         _commands[str(name)] = handler
-        _errors.call(_talos_host.registerCommand, str(name))
+        if suggest is None:
+            _errors.call(_talos_host.registerCommand, str(name))
+        else:
+            positions = suggest
+            if positions and not isinstance(positions[0], (list, tuple)):
+                positions = [positions]
+            spec_rows = []
+            for options in positions:
+                tokens = [str(option) for option in options]
+                for token in tokens:
+                    if any(ch.isspace() for ch in token):
+                        raise ValueError(f"suggestion tokens must not contain whitespace: {token!r}")
+                spec_rows.append("\t".join(tokens))
+            _errors.call(_talos_host.registerCommand, str(name), "\n".join(spec_rows))
         _ensure_command_pump()
         return handler
     return decorate

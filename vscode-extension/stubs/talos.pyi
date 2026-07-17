@@ -548,7 +548,7 @@ def on_edge(margin: float = 0.3) -> bool:
 
 # --- events / misc ------------------------------------------------------------
 
-def command(name: str) -> Callable[[_F], _F]:
+def command(name: str, suggest: Optional[list] = None) -> Callable[[_F], _F]:
     """Decorator registering a handler for `/talos <name> ...` while this script
     session runs. If `name` matches a built-in subcommand (goto, mine, place,
     kill), the chat command is forwarded here INSTEAD of the built-in — which
@@ -678,6 +678,58 @@ def fatigue() -> float:
 def on_break() -> bool:
     """True while a Human-mode micro-break is pausing automation."""
     ...
+
+def intensity(value: Optional[float] = None) -> Optional[float]:
+    """Query or set the global humanisation intensity (0 = near-robotic,
+    1 = profile default, up to 3 = exaggerated). Persisted across sessions."""
+    ...
+
+def tune(families: Optional[list[str]] = None, **knobs: float) -> None:
+    """Override individual humanisation knobs (clamped into safe ranges):
+    reaction_median_ms, reaction_sigma, rotation_speed_min, rotation_speed_max,
+    max_accel, overshoot_prob, overshoot_min, overshoot_max, jitter_phi,
+    path_deviation, visibility_check. families: any of "bezier", "min_jerk",
+    "linear". Persisted across sessions."""
+    ...
+
+def human_knobs() -> dict:
+    """Current tuning + effective humanisation values: profile, intensity,
+    human_mode, families, overrides, effective."""
+    ...
+
+def reset_tuning() -> None:
+    """Clear intensity, tune() overrides and family restrictions back to the pure profile."""
+    ...
+
+class _Simulation:
+    """A named, rate-limited custom loop (animal AI, custom pathfinding, any
+    simulation). Runs on the script worker with safety limits: per-step budget
+    with auto-throttle, 5-error circuit breaker (auto-pause), max 16 sims."""
+    name: str
+    interval: int
+    budget_ms: float
+    state: dict
+    rng: Any
+    running: bool
+    paused: bool
+    def tick(self, fn: _F) -> _F: ...
+    def on_start(self, fn: _F) -> _F: ...
+    def on_stop(self, fn: _F) -> _F: ...
+    def start(self) -> "_Simulation": ...
+    def stop(self) -> None: ...
+    def pause(self) -> None: ...
+    def resume(self) -> None: ...
+    def seed(self, value: int) -> None: ...
+
+class sim:
+    """talos.sim — tick-driven simulation framework (see talos.sim.Simulation)."""
+    MAX_SIMS: int
+    Simulation = _Simulation
+    class SimulationError(RuntimeError): ...
+    @staticmethod
+    def sims() -> dict: ...
+    @staticmethod
+    def stop_all() -> None: ...
 
 def spawn(callable: Callable[[], Any]) -> Any:
     """Run a function in an ISOLATED concurrent script session (separate

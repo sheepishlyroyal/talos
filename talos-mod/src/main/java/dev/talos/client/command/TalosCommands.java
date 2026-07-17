@@ -62,6 +62,36 @@ public final class TalosCommands {
     private static final SuggestionProvider<FabricClientCommandSource> SCRIPT_COMMAND_NAMES =
             (context, builder) -> SharedSuggestionProvider.suggest(ScriptCommandRegistry.names(), builder);
 
+    /**
+     * Tab-completes the greedy args of a script command from the per-position suggestion
+     * lists supplied at registration ({@code @talos.command(..., suggest=...)}). Purely
+     * host-side data — never calls into Python.
+     */
+    private static final SuggestionProvider<FabricClientCommandSource> SCRIPT_COMMAND_ARGS =
+            (context, builder) -> {
+                String name;
+                try {
+                    name = StringArgumentType.getString(context, "name");
+                } catch (IllegalArgumentException e) {
+                    return builder.buildFuture();
+                }
+                String remaining = builder.getRemaining();
+                List<String> tokens = new ArrayList<>();
+                for (String token : remaining.split(" ")) {
+                    if (!token.isEmpty()) tokens.add(token);
+                }
+                boolean startingNewToken = remaining.isEmpty() || remaining.endsWith(" ");
+                int position = startingNewToken ? tokens.size() : tokens.size() - 1;
+                String prefix = startingNewToken ? "" : tokens.get(tokens.size() - 1);
+                List<String> options = ScriptCommandRegistry.suggestionsFor(name, position);
+                if (options.isEmpty()) return builder.buildFuture();
+                var offset = builder.createOffset(builder.getStart() + remaining.length() - prefix.length());
+                for (String option : options) {
+                    if (option.startsWith(prefix)) offset.suggest(option);
+                }
+                return offset.buildFuture();
+            };
+
     /** Tab-completes {@code /talos example <name>} with the embedded reference scripts. */
     private static final SuggestionProvider<FabricClientCommandSource> EXAMPLE_NAMES =
             (context, builder) -> SharedSuggestionProvider.suggest(TalosCommands.EXAMPLES.keySet(), builder);
@@ -149,7 +179,31 @@ public final class TalosCommands {
                         .then(ClientCommands.literal("on")
                                 .executes(context -> setHuman(context, true)))
                         .then(ClientCommands.literal("off")
-                                .executes(context -> setHuman(context, false))))
+                                .executes(context -> setHuman(context, false)))
+                        .then(ClientCommands.literal("intensity")
+                                .executes(TalosCommands::humanShow)
+                                .then(ClientCommands.argument(
+                                                "value", DoubleArgumentType.doubleArg(0.0, 3.0))
+                                        .executes(context -> humanIntensity(context,
+                                                DoubleArgumentType.getDouble(context, "value")))))
+                        .then(ClientCommands.literal("set")
+                                .then(ClientCommands.argument("knob", StringArgumentType.word())
+                                        .suggests((context, builder) -> {
+                                            for (dev.talos.client.humanize.HumanizationOverrides.Knob knob
+                                                    : dev.talos.client.humanize.HumanizationOverrides.Knob.values()) {
+                                                builder.suggest(knob.key);
+                                            }
+                                            return builder.buildFuture();
+                                        })
+                                        .then(ClientCommands.argument(
+                                                        "value", DoubleArgumentType.doubleArg())
+                                                .executes(context -> humanSet(context,
+                                                        StringArgumentType.getString(context, "knob"),
+                                                        DoubleArgumentType.getDouble(context, "value"))))))
+                        .then(ClientCommands.literal("show")
+                                .executes(TalosCommands::humanShow))
+                        .then(ClientCommands.literal("reset")
+                                .executes(TalosCommands::humanReset)))
                 .then(ClientCommands.literal("debug")
                         .executes(TalosCommands::debugStatus)
                         .then(ClientCommands.literal("on")
@@ -279,6 +333,7 @@ public final class TalosCommands {
                                 .suggests(SCRIPT_COMMAND_NAMES)
                                 .executes(context -> runScriptCommand(context, ""))
                                 .then(ClientCommands.argument("args", StringArgumentType.greedyString())
+                                        .suggests(SCRIPT_COMMAND_ARGS)
                                         .executes(context -> runScriptCommand(
                                                 context, StringArgumentType.getString(context, "args"))))))
                 // `/talos example <name>` — write a commented reference script to
@@ -303,6 +358,7 @@ public final class TalosCommands {
                         .suggests(SCRIPT_COMMAND_NAMES)
                         .executes(context -> runScriptCommand(context, ""))
                         .then(ClientCommands.argument("args", StringArgumentType.greedyString())
+                                .suggests(SCRIPT_COMMAND_ARGS)
                                 .executes(context -> runScriptCommand(
                                         context, StringArgumentType.getString(context, "args"))))));
     }
@@ -322,6 +378,71 @@ public final class TalosCommands {
                     "§bTalos §7» §fHuman mode §cOFF§f — aim snaps directly; stationary "
                     + dev.talos.client.TalosClient.humanizer().baseProfile().name() + " profile."));
         }
+        return 1;
+    }
+
+    private static int humanIntensity(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context,
+            double value) {
+        dev.talos.client.config.TalosConfigManager.setHumanIntensity(value);
+        double applied = dev.talos.client.TalosClient.humanizer().overrides().intensity();
+        context.getSource().sendFeedback(Component.literal(String.format(
+                "§bTalos §7» §fHumanization intensity §a%.2f§f (0 = near-robotic, 1 = profile default, 3 = max).",
+                applied)));
+        return 1;
+    }
+
+    private static int humanSet(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context,
+            String knob, double value) {
+        try {
+            dev.talos.client.config.TalosConfigManager.setHumanKnob(knob, value);
+        } catch (IllegalArgumentException e) {
+            context.getSource().sendError(Component.literal("§cTalos §7» §f" + e.getMessage()));
+            return 0;
+        }
+        Double applied = dev.talos.client.TalosClient.humanizer().overrides().snapshot().get(
+                knob.trim().toLowerCase(java.util.Locale.ROOT));
+        context.getSource().sendFeedback(Component.literal(String.format(
+                "§bTalos §7» §fKnob §e%s§f = §a%s§f (clamped into its safe range if needed).",
+                knob, applied == null ? String.valueOf(value) : applied)));
+        return 1;
+    }
+
+    private static int humanShow(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
+        var humanizer = dev.talos.client.TalosClient.humanizer();
+        var overrides = humanizer.overrides();
+        var profile = humanizer.baseProfile();
+        StringBuilder sb = new StringBuilder();
+        sb.append("§bTalos §7» §fHumanization — profile §e").append(profile.name())
+                .append("§f, intensity §a").append(String.format("%.2f", overrides.intensity()))
+                .append("§f, human mode ").append(humanizer.humanMode() ? "§aON" : "§cOFF").append("§f.");
+        var snapshot = overrides.snapshot();
+        if (snapshot.isEmpty()) {
+            sb.append("\n§7No knob overrides (pure profile).");
+        } else {
+            for (var entry : snapshot.entrySet()) {
+                sb.append("\n§7  ").append(entry.getKey()).append(" = ").append(entry.getValue());
+            }
+        }
+        String families = overrides.familiesCsv();
+        if (!families.isEmpty()) sb.append("\n§7  families = ").append(families);
+        sb.append(String.format(
+                "\n§7Effective: reaction %.0fms, speed %.1f-%.1f deg/t, overshoot p=%.2f, deviation %.2f",
+                profile.reactionMedianMs(),
+                profile.rotationSpeedDegPerTick().min(), profile.rotationSpeedDegPerTick().max(),
+                profile.overshootProbability(), profile.pathDeviationStdev()));
+        context.getSource().sendFeedback(Component.literal(sb.toString()));
+        return 1;
+    }
+
+    private static int humanReset(
+            com.mojang.brigadier.context.CommandContext<FabricClientCommandSource> context) {
+        dev.talos.client.config.TalosConfigManager.resetHumanTuning();
+        context.getSource().sendFeedback(Component.literal(
+                "§bTalos §7» §fHumanization tuning reset — pure §e"
+                + dev.talos.client.TalosClient.humanizer().baseProfile().name() + "§f profile."));
         return 1;
     }
 
@@ -894,8 +1015,180 @@ public final class TalosCommands {
             talos.run()
             """;
 
+    private static final String EXAMPLE_SIM = """
+            # example_sim.py -- a wandering "sheep": the reference for talos.sim, the
+            # framework for running YOUR OWN simulations (animal AI, custom pathfinding,
+            # anything tick-driven). Sims run on the script worker with safety limits:
+            # a per-step budget (slow sims auto-throttle to half rate), a circuit breaker
+            # (5 consecutive errors auto-pause the sim; sim.resume() after fixing), and a
+            # cap of 16 sims. A broken sim can never stall or crash the game.
+            #
+            # Run:    /talos script run example_sim
+            # Stop:   /talos script stop
+
+            import math
+            import talos
+            from talos import sim
+
+            sheep = sim.Simulation("sheep", hz=4, budget_ms=5)
+
+            TURN_STEP = 10.0   # max yaw correction per step (eased steering)
+            WANDER = 8.0       # wander-target radius, blocks
+            ARRIVE = 1.0       # horizontal distance that counts as "there"
+
+            @sheep.on_start
+            def hello():
+                talos.hud("sheep sim: grazing and wandering", id="sheep")
+
+            @sheep.tick
+            def step(dt):
+                st = sheep.state
+                if st.setdefault("mode", "graze") == "graze":
+                    # stand still for a few random seconds, then pick a nearby target
+                    st["graze_left"] = st.get("graze_left", sheep.rng.uniform(1.0, 4.0)) - dt
+                    if st["graze_left"] <= 0:
+                        feet = talos.player_feet()
+                        st["target"] = (feet.x + sheep.rng.uniform(-WANDER, WANDER),
+                                        feet.z + sheep.rng.uniform(-WANDER, WANDER))
+                        st["mode"] = "wander"
+                        del st["graze_left"]
+                    return
+                # wander: eased steering toward the target using only raw inputs
+                tx, tz = st["target"]
+                feet = talos.player_feet()
+                dx, dz = tx - feet.x, tz - feet.z
+                if math.hypot(dx, dz) < ARRIVE:
+                    talos.release_keys()
+                    st["mode"] = "graze"
+                    return
+                want = math.degrees(math.atan2(-dx, dz))   # MC yaw: 0=south, 90=west
+                yaw, _pitch = talos.look_angle()
+                delta = (want - yaw + 180.0) % 360.0 - 180.0
+                talos.look(yaw + max(-TURN_STEP, min(TURN_STEP, delta)), 12.0)
+                talos.key("forward")
+
+            @sheep.on_stop
+            def bye():
+                talos.release_keys()
+                talos.hud_remove("sheep")
+
+            # suggest= gives the argument tab-completion in chat (per-position lists).
+            @talos.command("sheep", suggest=[["start", "stop", "pause", "resume"]])
+            def sheep_cmd(args):
+                action = args[0] if args else "start"
+                getattr(sheep, action)()
+                talos.log(f"sheep sim: {action}")
+
+            sheep.start()
+            talos.run()
+            """;
+
+    private static final String EXAMPLE_STDLIB = """
+            # example_stdlib.py -- the Python standard library works out of the box:
+            # random, math, json, collections, heapq, itertools, re, dataclasses, and
+            # every other pure-Python stdlib module. NOT available (sandbox): pip
+            # packages, native extensions (numpy), sockets/files, threading, subprocess.
+            #
+            # Run:    /talos script run example_stdlib
+
+            import json
+            import math
+            import random
+            from collections import Counter
+
+            import talos
+
+            talos.log(random.randint(1, 10))
+
+            rolls = Counter(random.choice(["wheat", "carrot", "potato"]) for _ in range(20))
+            talos.log(json.dumps(dict(rolls)))
+
+            talos.log(f"cos(45 deg) = {math.cos(math.radians(45)):.4f}")
+
+            feet = talos.player_feet()
+            talos.log(f"standing at {feet.x:.1f} {feet.y:.1f} {feet.z:.1f}")
+            """;
+
+    private static final String EXAMPLE_PYGOTO = """
+            # example_pygoto.py -- write your OWN pathfinding from raw primitives, and
+            # override a built-in command. Two things demonstrated:
+            #   1. pygoto: a from-scratch goto built only on player_feet/look_angle/key/
+            #      look -- no pathfinder involved. Naive on purpose: replace any part.
+            #   2. a goto OVERRIDE: while this script runs, /talos goto is routed here;
+            #      the built-in stays reachable as talos.goto / talos.aio.goto.
+            # (For a full Java-side engine swap, implement the talos:pathing_engine
+            # entrypoint -- see the Architecture docs.)
+            #
+            # Run:    /talos script run example_pygoto
+            # Then:   /talos pygoto <x> <y> <z>     and     /talos goto <x> <y> <z>
+            # Stop:   /talos script stop
+
+            import math
+            import talos
+
+            ARRIVE = 0.5        # horizontal distance that counts as "arrived"
+            TURN_STEP = 12.0    # max yaw correction per tick (eased steering)
+            STALL_TICKS = 8     # ticks without progress before tapping jump
+
+            def _yaw_toward(feet, x, z):
+                return math.degrees(math.atan2(-(x - feet.x), z - feet.z))
+
+            async def naive_goto(x, y, z):
+                tx, tz = x + 0.5, z + 0.5
+                best, stall = None, 0
+                try:
+                    while True:
+                        feet = talos.player_feet()
+                        dx, dz = tx - feet.x, tz - feet.z
+                        dist = (dx * dx + dz * dz) ** 0.5
+                        if dist <= ARRIVE:
+                            talos.log(f"pygoto: arrived ({dist:.2f} blocks out)")
+                            return
+                        yaw, _pitch = talos.look_angle()
+                        delta = (_yaw_toward(feet, tx, tz) - yaw + 180.0) % 360.0 - 180.0
+                        talos.look(yaw + max(-TURN_STEP, min(TURN_STEP, delta)), 15.0)
+                        talos.key("forward")
+                        if best is None or dist < best - 0.05:
+                            best, stall, jump = dist, 0, False
+                        else:
+                            stall += 1
+                            jump = stall >= STALL_TICKS
+                            if jump:
+                                stall = 0
+                        talos.key("jump", jump)
+                        await talos.next_tick()
+                finally:
+                    talos.release_keys()
+
+            @talos.command("pygoto")
+            def pygoto(args):
+                if len(args) != 3:
+                    talos.log("usage: /talos pygoto <x> <y> <z>")
+                    return
+                x, y, z = (int(float(a)) for a in args)
+                talos.log(f"pygoto: walking to {x} {y} {z} (raw inputs, no pathfinder)")
+                return naive_goto(x, y, z)
+
+            @talos.command("goto")
+            def goto_override(args):
+                talos.log(f"goto override: /talos goto {' '.join(args)}")
+                if len(args) != 3:
+                    talos.log("this override only handles /talos goto <x> <y> <z>")
+                    return
+                x, y, z = (int(float(a)) for a in args)
+                async def wrapped():
+                    result = await talos.aio.goto(x, y, z)   # the ORIGINAL goto
+                    talos.log(f"goto override: built-in finished -- {result}")
+                return wrapped()
+
+            talos.log("example_pygoto loaded: /talos pygoto added, /talos goto overridden")
+            """;
+
     /** Embedded reference scripts served by {@code /talos example <name>}. */
     private static final Map<String, String> EXAMPLES = Map.of(
+            "sim", EXAMPLE_SIM,
+            "stdlib", EXAMPLE_STDLIB,
+            "pygoto", EXAMPLE_PYGOTO,
             "goto", EXAMPLE_GOTO,
             "farm", EXAMPLE_FARM,
             "follow", EXAMPLE_FOLLOW,
