@@ -7,6 +7,8 @@ macros, and an embedded **GraalPy** Python runtime (plus a VS Code bridge) for s
 all of it. Everything runs as **client commands** — no server permission level, no server-side mod
 required.
 
+**Documentation:** https://sheepishlyroyal.github.io/talos/ — searchable docs site (commands, scripting, simulations, CLI, architecture).
+
 - **Pathfinding** — a from-scratch A\* planner over a deterministic mirror of vanilla player
   physics (`talos-mod/.../pathing/sim/`), not a waypoint graph. It walks, jumps, sprints,
   parkours (including momentum-chained hops — the 5-block jump off snow layers), mines, bridges,
