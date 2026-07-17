@@ -608,6 +608,18 @@ def debug_mode(enabled: bool | None = None):
     """Toggle or query detailed engine/script debug logging."""
     ...
 
+def chat(message: object) -> str:
+    """Send a chat message to the server; a leading "/" runs it as a command.
+
+    Own messages echo back into the "chat" event -- guard handlers against loops."""
+    ...
+
+def run_command(command: object) -> str:
+    """Run a command (leading "/" optional): /talos client commands dispatch
+    locally, anything else is sent to the server. Distinct from
+    @talos.command(name), which registers a /talos subcommand."""
+    ...
+
 args: list[str]
 """Arguments from `/talos script run <name> <args...>`, whitespace-split.
 

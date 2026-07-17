@@ -11,10 +11,13 @@ public final class BridgeProtocol {
 
     private BridgeProtocol() {}
 
-    public sealed interface ClientMessage permits Auth, PushScript, Run, Stop {}
+    public sealed interface ClientMessage permits Auth, PushScript, Run, Eval, Stop {}
     public record Auth(int v, String type, String token) implements ClientMessage {}
     public record PushScript(int v, String type, String name, String source) implements ClientMessage {}
-    public record Run(int v, String type, String name) implements ClientMessage {}
+    /** {@code args} is optional (absent → null → empty argv), exposed as {@code talos.args}. */
+    public record Run(int v, String type, String name, java.util.List<String> args) implements ClientMessage {}
+    /** Runs a one-liner via ScriptEngine.evalSnippet — same gating as run. */
+    public record Eval(int v, String type, String code) implements ClientMessage {}
     public record Stop(int v, String type) implements ClientMessage {}
 
     public record AuthOk(int v, String type) {}
@@ -35,6 +38,7 @@ public final class BridgeProtocol {
                 case "auth" -> GSON.fromJson(object, Auth.class);
                 case "push_script" -> GSON.fromJson(object, PushScript.class);
                 case "run" -> GSON.fromJson(object, Run.class);
+                case "eval" -> GSON.fromJson(object, Eval.class);
                 case "stop" -> GSON.fromJson(object, Stop.class);
                 default -> null;
             };
