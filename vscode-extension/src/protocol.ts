@@ -36,11 +36,24 @@ export interface PushScriptMessage {
     source: string;
 }
 
-/** Runs a previously pushed script by name. */
+/** Runs a previously pushed script by name. `args` (optional) becomes `talos.args`. */
 export interface RunMessage {
     v: 1;
     type: 'run';
     name: string;
+    args?: string[];
+}
+
+/**
+ * Runs a Python snippet (semicolon-separated statements; a trailing
+ * expression echoes its repr) without pushing a file — the `/talos py`
+ * of the wire protocol. Used by the terminal CLI. Subject to the same
+ * `/talos bridge allow` gate as `run`.
+ */
+export interface EvalMessage {
+    v: 1;
+    type: 'eval';
+    code: string;
 }
 
 /** Stops whatever script is currently running. */
@@ -53,6 +66,7 @@ export type ClientToServerMessage =
     | AuthMessage
     | PushScriptMessage
     | RunMessage
+    | EvalMessage
     | StopMessage;
 
 // ---------------------------------------------------------------------------
@@ -120,8 +134,14 @@ export function makePushScript(name: string, source: string): PushScriptMessage 
     return { v: PROTOCOL_VERSION, type: 'push_script', name, source };
 }
 
-export function makeRun(name: string): RunMessage {
-    return { v: PROTOCOL_VERSION, type: 'run', name };
+export function makeRun(name: string, args?: string[]): RunMessage {
+    return args && args.length > 0
+        ? { v: PROTOCOL_VERSION, type: 'run', name, args }
+        : { v: PROTOCOL_VERSION, type: 'run', name };
+}
+
+export function makeEval(code: string): EvalMessage {
+    return { v: PROTOCOL_VERSION, type: 'eval', code };
 }
 
 export function makeStop(): StopMessage {

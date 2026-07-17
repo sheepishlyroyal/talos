@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { TalosConnection, ConnectionState } from './connection';
@@ -29,8 +30,12 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('talos.runScript', () => void runScript()),
         vscode.commands.registerCommand('talos.stopScript', () => void stopScript()),
         vscode.commands.registerCommand('talos.reconnect', () => void reconnect()),
-        vscode.commands.registerCommand('talos.toggleRunOnSave', () => toggleRunOnSave())
+        vscode.commands.registerCommand('talos.toggleRunOnSave', () => toggleRunOnSave()),
+        vscode.commands.registerCommand('talos.installCli', () => void installCli(context, false))
     );
+
+    // Keep the bundled terminal CLI installed/updated at ~/.talos/bin/talos.
+    void installCli(context, true);
 
     // Live reload: when run-on-save is on, saving a .py re-pushes + re-runs it in
     // the already-running game — no Minecraft restart, just a fresh script session.
@@ -73,6 +78,43 @@ async function ensureStubPath(context: vscode.ExtensionContext): Promise<void> {
     } catch {
         // No settings write access (e.g. restricted workspace) — autocomplete still works
         // wherever a talos.pyi sits next to the script.
+    }
+}
+
+/**
+ * Installs the bundled terminal CLI to ~/.talos/bin/talos so `talos <script.py>`,
+ * `talos py -c '...'` etc. work from any shell against the running game. Runs
+ * silently on every activation (keeps the copy current with the extension) and
+ * loudly via the "Talos: Install Terminal CLI" command. Never throws.
+ */
+async function installCli(context: vscode.ExtensionContext, silent: boolean): Promise<void> {
+    try {
+        const source = vscode.Uri.joinPath(context.extensionUri, 'cli', 'talos').fsPath;
+        const binDir = path.join(os.homedir(), '.talos', 'bin');
+        fs.mkdirSync(binDir, { recursive: true });
+        const target = path.join(binDir, 'talos');
+        fs.copyFileSync(source, target);
+        if (process.platform === 'win32') {
+            // Windows shells don't honor shebangs — ship a .cmd shim alongside.
+            fs.writeFileSync(path.join(binDir, 'talos.cmd'), '@python "%USERPROFILE%\\.talos\\bin\\talos" %*\r\n');
+        } else {
+            fs.chmodSync(target, 0o755);
+        }
+        const onPath = (process.env.PATH ?? '').split(path.delimiter).includes(binDir);
+        const pathHint = process.platform === 'win32'
+            ? `add ${binDir} to your PATH`
+            : `add it to your PATH: export PATH="$HOME/.talos/bin:$PATH"`;
+        outputChannel.appendLine(`[talos] terminal CLI installed at ${target}${onPath ? '' : ` — ${pathHint}`}`);
+        if (!silent) {
+            void vscode.window.showInformationMessage(
+                `Talos terminal CLI installed at ${target}.${onPath ? '' : ` To use it anywhere, ${pathHint}`}`);
+        } else if (!onPath && !context.globalState.get('talos.cliPathHintShown')) {
+            void context.globalState.update('talos.cliPathHintShown', true);
+            void vscode.window.showInformationMessage(
+                `Talos terminal CLI installed to ~/.talos/bin — ${pathHint} to run scripts with \`talos\` from any terminal.`);
+        }
+    } catch (error) {
+        outputChannel.appendLine(`[talos] terminal CLI install failed: ${String(error)}`);
     }
 }
 

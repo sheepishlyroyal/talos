@@ -68,7 +68,8 @@ localhost-RPC-with-code-execution surface should be treated (this is a
 |---|---|---|
 | `auth` | `token: string` | Must be the first frame sent on every connection. |
 | `push_script` | `name: string, source: string` | Uploads/replaces a named script's source. Does not run it. |
-| `run` | `name: string` | Runs a previously pushed script by name. |
+| `run` | `name: string, args?: string[]` | Runs a previously pushed script by name. `args` (optional, additive in v1) becomes `talos.args`. |
+| `eval` | `code: string` | Runs a Python snippet without pushing a file — the wire equivalent of `/talos py`. Shares the running session's globals when one exists, otherwise runs on an ephemeral session. Subject to the same `/talos bridge allow` gate as `run`. Used by the terminal CLI. |
 | `stop` | — | Stops whatever script is currently running. |
 
 ### Server → Client (S2C)
