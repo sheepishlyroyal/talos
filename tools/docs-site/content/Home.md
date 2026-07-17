@@ -8,11 +8,14 @@ commands** — no server permission level, no server-side mod.
 > ⚠️ Automation may violate a server's rules. Talos' humanization is **best-effort obfuscation, not a
 > guarantee against anti-cheat**. Use it where you're allowed to.
 
+<a class="cta-large" href="LLM-Usage.html">USE TALOS WITH AN LLM</a>
+
 ## Start here
 
 | I want to… | Go to |
 |---|---|
 | Install the mod | [Installation](Installation) |
+| Drive the game from my terminal (`talos run …`) | [Terminal CLI](Terminal-CLI) |
 | Learn the `/talos` commands | [Command reference](Commands) |
 | Arm reactive rules (`/talos on …`) and read live values | [Event rules & getters](Event-Rules-and-Getters) |
 | Write Python automation (`import talos`) | [Python scripting](Scripting) |

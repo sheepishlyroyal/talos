@@ -9,10 +9,40 @@ script output (`print`, `talos.log`, tracebacks) streams live back into your she
 
 - **Automatic:** the VS Code extension bundles the CLI and (re)installs it to `~/.talos/bin/talos`
   every time it activates. Command palette: *Talos: Install Terminal CLI* runs it loudly.
-  Put it on your PATH once: `export PATH="$HOME/.talos/bin:$PATH"` in `~/.zshrc`/`~/.bashrc`.
-  On Windows the extension also writes `talos.cmd` — add `%USERPROFILE%\.talos\bin` to PATH.
+  On Windows the extension also writes a `talos.cmd` shim next to it.
+
+Put it on your PATH once:
+
+:::os-tabs
+@macos
+echo 'export PATH="$HOME/.talos/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+@linux
+echo 'export PATH="$HOME/.talos/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+@windows
+:: PowerShell (persists for your user):
+[Environment]::SetEnvironmentVariable("Path", "$env:USERPROFILE\.talos\bin;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
+:::
+
 - **Manual:** copy [`cli/talos`](https://github.com/sheepishlyroyal/talos/blob/main/cli/talos)
-  anywhere on your PATH and `chmod +x` it. Python 3.8+ only — no pip packages.
+  anywhere on your PATH. Python 3.8+ only — no pip packages.
+
+:::os-tabs
+@macos
+mkdir -p ~/.talos/bin
+cp cli/talos ~/.talos/bin/talos
+chmod +x ~/.talos/bin/talos
+@linux
+mkdir -p ~/.talos/bin
+cp cli/talos ~/.talos/bin/talos
+chmod +x ~/.talos/bin/talos
+@windows
+:: Command Prompt:
+mkdir "%USERPROFILE%\.talos\bin"
+copy cli\talos "%USERPROFILE%\.talos\bin\talos"
+echo @python "%USERPROFILE%\.talos\bin\talos" %%* > "%USERPROFILE%\.talos\bin\talos.cmd"
+:::
 
 ## Usage
 

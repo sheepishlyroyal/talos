@@ -4,12 +4,47 @@
 Usage: python3 tools/docs-site/build.py
 Needs: pip install markdown
 """
+import html as html_mod
 import json
 import re
 import shutil
 from pathlib import Path
 
 import markdown
+
+OS_LABELS = {"macos": "macOS", "linux": "Linux", "windows": "Windows"}
+
+
+def os_tabs(md_text: str) -> str:
+    """Expands ':::os-tabs' blocks into tabbed per-OS command HTML.
+
+    :::os-tabs
+    @macos
+    cp cli/talos ~/.talos/bin/talos
+    @windows
+    copy cli\\talos %USERPROFILE%\\.talos\\bin\\talos
+    :::
+    """
+    def expand(m):
+        sections, current = {}, None
+        for line in m.group(1).splitlines():
+            if line.startswith("@"):
+                current = line[1:].strip().lower()
+                sections[current] = []
+            elif current is not None:
+                sections[current].append(line)
+        buttons, panels = [], []
+        for i, (os_key, lines) in enumerate(sections.items()):
+            label = OS_LABELS.get(os_key, os_key)
+            sel = " selected" if i == 0 else ""
+            buttons.append(f'<button type="button" data-os="{os_key}"{sel}>{label}</button>')
+            code = html_mod.escape("\n".join(lines).strip())
+            panels.append(f'<div class="os-tab-panel" data-os="{os_key}"'
+                          + ("" if i == 0 else " hidden")
+                          + f'><pre><code>{code}</code></pre></div>')
+        return ('\n<div class="os-tabs">\n<div class="os-tab-buttons" role="tablist">'
+                + "".join(buttons) + "</div>\n" + "\n".join(panels) + "\n</div>\n")
+    return re.sub(r":::os-tabs\n(.*?)\n:::", expand, md_text, flags=re.S)
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = Path(__file__).resolve().parent
@@ -60,6 +95,7 @@ def render(stem: str) -> tuple[str, str, list[tuple[int, str, str]]]:
     # House style: no emoji in site text; warning glyphs become a styled "Note:" label.
     text = text.replace("⚠️", "**Note:**").replace("⚠", "**Note:**")
     text = re.sub(r"[\U0001F300-\U0001FAFF✅❌❗⭐\U0001F44D\U0001F449]", "", text)
+    text = os_tabs(text)
     body = md.convert(text)
     # Wiki-style links -> page.html (keep anchors), leave http(s) and #anchors alone.
     def fix_link(m):

@@ -57,11 +57,37 @@ script output (<code>print</code>, <code>talos.log</code>, tracebacks) streams l
 <ul>
 <li><strong>Automatic:</strong> the VS Code extension bundles the CLI and (re)installs it to <code>~/.talos/bin/talos</code>
   every time it activates. Command palette: <em>Talos: Install Terminal CLI</em> runs it loudly.
-  Put it on your PATH once: <code>export PATH="$HOME/.talos/bin:$PATH"</code> in <code>~/.zshrc</code>/<code>~/.bashrc</code>.
-  On Windows the extension also writes <code>talos.cmd</code> — add <code>%USERPROFILE%\.talos\bin</code> to PATH.</li>
-<li><strong>Manual:</strong> copy <a href="https://github.com/sheepishlyroyal/talos/blob/main/cli/talos"><code>cli/talos</code></a>
-  anywhere on your PATH and <code>chmod +x</code> it. Python 3.8+ only — no pip packages.</li>
+  On Windows the extension also writes a <code>talos.cmd</code> shim next to it.</li>
 </ul>
+<p>Put it on your PATH once:</p>
+<div class="os-tabs">
+<div class="os-tab-buttons" role="tablist"><button type="button" data-os="macos" selected>macOS</button><button type="button" data-os="linux">Linux</button><button type="button" data-os="windows">Windows</button></div>
+<div class="os-tab-panel" data-os="macos"><pre><code>echo &#x27;export PATH=&quot;$HOME/.talos/bin:$PATH&quot;&#x27; &gt;&gt; ~/.zshrc
+source ~/.zshrc</code></pre></div>
+<div class="os-tab-panel" data-os="linux" hidden><pre><code>echo &#x27;export PATH=&quot;$HOME/.talos/bin:$PATH&quot;&#x27; &gt;&gt; ~/.bashrc
+source ~/.bashrc</code></pre></div>
+<div class="os-tab-panel" data-os="windows" hidden><pre><code>:: PowerShell (persists for your user):
+[Environment]::SetEnvironmentVariable(&quot;Path&quot;, &quot;$env:USERPROFILE\.talos\bin;&quot; + [Environment]::GetEnvironmentVariable(&quot;Path&quot;, &quot;User&quot;), &quot;User&quot;)</code></pre></div>
+</div>
+
+<ul>
+<li><strong>Manual:</strong> copy <a href="https://github.com/sheepishlyroyal/talos/blob/main/cli/talos"><code>cli/talos</code></a>
+  anywhere on your PATH. Python 3.8+ only — no pip packages.</li>
+</ul>
+<div class="os-tabs">
+<div class="os-tab-buttons" role="tablist"><button type="button" data-os="macos" selected>macOS</button><button type="button" data-os="linux">Linux</button><button type="button" data-os="windows">Windows</button></div>
+<div class="os-tab-panel" data-os="macos"><pre><code>mkdir -p ~/.talos/bin
+cp cli/talos ~/.talos/bin/talos
+chmod +x ~/.talos/bin/talos</code></pre></div>
+<div class="os-tab-panel" data-os="linux" hidden><pre><code>mkdir -p ~/.talos/bin
+cp cli/talos ~/.talos/bin/talos
+chmod +x ~/.talos/bin/talos</code></pre></div>
+<div class="os-tab-panel" data-os="windows" hidden><pre><code>:: Command Prompt:
+mkdir &quot;%USERPROFILE%\.talos\bin&quot;
+copy cli\talos &quot;%USERPROFILE%\.talos\bin\talos&quot;
+echo @python &quot;%USERPROFILE%\.talos\bin\talos&quot; %%* &gt; &quot;%USERPROFILE%\.talos\bin\talos.cmd&quot;</code></pre></div>
+</div>
+
 <h2 id="usage">Usage</h2>
 <pre><code class="language-bash">talos harvest.py wheat 64        # push a local file into the game and run it
 talos run harvest.py wheat 64    # same, explicit

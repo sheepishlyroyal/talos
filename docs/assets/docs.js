@@ -1,6 +1,185 @@
-/* Talos docs: client-side search, code copy buttons, TOC highlight. */
+/* Talos docs: client-side search, code copy buttons, TOC highlight,
+   OS command tabs, blur-in text, sidebar hover indicator. */
 (function () {
   "use strict";
+
+  var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---- OS command tabs (synced + persisted) ---- */
+  (function () {
+    var groups = document.querySelectorAll(".os-tabs");
+    if (!groups.length) return;
+    var stored = null;
+    try { stored = localStorage.getItem("talos-docs-os"); } catch (e) {}
+    if (!stored) {
+      var p = (navigator.platform || "").toLowerCase();
+      stored = p.indexOf("win") >= 0 ? "windows" : p.indexOf("linux") >= 0 ? "linux" : "macos";
+    }
+    function apply(os) {
+      groups.forEach(function (g) {
+        var has = g.querySelector('button[data-os="' + os + '"]');
+        var target = has ? os : g.querySelector(".os-tab-buttons button").dataset.os;
+        g.querySelectorAll(".os-tab-buttons button").forEach(function (b) {
+          if (b.dataset.os === target) b.setAttribute("selected", "");
+          else b.removeAttribute("selected");
+        });
+        g.querySelectorAll(".os-tab-panel").forEach(function (panel) {
+          panel.hidden = panel.dataset.os !== target;
+        });
+      });
+    }
+    groups.forEach(function (g) {
+      g.querySelectorAll(".os-tab-buttons button").forEach(function (b) {
+        b.addEventListener("click", function () {
+          try { localStorage.setItem("talos-docs-os", b.dataset.os); } catch (e) {}
+          apply(b.dataset.os);
+        });
+      });
+    });
+    apply(stored);
+  })();
+
+  /* ---- blur-in text ---- */
+  (function () {
+    if (reducedMotion) return;
+
+    // Split an element's text into word spans, preserving inline children.
+    function splitWords(el) {
+      var nodes = Array.prototype.slice.call(el.childNodes);
+      var spans = [];
+      nodes.forEach(function (node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          var frag = document.createDocumentFragment();
+          node.textContent.split(/(\s+)/).forEach(function (part) {
+            if (!part) return;
+            if (/^\s+$/.test(part)) { frag.appendChild(document.createTextNode(part)); return; }
+            var s = document.createElement("span");
+            s.className = "bt-word";
+            s.textContent = part;
+            frag.appendChild(s);
+            spans.push(s);
+          });
+          el.replaceChild(frag, node);
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+          var w = document.createElement("span");
+          w.className = "bt-word";
+          el.replaceChild(w, node);
+          w.appendChild(node);
+          spans.push(w);
+        }
+      });
+      return spans;
+    }
+
+    function reveal(spans, step) {
+      spans.forEach(function (s, i) {
+        s.style.transitionDelay = (i * step) + "ms";
+        requestAnimationFrame(function () { s.classList.add("bt-in"); });
+        s.addEventListener("transitionend", function () {
+          s.style.transitionDelay = "";
+          s.style.willChange = "auto";
+        }, { once: true });
+      });
+    }
+
+    // Sidebar: word-level on load, staggered per link.
+    var sideEls = document.querySelectorAll(".nav-group-title, .nav-group a");
+    var sideSpans = [];
+    sideEls.forEach(function (el) { sideSpans = sideSpans.concat(splitWords(el)); });
+    reveal(sideSpans, 24);
+
+    // Headings: word-level as they enter the viewport. Body blocks: whole-element.
+    var wordTargets = document.querySelectorAll(".prose h1, .prose h2, .prose h3");
+    var blockTargets = document.querySelectorAll(
+      ".prose p, .prose ul, .prose ol, .prose table, .prose pre, .prose blockquote, .os-tabs, .cta-large, .pager, .toc");
+    var pending = new Map();
+    wordTargets.forEach(function (el) { pending.set(el, splitWords(el)); });
+    blockTargets.forEach(function (el) { el.classList.add("bl-el"); });
+
+    var seen = new WeakSet();
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting || seen.has(entry.target)) return;
+        seen.add(entry.target);
+        io.unobserve(entry.target);
+        var spans = pending.get(entry.target);
+        if (spans) reveal(spans, 40);
+        else requestAnimationFrame(function () { entry.target.classList.add("bl-in"); });
+      });
+    }, { threshold: 0.1, rootMargin: "0px 0px -5% 0px" });
+    wordTargets.forEach(function (el) { io.observe(el); });
+    blockTargets.forEach(function (el) { io.observe(el); });
+  })();
+
+  /* ---- sidebar indicator: follows the mouse, sticky selection ---- */
+  (function () {
+    var sidebar = document.getElementById("sidebar");
+    if (!sidebar) return;
+    var links = Array.prototype.slice.call(sidebar.querySelectorAll(".nav-group a"));
+    if (!links.length) return;
+    var indicator = document.createElement("div");
+    indicator.id = "nav-indicator";
+    sidebar.appendChild(indicator);
+
+    var current = location.pathname.split("/").pop() || "index.html";
+    if (current === "index.html") current = "Home.html";
+    var activeLink = links.filter(function (a) {
+      return a.getAttribute("href") === current;
+    })[0] || null;
+
+    var sticky = null;
+    try { sticky = localStorage.getItem("talos-docs-sticky"); } catch (e) {}
+    var stickyOn = !!(sticky && activeLink && sticky === current);
+    function paintSticky() { document.body.classList.toggle("nav-sticky", stickyOn); }
+    paintSticky();
+
+    function moveTo(link) {
+      if (!link) { indicator.style.opacity = "0"; return; }
+      indicator.style.opacity = "1";
+      indicator.style.height = link.offsetHeight + "px";
+      indicator.style.transform = "translateY(" + link.offsetTop + "px)";
+    }
+    function rest() { moveTo(activeLink); }
+    rest();
+
+    var hovered = null;
+    links.forEach(function (link) {
+      link.addEventListener("mouseenter", function () {
+        if (hovered) hovered.classList.remove("hovered");
+        hovered = link;
+        link.classList.add("hovered");
+        moveTo(link); // the green line always follows the mouse
+      });
+    });
+    sidebar.addEventListener("mouseenter", function () {
+      document.body.classList.add("nav-hovering");
+    });
+    sidebar.addEventListener("mouseleave", function () {
+      document.body.classList.remove("nav-hovering");
+      if (hovered) hovered.classList.remove("hovered");
+      hovered = null;
+      rest();
+    });
+
+    links.forEach(function (link) {
+      link.addEventListener("click", function (e) {
+        var href = link.getAttribute("href");
+        if (href === current) {
+          // Clicking the current page toggles stickiness instead of reloading.
+          e.preventDefault();
+          stickyOn = !stickyOn;
+          try {
+            if (stickyOn) localStorage.setItem("talos-docs-sticky", current);
+            else localStorage.removeItem("talos-docs-sticky");
+          } catch (err) {}
+          paintSticky();
+        } else {
+          // A new selection takes priority and becomes the sticky one.
+          try { localStorage.setItem("talos-docs-sticky", href); } catch (err) {}
+        }
+      });
+    });
+  })();
 
   /* ---- code copy buttons ---- */
   document.querySelectorAll(".prose pre").forEach(function (pre) {

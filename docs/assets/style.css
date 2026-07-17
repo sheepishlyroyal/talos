@@ -320,6 +320,99 @@ body {
   color: var(--text-muted);
 }
 
+/* ---- large CTA ---------------------------------------------------------- */
+.cta-large {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  padding: 0 48px;
+  margin: 8px 0 24px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-decoration: none;
+  color: #08130c;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  transition: background-color 0.15s var(--ease), transform 0.15s var(--ease);
+}
+.prose a.cta-large { color: #08130c; }
+.cta-large:hover, .prose a.cta-large:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+  text-decoration: none;
+}
+.cta-large:active { transform: translateY(1px); }
+
+/* ---- OS command tabs ----------------------------------------------------- */
+.os-tabs { margin: 0 0 24px; border: 1px solid var(--border); }
+.os-tab-buttons {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+.os-tab-buttons button {
+  height: 36px;
+  padding: 0 16px;
+  font: 600 12px/1 var(--sans);
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  transition: color 0.15s var(--ease), background-color 0.15s var(--ease);
+}
+.os-tab-buttons button:hover { color: var(--text); }
+.os-tab-buttons button[selected] {
+  color: var(--accent);
+  background: var(--bg-inset);
+}
+.os-tab-panel pre { border: none; margin: 0; }
+
+/* ---- blur-in text (vanilla BlurText) ------------------------------------ */
+.bt-word {
+  display: inline-block;
+  opacity: 0;
+  filter: blur(8px);
+  transform: translateY(-12px);
+  will-change: transform, filter, opacity;
+  transition: opacity 0.5s var(--ease), filter 0.5s var(--ease), transform 0.5s var(--ease);
+}
+.bt-word.bt-in { opacity: 1; filter: blur(0); transform: none; }
+.bl-el {
+  opacity: 0;
+  filter: blur(6px);
+  transform: translateY(10px);
+  transition: opacity 0.5s var(--ease), filter 0.5s var(--ease), transform 0.5s var(--ease);
+}
+.bl-el.bl-in { opacity: 1; filter: blur(0); transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .bt-word, .bl-el { opacity: 1 !important; filter: none !important; transform: none !important; transition: none !important; }
+}
+
+/* ---- sidebar hover indicator --------------------------------------------- */
+.sidebar { position: relative; }
+#nav-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 28px;
+  background: var(--accent);
+  transform: translateY(0);
+  transition: transform 0.3s var(--ease), height 0.3s var(--ease), opacity 0.15s var(--ease);
+  pointer-events: none;
+  opacity: 0;
+}
+.nav-group a.hovered { color: var(--text); }
+body:not(.nav-sticky) .nav-group a.hovered { color: var(--accent); }
+.nav-group a.active { color: var(--accent); border-left-color: var(--border); }
+body.nav-hovering .nav-group a.active:not(.hovered) { color: var(--text-muted); }
+body.nav-sticky .nav-group a.active,
+body.nav-sticky.nav-hovering .nav-group a.active:not(.hovered) { color: var(--accent); }
+
 /* ---- responsive --------------------------------------------------------- */
 @media (max-width: 1180px) {
   .shell { grid-template-columns: 240px minmax(0, 1fr); }

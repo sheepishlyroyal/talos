@@ -15,11 +15,21 @@ There are two ways to use it: **install it** (best, for Claude Code) or **paste 
 Claude Code auto-loads skills by name from `~/.claude/skills/`. Drop the file in and it's available in
 every session:
 
-```bash
+:::os-tabs
+@macos
 mkdir -p ~/.claude/skills/talos
 curl -fsSL https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md \
   -o ~/.claude/skills/talos/SKILL.md
-```
+@linux
+mkdir -p ~/.claude/skills/talos
+curl -fsSL https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md \
+  -o ~/.claude/skills/talos/SKILL.md
+@windows
+:: PowerShell:
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills\talos" | Out-Null
+Invoke-WebRequest https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md `
+  -OutFile "$env:USERPROFILE\.claude\skills\talos\SKILL.md"
+:::
 
 Or, per-project, copy it into your repo's `.claude/skills/talos/SKILL.md`. Then just ask:
 
