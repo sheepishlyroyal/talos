@@ -61,9 +61,57 @@ this skill, then runs it itself with <code>talos run script.py</code> and reads 
 a fully closed loop: you describe the goal, the model writes, runs, watches and fixes.</p>
 </blockquote>
 <hr />
-<h2 id="option-a-install-the-skill-claude-code-claude">Option A — Install the skill (Claude Code / Claude)</h2>
-<p>Claude Code auto-loads skills by name from <code>~/.claude/skills/</code>. Drop the file in and it's available in
-every session:</p>
+<h2 id="option-a-install-everything-recommended">Option A — Install everything (recommended)</h2>
+<p><strong>This block installs three things at once:</strong> the <strong>Talos mod jar</strong> into your Minecraft <code>mods/</code>
+folder, the <strong><code>talos</code> terminal CLI</strong> into <code>~/.talos/bin/</code>, and the <strong>Claude skill</strong> into
+<code>~/.claude/skills/talos/</code> — the complete LLM + CLI setup in one paste. Set <code>MC</code> to your Minecraft
+version (<code>1.21.11</code>, <code>26.1</code> or <code>26.2</code>) first.</p>
+<div class="install-primary">
+<span class="install-label">Installs Talos + CLI + skill</span>
+
+
+<div class="os-tabs">
+<div class="os-tab-buttons" role="tablist"><button type="button" data-os="macos" selected>macOS</button><button type="button" data-os="linux">Linux</button><button type="button" data-os="windows">Windows</button></div>
+<div class="os-tab-panel" data-os="macos"><pre><code>MC=1.21.11   # or 26.1 / 26.2 — match your Minecraft
+MODS=&quot;$HOME/Library/Application Support/minecraft/mods&quot;
+mkdir -p &quot;$MODS&quot; ~/.talos/bin ~/.claude/skills/talos
+curl -fsSL -o &quot;$MODS/talos-mod-1.1.0-mc$MC.jar&quot; \
+  &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-mod-1.1.0-mc$MC.jar&quot;
+curl -fsSL -o ~/.talos/bin/talos \
+  &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli&quot;
+chmod +x ~/.talos/bin/talos
+curl -fsSL -o ~/.claude/skills/talos/SKILL.md \
+  &quot;https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md&quot;</code></pre></div>
+<div class="os-tab-panel" data-os="linux" hidden><pre><code>MC=1.21.11   # or 26.1 / 26.2 — match your Minecraft
+MODS=&quot;$HOME/.minecraft/mods&quot;
+mkdir -p &quot;$MODS&quot; ~/.talos/bin ~/.claude/skills/talos
+curl -fsSL -o &quot;$MODS/talos-mod-1.1.0-mc$MC.jar&quot; \
+  &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-mod-1.1.0-mc$MC.jar&quot;
+curl -fsSL -o ~/.talos/bin/talos \
+  &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli&quot;
+chmod +x ~/.talos/bin/talos
+curl -fsSL -o ~/.claude/skills/talos/SKILL.md \
+  &quot;https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md&quot;</code></pre></div>
+<div class="os-tab-panel" data-os="windows" hidden><pre><code># PowerShell
+$MC = &quot;1.21.11&quot;   # or 26.1 / 26.2 — match your Minecraft
+$Mods = &quot;$env:APPDATA\.minecraft\mods&quot;
+New-Item -ItemType Directory -Force $Mods, &quot;$env:USERPROFILE\.talos\bin&quot;, &quot;$env:USERPROFILE\.claude\skills\talos&quot; | Out-Null
+Invoke-WebRequest &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-mod-1.1.0-mc$MC.jar&quot; -OutFile &quot;$Mods\talos-mod-1.1.0-mc$MC.jar&quot;
+Invoke-WebRequest &quot;https://github.com/sheepishlyroyal/talos/releases/download/v1.1.0/talos-cli&quot; -OutFile &quot;$env:USERPROFILE\.talos\bin\talos&quot;
+Invoke-WebRequest &quot;https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md&quot; -OutFile &quot;$env:USERPROFILE\.claude\skills\talos\SKILL.md&quot;</code></pre></div>
+</div>
+
+
+</div>
+
+<p>Still needed on top: <strong>Fabric Loader + Fabric API</strong> (see <a href="Installation.html">Installation</a>), and put the
+CLI on your PATH (see <a href="Terminal-CLI.html">Terminal CLI</a>). One-time in-game: <code>/talos bridge allow</code>.</p>
+<h3 id="skill-only">Skill only</h3>
+<p>Already have the mod and CLI? This just drops <code>SKILL.md</code> into <code>~/.claude/skills/</code> (Claude Code
+auto-loads it by name):</p>
+<div class="install-secondary">
+
+
 <div class="os-tabs">
 <div class="os-tab-buttons" role="tablist"><button type="button" data-os="macos" selected>macOS</button><button type="button" data-os="linux">Linux</button><button type="button" data-os="windows">Windows</button></div>
 <div class="os-tab-panel" data-os="macos"><pre><code>mkdir -p ~/.claude/skills/talos
@@ -72,10 +120,13 @@ curl -fsSL https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SK
 <div class="os-tab-panel" data-os="linux" hidden><pre><code>mkdir -p ~/.claude/skills/talos
 curl -fsSL https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md \
   -o ~/.claude/skills/talos/SKILL.md</code></pre></div>
-<div class="os-tab-panel" data-os="windows" hidden><pre><code>:: PowerShell:
+<div class="os-tab-panel" data-os="windows" hidden><pre><code># PowerShell
 New-Item -ItemType Directory -Force &quot;$env:USERPROFILE\.claude\skills\talos&quot; | Out-Null
 Invoke-WebRequest https://raw.githubusercontent.com/sheepishlyroyal/talos/main/skill/SKILL.md `
   -OutFile &quot;$env:USERPROFILE\.claude\skills\talos\SKILL.md&quot;</code></pre></div>
+</div>
+
+
 </div>
 
 <p>Or, per-project, copy it into your repo's <code>.claude/skills/talos/SKILL.md</code>. Then just ask:</p>
@@ -146,7 +197,7 @@ directly:</p>
       where permitted.
     </footer>
   </main>
-  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#using-talos-with-an-llm">Using Talos with an LLM</a><a class="toc-3" href="#option-a-install-the-skill-claude-code-claude">Option A — Install the skill (Claude Code / Claude)</a><a class="toc-3" href="#option-b-paste-the-skill-chatgpt-gemini-local-models-any-chat">Option B — Paste the skill (ChatGPT, Gemini, local models, any chat)</a><a class="toc-3" href="#getting-good-results">Getting good results</a><a class="toc-3" href="#try-it-in-game-without-an-llm">Try it in-game without an LLM</a><a class="toc-3" href="#what-the-model-should-not-do">What the model should not do</a></nav>
+  <nav class="toc"><div class="toc-title">On this page</div><a class="toc-2" href="#using-talos-with-an-llm">Using Talos with an LLM</a><a class="toc-3" href="#option-a-install-everything-recommended">Option A — Install everything (recommended)</a><a class="toc-3" href="#option-b-paste-the-skill-chatgpt-gemini-local-models-any-chat">Option B — Paste the skill (ChatGPT, Gemini, local models, any chat)</a><a class="toc-3" href="#getting-good-results">Getting good results</a><a class="toc-3" href="#try-it-in-game-without-an-llm">Try it in-game without an LLM</a><a class="toc-3" href="#what-the-model-should-not-do">What the model should not do</a></nav>
 </div>
 <script src="assets/docs.js" defer></script>
 </body>
